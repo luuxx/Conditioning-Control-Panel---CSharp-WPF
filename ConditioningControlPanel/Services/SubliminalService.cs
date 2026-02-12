@@ -617,6 +617,9 @@ namespace ConditioningControlPanel.Services
                     SetWindowPos(hwnd, HWND_TOPMOST,
                         targetBounds.X, targetBounds.Y, targetBounds.Width, targetBounds.Height,
                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+                    // Exclude from screen capture so OCR doesn't read subliminal text
+                    SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
                 }
             };
 
@@ -786,6 +789,11 @@ namespace ConditioningControlPanel.Services
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowDisplayAffinity(IntPtr hwnd, uint dwAffinity);
+
+        private const uint WDA_EXCLUDEFROMCAPTURE = 0x11;
 
         #endregion
     }

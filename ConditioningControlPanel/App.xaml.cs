@@ -303,6 +303,7 @@ namespace ConditioningControlPanel
         public static SkillTreeService SkillTree { get; private set; } = null!;
         public static KeywordTriggerService KeywordTriggers { get; private set; } = null!;
         public static ScreenOcrService ScreenOcr { get; private set; } = null!;
+        public static KeywordHighlightService? KeywordHighlight { get; private set; }
         public static ActivityTracker ActivityTracker { get; private set; } = null!;
 
         /// <summary>
@@ -737,6 +738,7 @@ namespace ConditioningControlPanel
             AudioSync = new AudioSyncService(Haptics, Settings.Current.Haptics.AudioSync);
             KeywordTriggers = new KeywordTriggerService();
             ScreenOcr = new ScreenOcrService();
+            KeywordHighlight = new KeywordHighlightService();
 
             // Auto-connect haptics if enabled (runs in background)
             if (Settings.Current.Haptics.AutoConnect && Settings.Current.Haptics.Provider != HapticProviderType.Mock)
@@ -1819,6 +1821,11 @@ Application State:
                 }
             }
 
+            // Dispose trigger sources FIRST so no new effects get queued during shutdown
+            ScreenOcr?.Dispose();
+            KeywordTriggers?.Dispose();
+            KeywordHighlight?.Dispose();
+
             Flash?.Dispose();
             Video?.Dispose();
             Subliminal?.Dispose();
@@ -1845,8 +1852,6 @@ Application State:
             Roadmap?.Dispose();
             SkillTree?.Dispose();
             QuestDefinitions?.Dispose();
-            ScreenOcr?.Dispose();
-            KeywordTriggers?.Dispose();
             Audio?.Dispose();
 
             // Close and flush the logger
