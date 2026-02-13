@@ -99,7 +99,7 @@
 
     <!-- Pink Button Style -->
     <Style x:Key="PinkButton" TargetType="Button">
-        <Setter Property="Background" Value="{StaticResource PinkBrush}"/>
+        <Setter Property="Background" Value="{StaticResource PinkButtonBrush}"/>
         <Setter Property="Foreground" Value="White"/>
         <Setter Property="FontWeight" Value="Bold"/>
         <Setter Property="FontSize" Value="14"/>

@@ -5,11 +5,11 @@
   <Application.Resources>
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
-        <!-- Shared theme resources -->
-        <ResourceDictionary Source="Resources/Theme/Colors.xaml"/>
-        <ResourceDictionary Source="Resources/Theme/Brushes.xaml"/>
-        <ResourceDictionary Source="Resources/Theme/Controls.xaml"/>
-        <ResourceDictionary Source="Resources/Theme/Converters.xaml"/>
+        <!-- Shared theme resources - explicitly using pack URIs to ensure assembly-level loading -->
+        <ResourceDictionary Source="pack://application:,,,/ConditioningControlPanel;component/Resources/Theme/Colors.xaml"/>
+        <ResourceDictionary Source="pack://application:,,,/ConditioningControlPanel;component/Resources/Theme/Brushes.xaml"/>
+        <ResourceDictionary Source="pack://application:,,,/ConditioningControlPanel;component/Resources/Theme/Controls.xaml"/>
+        <ResourceDictionary Source="pack://application:,,,/ConditioningControlPanel;component/Resources/Theme/Converters.xaml"/>
 
         <!-- Keep any existing app-level dictionaries below -->
       </ResourceDictionary.MergedDictionaries>

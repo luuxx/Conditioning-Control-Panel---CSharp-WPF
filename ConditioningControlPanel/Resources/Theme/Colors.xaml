@@ -3,16 +3,21 @@
 
     <!-- Colors (central source) -->
     <Color x:Key="PinkColor">#FFFF69B4</Color>
-    <Color x:Key="DarkPink">#FFFF1493</Color>
-    <Color x:Key="PanelBg">#FF252542</Color>
+    <Color x:Key="DarkPink">#FF3091</Color>
+    <Color x:Key="DarkPurple">#291A37</Color>
+    <Color x:Key="PanelBg">#2A0717</Color>
     <Color x:Key="PanelBgTransparent">#B0252542</Color>
-    <Color x:Key="DarkerBg">#FF1A1A2E</Color>
+    <Color x:Key="DarkerBg">#15040B</Color>
     <Color x:Key="TextLight">#FFE0E0E0</Color>
     <Color x:Key="TextMuted">#FF808080</Color>
     <Color x:Key="PanelAccent">#FF404060</Color>
     <Color x:Key="PanelAccentHover">#FF505080</Color>
     <Color x:Key="PreviewBg">#FF101020</Color>
-
+    <Color x:Key="BackgroundWindow">#2A0717</Color>
+    <Color x:Key="PanelGradiantStart">#2D0718</Color>
+    <Color x:Key="PanelGradiantEnd">#2E0919</Color>
+    <Color x:Key="PanelGradiantDark">#1E0919</Color>
+    
     <Color x:Key="Danger">#FFE53935</Color>
     <Color x:Key="TransparentPink">#30FF69B4</Color>
 

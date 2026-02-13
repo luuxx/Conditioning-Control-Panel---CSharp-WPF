@@ -30,7 +30,7 @@
                 MinWidth="500"
                 MaxWidth="700">
             <Border.Background>
-                <SolidColorBrush x:Name="CardBackground" Color="#1A1A2E"/>
+                <SolidColorBrush x:Name="CardBackground" Color="{StaticResource BackgroundWindow}"/>
             </Border.Background>
             <Border.Effect>
                 <DropShadowEffect Color="#FF69B4" BlurRadius="30" ShadowDepth="0" Opacity="0.5"/>

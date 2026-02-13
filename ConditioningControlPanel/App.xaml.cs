@@ -1,21 +1,26 @@
-using System;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Media;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Forms;
+using System.Windows.Markup;
 using System.Windows.Media;
-using Microsoft.Win32;
+using System.Windows.Threading;
 using ConditioningControlPanel.Models;
 using ConditioningControlPanel.Services;
+using ConditioningControlPanel.Services.Haptics;
+using Microsoft.Win32;
 using Serilog;
 using Velopack;
-
+using Application = System.Windows.Application;
 // Alias to avoid ambiguity with Velopack.UpdateInfo
 using AppUpdateInfo = ConditioningControlPanel.Models.UpdateInfo;
+using Button = System.Windows.Controls.Button;
+using HorizontalAlignment = System.Windows.HorizontalAlignment;
+using MessageBox = System.Windows.MessageBox;
 
 namespace ConditioningControlPanel
 {
@@ -104,7 +109,7 @@ namespace ConditioningControlPanel
             splash.Show();
 
             // Force render
-            splash.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.Render, new Action(() => { }));
+            splash.Dispatcher.Invoke(DispatcherPriority.Render, new Action(() => { }));
 
             // Run the installer on a background thread, then shutdown when done
             Task.Run(() =>
@@ -298,7 +303,6 @@ namespace ConditioningControlPanel
         public static SkillTreeService SkillTree { get; private set; } = null!;
         public static KeywordTriggerService KeywordTriggers { get; private set; } = null!;
         public static ScreenOcrService ScreenOcr { get; private set; } = null!;
-        public static KeywordHighlightService? KeywordHighlight { get; private set; }
         public static ActivityTracker ActivityTracker { get; private set; } = null!;
 
         /// <summary>
@@ -345,7 +349,7 @@ namespace ConditioningControlPanel
         public static AvatarTubeWindow? AvatarWindow { get; set; }
 
         // Screen enumeration cache
-        private static System.Windows.Forms.Screen[]? _cachedScreens;
+        private static Screen[]? _cachedScreens;
         private static DateTime _screenCacheTime = DateTime.MinValue;
         private static readonly TimeSpan ScreenCacheDuration = TimeSpan.FromSeconds(5);
         private static readonly object _screenCacheLock = new();
@@ -355,7 +359,7 @@ namespace ConditioningControlPanel
         /// Cache is valid for 5 seconds - long enough to avoid repeated calls in tight loops,
         /// short enough to detect monitor changes.
         /// </summary>
-        public static System.Windows.Forms.Screen[] GetAllScreensCached()
+        public static Screen[] GetAllScreensCached()
         {
             lock (_screenCacheLock)
             {
@@ -363,7 +367,7 @@ namespace ConditioningControlPanel
                 {
                     try
                     {
-                        _cachedScreens = System.Windows.Forms.Screen.AllScreens;
+                        _cachedScreens = Screen.AllScreens;
                         _screenCacheTime = DateTime.Now;
                         Logger?.Debug("Screen enumeration: {Count} monitors detected: {Names}",
                             _cachedScreens.Length,
@@ -373,10 +377,10 @@ namespace ConditioningControlPanel
                     {
                         Logger?.Debug("Failed to enumerate screens: {Error}", ex.Message);
                         // Return empty array if enumeration fails (can happen during certain system states)
-                        return _cachedScreens ?? Array.Empty<System.Windows.Forms.Screen>();
+                        return _cachedScreens ?? Array.Empty<Screen>();
                     }
                 }
-                return _cachedScreens ?? Array.Empty<System.Windows.Forms.Screen>();
+                return _cachedScreens ?? Array.Empty<Screen>();
             }
         }
 
@@ -456,6 +460,89 @@ namespace ConditioningControlPanel
             }
         }
 
+        /// <summary>
+        /// Loads XAML resource dictionaries from the Resources/Theme folder if they exist on disk.
+        /// This allows for theme customization after the project is built.
+        /// </summary>
+        private void LoadExternalThemes()
+        {
+            try
+            {
+                var themePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "Theme");
+                if (!Directory.Exists(themePath)) return;
+
+                var xamlFiles = Directory.GetFiles(themePath, "*.xaml");
+                if (xamlFiles.Length == 0) return;
+
+                // Track which base themes we found so we can replace the embedded ones
+                var loadedBaseThemes = new HashSet<string>();
+
+                foreach (var file in xamlFiles)
+                {
+                    try
+                    {
+                        var xamlContent = File.ReadAllText(file);
+                        
+                        // Fix clr-namespace references that are missing the assembly name.
+                        // When loading XAML via XamlReader.Load at runtime from a file, it doesn't know 
+                        // about the current assembly unless explicitly told.
+                        if (xamlContent.Contains("clr-namespace:ConditioningControlPanel"))
+                        {
+                            // Use regex to find all clr-namespace declarations for our app and ensure they have the assembly name
+                            // Matches: xmlns:prefix="clr-namespace:ConditioningControlPanel.Something"
+                            // But NOT if it already has ;assembly=
+                            var regex = new Regex(
+                                @"(clr-namespace:(ConditioningControlPanel[^""; \t>]*))(?![^""]*;assembly=)",
+                                RegexOptions.IgnoreCase);
+                            
+                            xamlContent = regex.Replace(xamlContent, "$1;assembly=ConditioningControlPanel");
+                        }
+
+                        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(xamlContent));
+                        
+                        // Create a parser context to help with assembly resolution
+                        var context = new ParserContext();
+                        context.XmlnsDictionary.Add("", "http://schemas.microsoft.com/winfx/2006/xaml/presentation");
+                        context.XmlnsDictionary.Add("x", "http://schemas.microsoft.com/winfx/2006/xaml");
+                        
+                        if (XamlReader.Load(stream, context) is ResourceDictionary externalDict)
+                        {
+                            // Set the source property so relative references inside the XAML might work 
+                            // (though absolute pack URIs are preferred in the XAML itself)
+                            externalDict.Source = new Uri(file, UriKind.Absolute);
+                            
+                            // Important: Use a try-catch for the specific addition to avoid one bad file
+                            // breaking the whole application.
+                            try 
+                            {
+                                Resources.MergedDictionaries.Add(externalDict);
+                                loadedBaseThemes.Add(Path.GetFileName(file).ToLowerInvariant());
+                                Debug.WriteLine($"Successfully loaded external theme: {file}");
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.WriteLine($"Failed to merge external theme {file}: {ex.Message}");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // Can't use Logger yet as it's not initialized, but we should fail gracefully
+                        Debug.WriteLine($"Failed to load external theme {file}: {ex.Message}");
+                    }
+                }
+
+                // If we loaded external versions of our core theme files, we might want to remove
+                // the internal ones to avoid conflicts or redundant resource lookups.
+                // However, WPF's MergedDictionaries work such that later additions override earlier ones,
+                // so simply adding them is often sufficient and safer.
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error in LoadExternalThemes: {ex.Message}");
+            }
+        }
+
         protected override void OnStartup(StartupEventArgs e)
         {
             // Show splash screen IMMEDIATELY - before anything else
@@ -465,7 +552,11 @@ namespace ConditioningControlPanel
             splash.SetProgress(0.0, "Starting...");
 
             // Force the splash to render before continuing with any initialization
-            splash.Dispatcher.Invoke(System.Windows.Threading.DispatcherPriority.Render, new Action(() => { }));
+            splash.Dispatcher.Invoke(DispatcherPriority.Render, new Action(() => { }));
+
+            // Load external theme resources if they exist
+            // Moved AFTER splash so we can log to Debug if needed, but BEFORE other initialization
+            LoadExternalThemes();
 
             // Check for single instance
             _mutex = new Mutex(true, MutexName, out bool createdNew);
@@ -646,10 +737,9 @@ namespace ConditioningControlPanel
             AudioSync = new AudioSyncService(Haptics, Settings.Current.Haptics.AudioSync);
             KeywordTriggers = new KeywordTriggerService();
             ScreenOcr = new ScreenOcrService();
-            KeywordHighlight = new KeywordHighlightService();
 
             // Auto-connect haptics if enabled (runs in background)
-            if (Settings.Current.Haptics.AutoConnect && Settings.Current.Haptics.Provider != Services.Haptics.HapticProviderType.Mock)
+            if (Settings.Current.Haptics.AutoConnect && Settings.Current.Haptics.Provider != HapticProviderType.Mock)
             {
                 _ = AutoConnectHapticsAsync();
             }
@@ -712,7 +802,7 @@ namespace ConditioningControlPanel
             splash.FadeOutAndClose();
         }
         
-        private void OnAchievementUnlocked(object? sender, Models.Achievement achievement)
+        private void OnAchievementUnlocked(object? sender, Achievement achievement)
         {
             Logger.Information("OnAchievementUnlocked handler called for: {Name}", achievement.Name);
 
@@ -814,14 +904,14 @@ namespace ConditioningControlPanel
                 if (updateInfo?.IsNewer == true)
                 {
                     // First, show the update button immediately (this always works)
-                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    await Current.Dispatcher.InvokeAsync(() =>
                     {
                         try
                         {
-                            var mainWindow = Application.Current.MainWindow as MainWindow;
+                            var mainWindow = Current.MainWindow as MainWindow;
                             if (mainWindow != null)
                             {
-                                var btn = mainWindow.FindName("BtnUpdateAvailable") as System.Windows.Controls.Button;
+                                var btn = mainWindow.FindName("BtnUpdateAvailable") as Button;
                                 if (btn != null)
                                 {
                                     btn.Tag = "UpdateAvailable";
@@ -857,7 +947,7 @@ namespace ConditioningControlPanel
                     // Now show the update dialog on UI thread
                     Logger?.Information("Attempting to show update dialog on UI thread...");
 
-                    Application.Current.Dispatcher.Invoke(() =>
+                    Current.Dispatcher.Invoke(() =>
                     {
                         try
                         {
@@ -869,7 +959,7 @@ namespace ConditioningControlPanel
                             }
 
                             Logger?.Information("Inside Dispatcher.Invoke - getting MainWindow");
-                            var mainWindow = Application.Current.MainWindow as MainWindow;
+                            var mainWindow = Current.MainWindow as MainWindow;
 
                             if (mainWindow == null)
                             {
@@ -1407,7 +1497,7 @@ namespace ConditioningControlPanel
                         {
                             try
                             {
-                                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                                Process.Start(new ProcessStartInfo
                                 {
                                     FileName = "https://github.com/CodeBambi/Conditioning-Control-Panel---CSharp-WPF/releases/latest",
                                     UseShellExecute = true
@@ -1455,7 +1545,7 @@ namespace ConditioningControlPanel
                     {
                         try
                         {
-                            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                            Process.Start(new ProcessStartInfo
                             {
                                 FileName = "https://github.com/CodeBambi/Conditioning-Control-Panel---CSharp-WPF/releases/latest",
                                 UseShellExecute = true
@@ -1729,11 +1819,6 @@ Application State:
                 }
             }
 
-            // Dispose trigger sources FIRST so no new effects get queued during shutdown
-            ScreenOcr?.Dispose();
-            KeywordTriggers?.Dispose();
-            KeywordHighlight?.Dispose();
-
             Flash?.Dispose();
             Video?.Dispose();
             Subliminal?.Dispose();
@@ -1760,6 +1845,8 @@ Application State:
             Roadmap?.Dispose();
             SkillTree?.Dispose();
             QuestDefinitions?.Dispose();
+            ScreenOcr?.Dispose();
+            KeywordTriggers?.Dispose();
             Audio?.Dispose();
 
             // Close and flush the logger

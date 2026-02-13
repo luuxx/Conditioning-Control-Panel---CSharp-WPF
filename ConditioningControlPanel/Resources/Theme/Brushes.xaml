@@ -3,6 +3,8 @@
 
     <!-- Brushes (derived from Colors) -->
     <SolidColorBrush x:Key="PinkBrush"   Color="{StaticResource PinkColor}"/>
+    <SolidColorBrush x:Key="PinkButtonBrush"   Color="{StaticResource DarkPink}"/>
+    <SolidColorBrush x:Key="ExitButtonBrush"   Color="{StaticResource DarkPurple}"/>
     <SolidColorBrush x:Key="DarkPinkBrush" Color="{StaticResource DarkPink}"/>
     <SolidColorBrush x:Key="PanelBgBrush" Color="{StaticResource PanelBg}"/>
     <SolidColorBrush x:Key="PanelBgTransparentBrush" Color="{StaticResource PanelBgTransparent}"/>
@@ -12,7 +14,12 @@
     <SolidColorBrush x:Key="PanelAccentBrush" Color="{StaticResource PanelAccent}"/>
     <SolidColorBrush x:Key="PanelAccentHoverBrush" Color="{StaticResource PanelAccentHover}"/>
     <SolidColorBrush x:Key="PreviewBgBrush" Color="{StaticResource PreviewBg}"/>
-
+    
+    <SolidColorBrush x:Key="BackgroundWindowBrush" Color="{StaticResource PanelBg}"/>
+    <SolidColorBrush x:Key="PanelGradiantStartBrush" Color="{StaticResource PanelBg}"/>
+    <SolidColorBrush x:Key="PanelGradiantEndBrush" Color="{StaticResource PanelBg}"/>
+    <SolidColorBrush x:Key="PanelGradiantDarkBrush" Color="{StaticResource PanelBg}"/>
+    
     <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource Danger}"/>
     <SolidColorBrush x:Key="TransparentPinkBrush" Color="{StaticResource TransparentPink}"/>
     <SolidColorBrush x:Key="PinkButtonHoveredBrush" Color="{StaticResource PinkButtonHovered}"/>
