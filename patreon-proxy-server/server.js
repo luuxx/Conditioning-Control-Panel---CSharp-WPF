@@ -431,6 +431,7 @@ const WHITELISTED_NAMES = new Set([
     'Bambi_Mandi',
     'bendi',
     'layla',
+    'layla 🤍',
 ].map(n => n.toLowerCase()));
 
 function isWhitelisted(email, name, displayName = null) {
