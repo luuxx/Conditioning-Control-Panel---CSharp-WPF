@@ -860,13 +860,13 @@ app.get('/patreon/validate', async (req, res) => {
             }
         }
 
-        // Check whitelist - if whitelisted, grant Tier 1 access
+        // Check whitelist - if whitelisted, grant Tier 2 access
         // Checks: email, Patreon name, AND leaderboard display name
         const whitelisted = isWhitelisted(tierInfo.patron_email, tierInfo.patron_name, displayName);
         tierInfo.is_whitelisted = whitelisted;
         if (whitelisted) {
-            if (tierInfo.tier < 1) {
-                tierInfo.tier = 1;
+            if (tierInfo.tier < 2) {
+                tierInfo.tier = 2;
             }
             console.log(`Whitelisted user validated: ${tierInfo.patron_name} / ${displayName} (${tierInfo.patron_email})`);
         }
@@ -1110,7 +1110,7 @@ app.get('/discord/validate', async (req, res) => {
                     unifiedLookup.display_name
                 );
                 response.is_whitelisted = whitelisted;
-                response.patreon_tier = whitelisted ? Math.max(unifiedLookup.user.patreon_tier || 0, 1) : (unifiedLookup.user.patreon_tier || 0);
+                response.patreon_tier = whitelisted ? Math.max(unifiedLookup.user.patreon_tier || 0, 2) : (unifiedLookup.user.patreon_tier || 0);
                 response.patreon_is_active = unifiedLookup.user.patreon_is_active || false;
             }
         } else {
@@ -2372,7 +2372,7 @@ app.post('/user/sync', async (req, res) => {
         const displayNameToCheck = existing?.display_name || requestDisplayName || null;
         const isWhitelistedUser = isWhitelisted(tierInfo.patron_email, tierInfo.patron_name, displayNameToCheck);
         const hasActivePledge = tierInfo.is_active && tierInfo.pledge_cents >= 5;
-        const effectiveTier = (isWhitelistedUser || hasActivePledge) ? Math.max(tierInfo.tier, 1) : tierInfo.tier;
+        const effectiveTier = (isWhitelistedUser || hasActivePledge) ? Math.max(tierInfo.tier, isWhitelistedUser ? 2 : 1) : tierInfo.tier;
 
         // Merge achievements (union of local and server)
         let mergedAchievements = achievements || [];
@@ -4305,8 +4305,8 @@ app.post('/admin/fix-patreon-tier', async (req, res) => {
         // Check if user is whitelisted
         const isWhitelistedUser = isWhitelisted(user.email, user.patron_name, user.display_name);
 
-        // Set tier: use provided tier, or 1 if whitelisted, or keep existing
-        const newTier = tier !== undefined ? tier : (isWhitelistedUser ? Math.max(oldTier, 1) : oldTier);
+        // Set tier: use provided tier, or 2 if whitelisted, or keep existing
+        const newTier = tier !== undefined ? tier : (isWhitelistedUser ? Math.max(oldTier, 2) : oldTier);
 
         user.patreon_tier = newTier;
         user.patreon_is_whitelisted = isWhitelistedUser || user.patreon_is_whitelisted;
@@ -6215,7 +6215,7 @@ app.post('/v2/auth/patreon', async (req, res) => {
             is_season0_og: !!legacyData,
 
             // Patreon status
-            patreon_tier: whitelisted ? Math.max(tierInfo.tier, 1) : tierInfo.tier,
+            patreon_tier: whitelisted ? Math.max(tierInfo.tier, 2) : tierInfo.tier,
             patreon_is_active: tierInfo.is_active,
             patreon_is_whitelisted: whitelisted,
 
@@ -6374,7 +6374,7 @@ app.post('/v2/auth/link', async (req, res) => {
             // Link Patreon to user
             user.patreon_id = patreonId;
             user.email = patronEmail || user.email;
-            user.patreon_tier = whitelisted ? Math.max(tierInfo.tier, 1) : tierInfo.tier;
+            user.patreon_tier = whitelisted ? Math.max(tierInfo.tier, 2) : tierInfo.tier;
             user.patreon_is_active = tierInfo.is_active;
             user.patreon_is_whitelisted = whitelisted;
             user.updated_at = new Date().toISOString();
