@@ -10931,7 +10931,8 @@ const REMOTE_TIER_ACTIONS = {
         'show_spiral', 'stop_spiral',
         'set_pink_opacity', 'set_spiral_opacity',
         'start_bubbles', 'stop_bubbles',
-        'start_engine', 'stop_engine'
+        'start_engine', 'stop_engine',
+        'trigger_panic'
     ],
     standard: [
         'trigger_flash', 'trigger_subliminal',
@@ -10940,6 +10941,7 @@ const REMOTE_TIER_ACTIONS = {
         'set_pink_opacity', 'set_spiral_opacity',
         'start_bubbles', 'stop_bubbles',
         'start_engine', 'stop_engine',
+        'trigger_panic',
         'trigger_video', 'trigger_haptic',
         'duck_audio', 'unduck_audio',
         'enable_videos', 'disable_videos'
@@ -10951,12 +10953,12 @@ const REMOTE_TIER_ACTIONS = {
         'set_pink_opacity', 'set_spiral_opacity',
         'start_bubbles', 'stop_bubbles',
         'start_engine', 'stop_engine',
+        'trigger_panic',
         'trigger_video', 'trigger_haptic',
         'duck_audio', 'unduck_audio',
         'enable_videos', 'disable_videos',
         'start_autonomy', 'stop_autonomy',
         'trigger_bubble_count',
-        'start_session', 'pause_session', 'resume_session', 'stop_session',
         'enable_strict_lock', 'disable_strict_lock',
         'disable_panic', 'enable_panic'
     ]
