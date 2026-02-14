@@ -1,10 +1,7 @@
-using System;
-using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Threading;
-using System.Windows;
 using Windows.Graphics.Imaging;
 using Windows.Media.Ocr;
 using WinForms = System.Windows.Forms;
@@ -98,7 +95,7 @@ namespace ConditioningControlPanel.Services
             }
         }
 
-        private async System.Threading.Tasks.Task<(string? text, List<OcrWordHit>? words)> CaptureAndRecognizeAsync(WinForms.Screen screen)
+        private async Task<(string? text, List<OcrWordHit>? words)> CaptureAndRecognizeAsync(WinForms.Screen screen)
         {
             Bitmap? bitmap = null;
             try
@@ -117,7 +114,7 @@ namespace ConditioningControlPanel.Services
                 ms.Position = 0;
 
                 var rasStream = ms.AsRandomAccessStream();
-                var decoder = await Windows.Graphics.Imaging.BitmapDecoder.CreateAsync(rasStream);
+                var decoder = await BitmapDecoder.CreateAsync(rasStream);
                 var softwareBitmap = await decoder.GetSoftwareBitmapAsync(
                     BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
 

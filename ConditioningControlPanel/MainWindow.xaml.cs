@@ -1,25 +1,55 @@
-using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
-using System.Linq;
+using System.Media;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
+using System.Windows.Data;
+using System.Windows.Forms;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
+using System.Windows.Navigation;
+using System.Windows.Shapes;
 using System.Windows.Threading;
-using Rectangle = System.Windows.Shapes.Rectangle;
+using ConditioningControlPanel.Helpers;
 using ConditioningControlPanel.Models;
 using ConditioningControlPanel.Services;
+using ConditioningControlPanel.Services.Audio;
+using ConditioningControlPanel.Services.Haptics;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
+using Newtonsoft.Json;
+using Application = System.Windows.Application;
+using Binding = System.Windows.Data.Binding;
+using Button = System.Windows.Controls.Button;
+using CheckBox = System.Windows.Controls.CheckBox;
+using Clipboard = System.Windows.Clipboard;
+using ComboBox = System.Windows.Controls.ComboBox;
+using Cursors = System.Windows.Input.Cursors;
+using DataFormats = System.Windows.DataFormats;
+using DragDropEffects = System.Windows.DragDropEffects;
+using DragEventArgs = System.Windows.DragEventArgs;
+using HorizontalAlignment = System.Windows.HorizontalAlignment;
+using JsonSerializer = System.Text.Json.JsonSerializer;
+using KeyEventArgs = System.Windows.Input.KeyEventArgs;
+using MessageBox = System.Windows.MessageBox;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
+using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
+using Orientation = System.Windows.Controls.Orientation;
+using Path = System.IO.Path;
+using Rectangle = System.Windows.Shapes.Rectangle;
+using SaveFileDialog = Microsoft.Win32.SaveFileDialog;
+using TextBox = System.Windows.Controls.TextBox;
+using ToolTip = System.Windows.Controls.ToolTip;
 
 namespace ConditioningControlPanel
 {
@@ -70,14 +100,14 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Gets the browser WebView2 control for external access (e.g., avatar audio controls)
         /// </summary>
-        public Microsoft.Web.WebView2.Wpf.WebView2? GetBrowserWebView() => _browser?.WebView;
+        public WebView2? GetBrowserWebView() => _browser?.WebView;
         
         // Session Engine
         private SessionEngine? _sessionEngine;
         
         // Avatar Tube Window
         private AvatarTubeWindow? _avatarTubeWindow;
-        private System.Windows.Media.MediaPlayer? _levelUpSoundPlayer;
+        private MediaPlayer? _levelUpSoundPlayer;
         private bool _avatarWasAttachedBeforeMaximize = false;
         private bool _avatarWasAttachedBeforeBrowserFullscreen = false;
 
@@ -114,7 +144,7 @@ namespace ConditioningControlPanel
         private List<string> _bannerMessages = new();
 
         // Marquee animation
-        private System.Windows.Media.Animation.Storyboard? _marqueeStoryboard;
+        private Storyboard? _marqueeStoryboard;
         private DispatcherTimer? _marqueeRefreshTimer;
         private string _currentMarqueeMessage = "";
 
@@ -137,7 +167,7 @@ namespace ConditioningControlPanel
             InitializeComponent();
 
             // Set version dynamically from assembly
-            var version = Services.UpdateService.GetCurrentVersion();
+            var version = UpdateService.GetCurrentVersion();
             TxtVersion.Text = $"Version {version}";
             Title = $"Conditioning Control Panel v{version}";
             TxtTitleBarVersion.Text = $"Conditioning Control Panel v{version}";
@@ -278,7 +308,7 @@ namespace ConditioningControlPanel
                     {
                         StartTutorial();
                     }
-                }), System.Windows.Threading.DispatcherPriority.Loaded);
+                }), DispatcherPriority.Loaded);
             }
             else
             {
@@ -340,7 +370,7 @@ namespace ConditioningControlPanel
             {
                 UpdateLevelDisplay();
                 // Show level up notification
-                _trayIcon?.ShowNotification("Level Up!", $"You reached Level {newLevel}!", System.Windows.Forms.ToolTipIcon.Info);
+                _trayIcon?.ShowNotification("Level Up!", $"You reached Level {newLevel}!", ToolTipIcon.Info);
                 // Play level up sound
                 PlayLevelUpSound();
                 // Update avatar if level threshold reached (20, 50, 100)
@@ -350,7 +380,7 @@ namespace ConditioningControlPanel
 
         #region Companion Events (v5.3)
 
-        private void OnCompanionXPAwarded(object? sender, (Models.CompanionId Companion, double Amount, double Modifier) args)
+        private void OnCompanionXPAwarded(object? sender, (CompanionId Companion, double Amount, double Modifier) args)
         {
             // Update companion progress UI in real-time when XP is earned
             Dispatcher.Invoke(() =>
@@ -363,30 +393,30 @@ namespace ConditioningControlPanel
             });
         }
 
-        private void OnCompanionLevelUp(object? sender, (Models.CompanionId Companion, int NewLevel) args)
+        private void OnCompanionLevelUp(object? sender, (CompanionId Companion, int NewLevel) args)
         {
             Dispatcher.Invoke(() =>
             {
                 UpdateCompanionCardsUI();
 
-                var companionName = Models.CompanionDefinition.GetById(args.Companion).Name;
+                var companionName = CompanionDefinition.GetById(args.Companion).Name;
 
                 // Show notification for companion level up
-                if (args.NewLevel == Models.CompanionProgress.MaxLevel)
+                if (args.NewLevel == CompanionProgress.MaxLevel)
                 {
                     _trayIcon?.ShowNotification("MAX LEVEL!",
                         $"{companionName} has reached maximum level!",
-                        System.Windows.Forms.ToolTipIcon.Info);
+                        ToolTipIcon.Info);
                 }
                 else if (args.NewLevel % 10 == 0)
                 {
                     _trayIcon?.ShowNotification("Companion Level Up!",
                         $"{companionName} reached Level {args.NewLevel}!",
-                        System.Windows.Forms.ToolTipIcon.Info);
+                        ToolTipIcon.Info);
                 }
 
                 // Play level up sound for significant milestones
-                if (args.NewLevel % 10 == 0 || args.NewLevel == Models.CompanionProgress.MaxLevel)
+                if (args.NewLevel % 10 == 0 || args.NewLevel == CompanionProgress.MaxLevel)
                 {
                     PlayLevelUpSound();
                 }
@@ -406,7 +436,7 @@ namespace ConditioningControlPanel
             });
         }
 
-        private void OnCompanionSwitched(object? sender, Models.CompanionId newCompanion)
+        private void OnCompanionSwitched(object? sender, CompanionId newCompanion)
         {
             Dispatcher.Invoke(() =>
             {
@@ -434,7 +464,7 @@ namespace ConditioningControlPanel
                         // Stop any previous level up sound still playing
                         _levelUpSoundPlayer?.Close();
 
-                        var player = new System.Windows.Media.MediaPlayer();
+                        var player = new MediaPlayer();
                         player.Open(new Uri(path, UriKind.Absolute));
                         player.Volume = (App.Settings.Current.MasterVolume / 100.0) * 0.5; // 50% of master volume
                         player.MediaEnded += (s, e) =>
@@ -549,11 +579,11 @@ namespace ConditioningControlPanel
                     // Update pause button to show resume icon
                     if (TxtPauseIcon != null) TxtPauseIcon.Text = "▶";
                     if (BtnPauseSession != null) BtnPauseSession.ToolTip = "Resume session";
-                    _trayIcon?.ShowNotification("Session Paused", "Press panic key again within 2 seconds to exit completely.", System.Windows.Forms.ToolTipIcon.Info);
+                    _trayIcon?.ShowNotification("Session Paused", "Press panic key again within 2 seconds to exit completely.", ToolTipIcon.Info);
                 }
                 else
                 {
-                    _trayIcon?.ShowNotification("Stopped", "Press panic key again within 2 seconds to exit completely.", System.Windows.Forms.ToolTipIcon.Info);
+                    _trayIcon?.ShowNotification("Stopped", "Press panic key again within 2 seconds to exit completely.", ToolTipIcon.Info);
                 }
             }
             else if (_panicPressCount >= 2)
@@ -600,15 +630,15 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-                var logoFile = mode == Models.ContentMode.SissyHypno ? "logo2.png" : "logo.png";
+                var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+                var logoFile = mode == ContentMode.SissyHypno ? "logo2.png" : "logo.png";
                 var resourceUri = new Uri($"pack://application:,,,/Resources/{logoFile}", UriKind.Absolute);
 
-                var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                var bitmap = new BitmapImage();
                 bitmap.BeginInit();
                 bitmap.UriSource = resourceUri;
-                bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                bitmap.CreateOptions = System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreImageCache;
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
                 bitmap.EndInit();
 
                 ImgLogo.Source = bitmap;
@@ -627,21 +657,21 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-                var imageFile = mode == Models.ContentMode.SissyHypno ? "takeover.png" : "bambi takeover.png";
+                var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+                var imageFile = mode == ContentMode.SissyHypno ? "takeover.png" : "bambi takeover.png";
                 var resourceUri = new Uri($"pack://application:,,,/Resources/features/{imageFile}", UriKind.Absolute);
 
-                var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                var bitmap = new BitmapImage();
                 bitmap.BeginInit();
                 bitmap.UriSource = resourceUri;
-                bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                bitmap.CreateOptions = System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreImageCache;
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
                 bitmap.EndInit();
 
                 ImgTakeover.Source = bitmap;
 
                 // Update mode-aware takeover labels
-                var takeoverLabel = Models.ContentModeConfig.GetTakeoverLabel(mode);
+                var takeoverLabel = ContentModeConfig.GetTakeoverLabel(mode);
                 TxtTakeoverLocked.Text = $"🤖 {takeoverLabel}";
                 TxtTakeoverUnlocked.Text = $"🤖 {takeoverLabel}";
                 BtnAutonomyStartStop.ToolTip = $"Start/Stop {takeoverLabel}";
@@ -662,10 +692,10 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-                var accentHex = Models.ContentModeConfig.GetAccentColorHex(mode);
-                var accentLightHex = Models.ContentModeConfig.GetAccentLightColorHex(mode);
-                var accentDarkHex = Models.ContentModeConfig.GetAccentDarkColorHex(mode);
+                var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+                var accentHex = ContentModeConfig.GetAccentColorHex(mode);
+                var accentLightHex = ContentModeConfig.GetAccentLightColorHex(mode);
+                var accentDarkHex = ContentModeConfig.GetAccentDarkColorHex(mode);
 
                 var accentColor = (Color)ColorConverter.ConvertFromString(accentHex);
                 var accentLightColor = (Color)ColorConverter.ConvertFromString(accentLightHex);
@@ -684,7 +714,7 @@ namespace ConditioningControlPanel
                 if (TxtPlayerTitle != null)
                 {
                     TxtPlayerTitle.Foreground = accentBrush;
-                    if (TxtPlayerTitle.Effect is System.Windows.Media.Effects.DropShadowEffect glow)
+                    if (TxtPlayerTitle.Effect is DropShadowEffect glow)
                         glow.Color = accentColor;
                 }
 
@@ -723,11 +753,11 @@ namespace ConditioningControlPanel
         private void InitializeContentModeToggle()
         {
             var mode = App.Settings.Current.ContentMode;
-            var isSissyMode = mode == Models.ContentMode.SissyHypno;
+            var isSissyMode = mode == ContentMode.SissyHypno;
             ChkContentMode.IsChecked = isSissyMode;
 
             // Update toggle label colors using mode-aware accent
-            var (r, g, b) = Models.ContentModeConfig.GetAccentColorRgb(mode);
+            var (r, g, b) = ContentModeConfig.GetAccentColorRgb(mode);
             var accentColor = Color.FromRgb(r, g, b);
             var mutedColor = Color.FromRgb(96, 96, 128);
             TxtModeBS.Foreground = new SolidColorBrush(isSissyMode ? mutedColor : accentColor);
@@ -752,7 +782,7 @@ namespace ConditioningControlPanel
             if (_isLoading) return;
 
             var isSissyMode = ChkContentMode.IsChecked == true;
-            var newMode = isSissyMode ? Models.ContentMode.SissyHypno : Models.ContentMode.BambiSleep;
+            var newMode = isSissyMode ? ContentMode.SissyHypno : ContentMode.BambiSleep;
             var oldMode = App.Settings.Current.ContentMode;
 
             // Save current pools for the old mode before switching
@@ -771,18 +801,18 @@ namespace ConditioningControlPanel
 
             // Restore saved pools for new mode, or use defaults if no backup exists
             App.Settings.Current.SubliminalPool = App.Settings.Current.SubliminalPoolByMode.TryGetValue(newMode, out var savedSub) && savedSub.Count > 0
-                ? savedSub : Models.ContentModeConfig.GetDefaultSubliminalPool(newMode);
+                ? savedSub : ContentModeConfig.GetDefaultSubliminalPool(newMode);
             App.Settings.Current.AttentionPool = App.Settings.Current.AttentionPoolByMode.TryGetValue(newMode, out var savedAtt) && savedAtt.Count > 0
-                ? savedAtt : Models.ContentModeConfig.GetDefaultSubliminalPool(newMode);
+                ? savedAtt : ContentModeConfig.GetDefaultSubliminalPool(newMode);
             App.Settings.Current.LockCardPhrases = App.Settings.Current.LockCardPhrasesByMode.TryGetValue(newMode, out var savedLock) && savedLock.Count > 0
-                ? savedLock : Models.ContentModeConfig.GetDefaultLockCardPhrases(newMode);
+                ? savedLock : ContentModeConfig.GetDefaultLockCardPhrases(newMode);
             App.Settings.Current.CustomTriggers = App.Settings.Current.CustomTriggersByMode.TryGetValue(newMode, out var savedTrig) && savedTrig.Count > 0
-                ? savedTrig : Models.ContentModeConfig.GetDefaultCustomTriggers(newMode);
+                ? savedTrig : ContentModeConfig.GetDefaultCustomTriggers(newMode);
 
             App.Settings.Save();
 
             // Update toggle label colors using mode-aware accent
-            var (r, g, b) = Models.ContentModeConfig.GetAccentColorRgb(newMode);
+            var (r, g, b) = ContentModeConfig.GetAccentColorRgb(newMode);
             var accentColor = Color.FromRgb(r, g, b);
             var mutedColor = Color.FromRgb(96, 96, 128);
             TxtModeBS.Foreground = new SolidColorBrush(isSissyMode ? mutedColor : accentColor);
@@ -799,7 +829,7 @@ namespace ConditioningControlPanel
                 // Force browser navigation to HypnoTube regardless of current content
                 if (_browser != null && _browserInitialized)
                 {
-                    _browser.Navigate("https://hypnotube.com/");
+                    _browser.Navigate("https://giveinto.me/");
                     App.Logger?.Information("Browser navigated to HypnoTube due to Sissy mode switch");
                 }
             }
@@ -840,7 +870,7 @@ namespace ConditioningControlPanel
         /// Supports both local cached images and embedded resources.
         /// Swaps Bambi Sleep specific images when in Sissy Hypno mode.
         /// </summary>
-        private string GetModeAwareQuestImagePath(Models.QuestDefinition quest)
+        private string GetModeAwareQuestImagePath(QuestDefinition quest)
         {
             // Use EffectiveImagePath which prefers cached remote images over embedded
             var imagePath = quest.EffectiveImagePath;
@@ -865,14 +895,14 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Load an image from either a local file path or pack:// URI
         /// </summary>
-        private System.Windows.Media.Imaging.BitmapImage? LoadQuestImage(string imagePath)
+        private BitmapImage? LoadQuestImage(string imagePath)
         {
             if (string.IsNullOrEmpty(imagePath))
                 return null;
 
             try
             {
-                var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                var bitmap = new BitmapImage();
                 bitmap.BeginInit();
 
                 if (imagePath.StartsWith("pack://"))
@@ -880,11 +910,11 @@ namespace ConditioningControlPanel
                     // Embedded resource
                     bitmap.UriSource = new Uri(imagePath);
                 }
-                else if (System.IO.File.Exists(imagePath))
+                else if (File.Exists(imagePath))
                 {
                     // Local file (cached remote image)
                     bitmap.UriSource = new Uri(imagePath, UriKind.Absolute);
-                    bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
                 }
                 else
                 {
@@ -903,7 +933,7 @@ namespace ConditioningControlPanel
         private void CenterOnPrimaryScreen()
         {
             // Get the primary screen
-            var primaryScreen = System.Windows.Forms.Screen.PrimaryScreen;
+            var primaryScreen = Screen.PrimaryScreen;
             if (primaryScreen == null) return;
             
             // Get DPI scaling
@@ -1160,7 +1190,7 @@ namespace ConditioningControlPanel
                 // Show the display name dialog (HandlePostAuthAsync gets the token internally)
                 await Dispatcher.InvokeAsync(async () =>
                 {
-                    var success = await Services.AccountService.HandlePostAuthAsync(this, provider);
+                    var success = await AccountService.HandlePostAuthAsync(this, provider);
                     if (success)
                     {
                         App.Logger?.Information("Pending registration completed successfully");
@@ -1194,15 +1224,15 @@ namespace ConditioningControlPanel
                     return;
 
                 // Check if default assets folder has any content
-                var defaultImagesPath = System.IO.Path.Combine(App.UserAssetsPath, "images");
-                var defaultVideosPath = System.IO.Path.Combine(App.UserAssetsPath, "videos");
+                var defaultImagesPath = Path.Combine(App.UserAssetsPath, "images");
+                var defaultVideosPath = Path.Combine(App.UserAssetsPath, "videos");
 
                 int imageCount = 0;
                 int videoCount = 0;
 
-                if (System.IO.Directory.Exists(defaultImagesPath))
+                if (Directory.Exists(defaultImagesPath))
                 {
-                    imageCount = System.IO.Directory.GetFiles(defaultImagesPath, "*.*")
+                    imageCount = Directory.GetFiles(defaultImagesPath, "*.*")
                         .Count(f => f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
                                    f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
                                    f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ||
@@ -1210,9 +1240,9 @@ namespace ConditioningControlPanel
                                    f.EndsWith(".webp", StringComparison.OrdinalIgnoreCase));
                 }
 
-                if (System.IO.Directory.Exists(defaultVideosPath))
+                if (Directory.Exists(defaultVideosPath))
                 {
-                    videoCount = System.IO.Directory.GetFiles(defaultVideosPath, "*.*")
+                    videoCount = Directory.GetFiles(defaultVideosPath, "*.*")
                         .Count(f => f.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ||
                                    f.EndsWith(".webm", StringComparison.OrdinalIgnoreCase) ||
                                    f.EndsWith(".mkv", StringComparison.OrdinalIgnoreCase));
@@ -1266,10 +1296,10 @@ namespace ConditioningControlPanel
         private const int SC_MINIMIZE = 0xF020;
         private const int WM_GETMINMAXINFO = 0x0024;
 
-        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        [StructLayout(LayoutKind.Sequential)]
         private struct POINT { public int X; public int Y; }
 
-        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        [StructLayout(LayoutKind.Sequential)]
         private struct MINMAXINFO
         {
             public POINT ptReserved;
@@ -1292,10 +1322,10 @@ namespace ConditioningControlPanel
             // Fix maximized window extending behind taskbar (buttons cut off)
             else if (msg == WM_GETMINMAXINFO)
             {
-                var mmi = System.Runtime.InteropServices.Marshal.PtrToStructure<MINMAXINFO>(lParam);
+                var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
 
                 // Get the monitor this window is on
-                var monitor = System.Windows.Forms.Screen.FromHandle(hwnd);
+                var monitor = Screen.FromHandle(hwnd);
                 var workingArea = monitor.WorkingArea;
 
                 // Constrain maximized size to working area (excludes taskbar)
@@ -1304,7 +1334,7 @@ namespace ConditioningControlPanel
                 mmi.ptMaxSize.X = workingArea.Width;
                 mmi.ptMaxSize.Y = workingArea.Height;
 
-                System.Runtime.InteropServices.Marshal.StructureToPtr(mmi, lParam, true);
+                Marshal.StructureToPtr(mmi, lParam, true);
                 handled = true;
             }
             return IntPtr.Zero;
@@ -1470,7 +1500,7 @@ namespace ConditioningControlPanel
 
         #region Roadmap Tab
 
-        private Models.RoadmapTrack _currentRoadmapTrack = Models.RoadmapTrack.EmptyDoll;
+        private RoadmapTrack _currentRoadmapTrack = RoadmapTrack.EmptyDoll;
 
         private void BtnQuestSubDaily_Click(object sender, RoutedEventArgs e)
         {
@@ -1500,14 +1530,14 @@ namespace ConditioningControlPanel
         private void BtnTrack_Click(object sender, RoutedEventArgs e)
         {
             var btn = sender as Button;
-            if (btn?.Tag is string trackStr && Enum.TryParse<Models.RoadmapTrack>(trackStr, out var track))
+            if (btn?.Tag is string trackStr && Enum.TryParse<RoadmapTrack>(trackStr, out var track))
             {
                 _currentRoadmapTrack = track;
 
                 // Update track button styles
-                BtnTrack1.Style = (Style)FindResource(track == Models.RoadmapTrack.EmptyDoll ? "TabButtonActive" : "TabButton");
-                BtnTrack2.Style = (Style)FindResource(track == Models.RoadmapTrack.ObedientPuppet ? "TabButtonActive" : "TabButton");
-                BtnTrack3.Style = (Style)FindResource(track == Models.RoadmapTrack.SluttyBlowdoll ? "TabButtonActive" : "TabButton");
+                BtnTrack1.Style = (Style)FindResource(track == RoadmapTrack.EmptyDoll ? "TabButtonActive" : "TabButton");
+                BtnTrack2.Style = (Style)FindResource(track == RoadmapTrack.ObedientPuppet ? "TabButtonActive" : "TabButton");
+                BtnTrack3.Style = (Style)FindResource(track == RoadmapTrack.SluttyBlowdoll ? "TabButtonActive" : "TabButton");
 
                 RefreshRoadmapUI();
             }
@@ -1517,7 +1547,7 @@ namespace ConditioningControlPanel
         {
             if (App.Roadmap == null) return;
 
-            var trackDef = Models.RoadmapTrackDefinition.GetByTrack(_currentRoadmapTrack);
+            var trackDef = RoadmapTrackDefinition.GetByTrack(_currentRoadmapTrack);
             if (trackDef == null) return;
 
             // Update track header
@@ -1537,14 +1567,14 @@ namespace ConditioningControlPanel
             {
                 TxtLockReason.Text = _currentRoadmapTrack switch
                 {
-                    Models.RoadmapTrack.ObedientPuppet => "Complete Track 1 Boss to unlock",
-                    Models.RoadmapTrack.SluttyBlowdoll => "Complete Track 2 Boss to unlock",
+                    RoadmapTrack.ObedientPuppet => "Complete Track 1 Boss to unlock",
+                    RoadmapTrack.SluttyBlowdoll => "Complete Track 2 Boss to unlock",
                     _ => "Track locked"
                 };
             }
 
             // Show badge indicator for Track 3 if badge earned
-            BadgeIndicator.Visibility = (_currentRoadmapTrack == Models.RoadmapTrack.SluttyBlowdoll &&
+            BadgeIndicator.Visibility = (_currentRoadmapTrack == RoadmapTrack.SluttyBlowdoll &&
                                          App.Roadmap.Progress.HasCertifiedBlowdollBadge)
                 ? Visibility.Visible
                 : Visibility.Collapsed;
@@ -1560,8 +1590,8 @@ namespace ConditioningControlPanel
         {
             RoadmapNodesPanel.Children.Clear();
 
-            var steps = Models.RoadmapStepDefinition.GetStepsForTrack(_currentRoadmapTrack);
-            var trackDef = Models.RoadmapTrackDefinition.GetByTrack(_currentRoadmapTrack);
+            var steps = RoadmapStepDefinition.GetStepsForTrack(_currentRoadmapTrack);
+            var trackDef = RoadmapTrackDefinition.GetByTrack(_currentRoadmapTrack);
 
             foreach (var step in steps)
             {
@@ -1570,7 +1600,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private Border CreateRoadmapNode(Models.RoadmapStepDefinition step, Models.RoadmapTrackDefinition? trackDef)
+        private Border CreateRoadmapNode(RoadmapStepDefinition step, RoadmapTrackDefinition? trackDef)
         {
             bool isCompleted = App.Roadmap?.IsStepCompleted(step.Id) == true;
             bool isActive = App.Roadmap?.IsStepActive(step.Id) == true;
@@ -1578,8 +1608,8 @@ namespace ConditioningControlPanel
             var progress = App.Roadmap?.GetStepProgress(step.Id);
 
             var accentColor = trackDef?.AccentColor ?? "#FF69B4";
-            var accentBrush = new System.Windows.Media.SolidColorBrush(
-                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(accentColor));
+            var accentBrush = new SolidColorBrush(
+                (Color)ColorConverter.ConvertFromString(accentColor));
 
             // Main container - taller to fit info boxes
             var container = new Border
@@ -1588,14 +1618,14 @@ namespace ConditioningControlPanel
                 Height = 240,
                 Margin = new Thickness(10, 0, 10, 0),
                 CornerRadius = new CornerRadius(15),
-                Background = new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#252542")),
-                BorderThickness = new Thickness(step.StepType == Models.RoadmapStepType.Boss ? 3 : 2),
-                BorderBrush = step.StepType == Models.RoadmapStepType.Boss
-                    ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.Gold)
-                    : (isActive ? accentBrush : new System.Windows.Media.SolidColorBrush(
-                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#404060"))),
-                Cursor = System.Windows.Input.Cursors.Hand,
+                Background = new SolidColorBrush(
+                    (Color)ColorConverter.ConvertFromString("#252542")),
+                BorderThickness = new Thickness(step.StepType == RoadmapStepType.Boss ? 3 : 2),
+                BorderBrush = step.StepType == RoadmapStepType.Boss
+                    ? new SolidColorBrush(Colors.Gold)
+                    : (isActive ? accentBrush : new SolidColorBrush(
+                        (Color)ColorConverter.ConvertFromString("#404060"))),
+                Cursor = Cursors.Hand,
                 Tag = step.Id
             };
 
@@ -1609,12 +1639,12 @@ namespace ConditioningControlPanel
             var circleGrid = new Grid { Width = 80, Height = 80 };
 
             // Background ellipse
-            var bgEllipse = new System.Windows.Shapes.Ellipse
+            var bgEllipse = new Ellipse
             {
-                Fill = new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#1A1A2E")),
-                Stroke = isActive ? accentBrush : new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#404060")),
+                Fill = new SolidColorBrush(
+                    (Color)ColorConverter.ConvertFromString("#1A1A2E")),
+                Stroke = isActive ? accentBrush : new SolidColorBrush(
+                    (Color)ColorConverter.ConvertFromString("#404060")),
                 StrokeThickness = isActive ? 3 : 2
             };
             circleGrid.Children.Add(bgEllipse);
@@ -1627,25 +1657,25 @@ namespace ConditioningControlPanel
                     try
                     {
                         var fullPath = App.Roadmap?.GetFullPhotoPath(progress.PhotoPath);
-                        if (!string.IsNullOrEmpty(fullPath) && System.IO.File.Exists(fullPath))
+                        if (!string.IsNullOrEmpty(fullPath) && File.Exists(fullPath))
                         {
-                            var photoEllipse = new System.Windows.Shapes.Ellipse
+                            var photoEllipse = new Ellipse
                             {
                                 Width = 74,
                                 Height = 74,
                                 HorizontalAlignment = HorizontalAlignment.Center,
                                 VerticalAlignment = VerticalAlignment.Center
                             };
-                            var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                            var bitmap = new BitmapImage();
                             bitmap.BeginInit();
                             bitmap.UriSource = new Uri(fullPath);
                             bitmap.DecodePixelWidth = 100;
-                            bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                            bitmap.CacheOption = BitmapCacheOption.OnLoad;
                             bitmap.EndInit();
                             bitmap.Freeze();
-                            photoEllipse.Fill = new System.Windows.Media.ImageBrush(bitmap)
+                            photoEllipse.Fill = new ImageBrush(bitmap)
                             {
-                                Stretch = System.Windows.Media.Stretch.UniformToFill
+                                Stretch = Stretch.UniformToFill
                             };
                             circleGrid.Children.Add(photoEllipse);
                         }
@@ -1659,7 +1689,7 @@ namespace ConditioningControlPanel
                     Text = "✓",
                     FontSize = 20,
                     FontWeight = FontWeights.Bold,
-                    Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.LimeGreen),
+                    Foreground = new SolidColorBrush(Colors.LimeGreen),
                     HorizontalAlignment = HorizontalAlignment.Right,
                     VerticalAlignment = VerticalAlignment.Bottom,
                     Margin = new Thickness(0, 0, 5, 5)
@@ -1691,15 +1721,15 @@ namespace ConditioningControlPanel
                 circleGrid.Children.Add(cameraIcon);
 
                 // Pulsing effect (simple opacity animation on border)
-                var pulseAnimation = new System.Windows.Media.Animation.DoubleAnimation
+                var pulseAnimation = new DoubleAnimation
                 {
                     From = 0.5,
                     To = 1.0,
                     Duration = TimeSpan.FromSeconds(0.8),
                     AutoReverse = true,
-                    RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever
+                    RepeatBehavior = RepeatBehavior.Forever
                 };
-                bgEllipse.BeginAnimation(System.Windows.Shapes.Ellipse.OpacityProperty, pulseAnimation);
+                bgEllipse.BeginAnimation(OpacityProperty, pulseAnimation);
             }
 
             // Objective requirement box (above circle)
@@ -1713,8 +1743,8 @@ namespace ConditioningControlPanel
 
             var objectiveBox = new Border
             {
-                Background = new System.Windows.Media.SolidColorBrush(
-                    System.Windows.Media.Color.FromArgb(0xCC, 0x1A, 0x1A, 0x2E)),
+                Background = new SolidColorBrush(
+                    Color.FromArgb(0xCC, 0x1A, 0x1A, 0x2E)),
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(6, 3, 6, 3),
                 Margin = new Thickness(0, 0, 0, 8),
@@ -1723,8 +1753,8 @@ namespace ConditioningControlPanel
             var objectiveText = new TextBlock
             {
                 Text = requirementText,
-                Foreground = new System.Windows.Media.SolidColorBrush(
-                    System.Windows.Media.Color.FromRgb(0xCC, 0xCC, 0xCC)),
+                Foreground = new SolidColorBrush(
+                    Color.FromRgb(0xCC, 0xCC, 0xCC)),
                 FontSize = 9,
                 TextWrapping = TextWrapping.Wrap,
                 TextAlignment = TextAlignment.Center
@@ -1737,13 +1767,13 @@ namespace ConditioningControlPanel
             // Step number
             var stepNum = new TextBlock
             {
-                Text = step.StepType == Models.RoadmapStepType.Boss ? "BOSS" : $"Step {step.StepNumber}",
-                Foreground = step.StepType == Models.RoadmapStepType.Boss
-                    ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.Gold)
-                    : new System.Windows.Media.SolidColorBrush(
-                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#888888")),
+                Text = step.StepType == RoadmapStepType.Boss ? "BOSS" : $"Step {step.StepNumber}",
+                Foreground = step.StepType == RoadmapStepType.Boss
+                    ? new SolidColorBrush(Colors.Gold)
+                    : new SolidColorBrush(
+                        (Color)ColorConverter.ConvertFromString("#888888")),
                 FontSize = 11,
-                FontWeight = step.StepType == Models.RoadmapStepType.Boss ? FontWeights.Bold : FontWeights.Normal,
+                FontWeight = step.StepType == RoadmapStepType.Boss ? FontWeights.Bold : FontWeights.Normal,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Margin = new Thickness(0, 10, 0, 2)
             };
@@ -1753,7 +1783,7 @@ namespace ConditioningControlPanel
             var title = new TextBlock
             {
                 Text = step.Title,
-                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.White),
+                Foreground = new SolidColorBrush(Colors.White),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
                 TextAlignment = TextAlignment.Center,
@@ -1772,8 +1802,8 @@ namespace ConditioningControlPanel
 
                 var noteBox = new Border
                 {
-                    Background = new System.Windows.Media.SolidColorBrush(
-                        System.Windows.Media.Color.FromArgb(0x80, 0x25, 0x25, 0x42)),
+                    Background = new SolidColorBrush(
+                        Color.FromArgb(0x80, 0x25, 0x25, 0x42)),
                     CornerRadius = new CornerRadius(4),
                     Padding = new Thickness(6, 3, 6, 3),
                     Margin = new Thickness(0, 8, 0, 0),
@@ -1782,8 +1812,8 @@ namespace ConditioningControlPanel
                 var noteTextBlock = new TextBlock
                 {
                     Text = $"\"{noteText}\"",
-                    Foreground = new System.Windows.Media.SolidColorBrush(
-                        System.Windows.Media.Color.FromRgb(0x88, 0x88, 0x88)),
+                    Foreground = new SolidColorBrush(
+                        Color.FromRgb(0x88, 0x88, 0x88)),
                     FontSize = 9,
                     FontStyle = FontStyles.Italic,
                     TextWrapping = TextWrapping.Wrap,
@@ -1801,13 +1831,13 @@ namespace ConditioningControlPanel
             return container;
         }
 
-        private void RoadmapNode_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private void RoadmapNode_Click(object sender, MouseButtonEventArgs e)
         {
             var container = sender as Border;
             var stepId = container?.Tag as string;
             if (string.IsNullOrEmpty(stepId)) return;
 
-            var stepDef = Models.RoadmapStepDefinition.GetById(stepId);
+            var stepDef = RoadmapStepDefinition.GetById(stepId);
             if (stepDef == null) return;
 
             var progress = App.Roadmap?.GetStepProgress(stepId);
@@ -1838,7 +1868,7 @@ namespace ConditioningControlPanel
             App.Roadmap?.StartStep(stepId);
 
             // Open file picker
-            var openFileDialog = new Microsoft.Win32.OpenFileDialog
+            var openFileDialog = new OpenFileDialog
             {
                 Filter = "Image files|*.jpg;*.jpeg;*.png;*.gif;*.bmp|All files|*.*",
                 Title = $"Select Photo for: {stepDef.Title}"
@@ -1850,7 +1880,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private void ShowPhotoConfirmation(string stepId, Models.RoadmapStepDefinition stepDef, string photoPath)
+        private void ShowPhotoConfirmation(string stepId, RoadmapStepDefinition stepDef, string photoPath)
         {
             // Show themed confirmation dialog
             var confirmDialog = new RoadmapConfirmDialog(stepDef.Title, stepDef.PhotoRequirement);
@@ -1891,7 +1921,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private void OnRoadmapStepCompleted(object? sender, Services.RoadmapStepCompletedEventArgs e)
+        private void OnRoadmapStepCompleted(object? sender, RoadmapStepCompletedEventArgs e)
         {
             Dispatcher.Invoke(() =>
             {
@@ -1900,7 +1930,7 @@ namespace ConditioningControlPanel
                 popup.Show();
 
                 // Play celebration sound
-                System.Media.SystemSounds.Exclamation.Play();
+                SystemSounds.Exclamation.Play();
 
                 // Refresh UI
                 RefreshRoadmapUI();
@@ -1929,7 +1959,7 @@ namespace ConditioningControlPanel
             });
         }
 
-        private void OnRoadmapTrackUnlocked(object? sender, Models.RoadmapTrack track)
+        private void OnRoadmapTrackUnlocked(object? sender, RoadmapTrack track)
         {
             Dispatcher.Invoke(() =>
             {
@@ -2179,7 +2209,7 @@ namespace ConditioningControlPanel
                 // Draw connecting line from previous node
                 if (i > 0)
                 {
-                    var line = new System.Windows.Shapes.Line
+                    var line = new Line
                     {
                         X1 = prevCenterX,
                         Y1 = centerY,
@@ -2195,7 +2225,7 @@ namespace ConditioningControlPanel
                 }
 
                 // Draw node (rounded rectangle to fit text)
-                var rect = new System.Windows.Shapes.Rectangle
+                var rect = new Rectangle
                 {
                     Width = nodeSize,
                     Height = nodeSize,
@@ -2256,7 +2286,7 @@ namespace ConditioningControlPanel
                 if (_isStreakFixMode && isMissed)
                 {
                     double highlightSize = nodeSize + 4;
-                    var highlight = new System.Windows.Shapes.Rectangle
+                    var highlight = new Rectangle
                     {
                         Width = highlightSize,
                         Height = highlightSize,
@@ -2265,18 +2295,18 @@ namespace ConditioningControlPanel
                         Fill = Brushes.Transparent,
                         Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4")),
                         StrokeThickness = 2,
-                        Cursor = System.Windows.Input.Cursors.Hand,
+                        Cursor = Cursors.Hand,
                         Tag = day.Date
                     };
 
                     // Pulsing opacity animation
-                    var pulseAnim = new System.Windows.Media.Animation.DoubleAnimation
+                    var pulseAnim = new DoubleAnimation
                     {
                         From = 1.0,
                         To = 0.3,
                         Duration = TimeSpan.FromMilliseconds(600),
                         AutoReverse = true,
-                        RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever
+                        RepeatBehavior = RepeatBehavior.Forever
                     };
                     highlight.BeginAnimation(OpacityProperty, pulseAnim);
 
@@ -2395,9 +2425,9 @@ namespace ConditioningControlPanel
             RefreshStreakCalendar();
         }
 
-        private async void StreakFixDay_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private async void StreakFixDay_Click(object sender, MouseButtonEventArgs e)
         {
-            if (sender is not System.Windows.Shapes.Rectangle highlight) return;
+            if (sender is not Rectangle highlight) return;
             if (highlight.Tag is not DateTime fixDate) return;
 
             var settings = App.Settings?.Current;
@@ -2898,7 +2928,7 @@ namespace ConditioningControlPanel
         {
             try
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                Process.Start(new ProcessStartInfo
                 {
                     FileName = "https://discord.gg/YxVAMt4qaZ",
                     UseShellExecute = true
@@ -3001,7 +3031,7 @@ namespace ConditioningControlPanel
             {
                 try
                 {
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    Process.Start(new ProcessStartInfo
                     {
                         FileName = _serverUpdateUrl,
                         UseShellExecute = true
@@ -3216,7 +3246,7 @@ namespace ConditioningControlPanel
 
         private void BtnLeaderboardDiscord_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is System.Windows.Controls.Button btn && btn.Tag is string discordId && !string.IsNullOrEmpty(discordId))
+            if (sender is Button btn && btn.Tag is string discordId && !string.IsNullOrEmpty(discordId))
             {
                 try
                 {
@@ -3236,10 +3266,10 @@ namespace ConditioningControlPanel
             }
         }
 
-        private void LstLeaderboard_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private void LstLeaderboard_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
             // Get the double-clicked item
-            if (LstLeaderboard?.SelectedItem is Services.LeaderboardEntry entry && !string.IsNullOrEmpty(entry.DisplayName))
+            if (LstLeaderboard?.SelectedItem is LeaderboardEntry entry && !string.IsNullOrEmpty(entry.DisplayName))
             {
                 App.Logger?.Information("Leaderboard double-click: Opening profile for {DisplayName}", entry.DisplayName);
 
@@ -3417,8 +3447,8 @@ namespace ConditioningControlPanel
 
             for (int i = 0; i < 5; i++)
             {
-                var companionId = (Models.CompanionId)i;
-                var def = Models.CompanionDefinition.GetById(companionId);
+                var companionId = (CompanionId)i;
+                var def = CompanionDefinition.GetById(companionId);
                 var progress = App.Companion.GetProgress(companionId);
                 var isUnlocked = App.Settings?.Current?.IsLevelUnlocked(def.RequiredLevel) ?? false;
 
@@ -3430,10 +3460,10 @@ namespace ConditioningControlPanel
 
                 // Highlight active companion with colored border
                 var isActive = companionId == activeId;
-                var color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(colors[i]);
+                var color = (Color)ColorConverter.ConvertFromString(colors[i]);
                 cards[i].BorderBrush = isActive
-                    ? new System.Windows.Media.SolidColorBrush(color)
-                    : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.Transparent);
+                    ? new SolidColorBrush(color)
+                    : new SolidColorBrush(Colors.Transparent);
 
                 // Update lock visibility based on player level
                 lockTexts[i].Visibility = isUnlocked ? Visibility.Collapsed : Visibility.Visible;
@@ -3441,7 +3471,7 @@ namespace ConditioningControlPanel
             }
 
             // Update active companion details
-            var activeDef = Models.CompanionDefinition.GetById(activeId);
+            var activeDef = CompanionDefinition.GetById(activeId);
             var activeProgress = App.Companion.ActiveProgress;
 
             TxtActiveCompanionName.Text = activeDef.Name;
@@ -3453,8 +3483,8 @@ namespace ConditioningControlPanel
 
             // Update main progress bar
             PrgCompanion0.Value = activeProgress.LevelProgress * 100;
-            PrgCompanion0.Foreground = new System.Windows.Media.SolidColorBrush(
-                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(colors[(int)activeId]));
+            PrgCompanion0.Foreground = new SolidColorBrush(
+                (Color)ColorConverter.ConvertFromString(colors[(int)activeId]));
 
             // Update community prompts UI
             UpdateCommunityPromptsUI();
@@ -3520,7 +3550,7 @@ namespace ConditioningControlPanel
                 InstalledPromptsPanel.Children.Add(new TextBlock
                 {
                     Text = "No prompts installed",
-                    Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(80, 80, 80)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
                     FontSize = 10,
                     FontStyle = FontStyles.Italic,
                     HorizontalAlignment = HorizontalAlignment.Center
@@ -3540,7 +3570,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private FrameworkElement CreatePromptRow(Models.CommunityPrompt prompt, bool isActive)
+        private FrameworkElement CreatePromptRow(CommunityPrompt prompt, bool isActive)
         {
             var grid = new Grid { Margin = new Thickness(0, 2, 0, 2) };
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -3553,21 +3583,21 @@ namespace ConditioningControlPanel
                 namePanel.Children.Add(new TextBlock
                 {
                     Text = "● ",
-                    Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(147, 112, 219)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(147, 112, 219)),
                     FontSize = 10
                 });
             }
             namePanel.Children.Add(new TextBlock
             {
                 Text = prompt.Name,
-                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.White),
+                Foreground = new SolidColorBrush(Colors.White),
                 FontSize = 10,
                 FontWeight = isActive ? FontWeights.SemiBold : FontWeights.Normal
             });
             namePanel.Children.Add(new TextBlock
             {
                 Text = $" by {prompt.Author}",
-                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(96, 96, 96)),
+                Foreground = new SolidColorBrush(Color.FromRgb(96, 96, 96)),
                 FontSize = 9
             });
             Grid.SetColumn(namePanel, 0);
@@ -3581,12 +3611,12 @@ namespace ConditioningControlPanel
                 var activateBtn = new Button
                 {
                     Content = "Use",
-                    Background = System.Windows.Media.Brushes.Transparent,
-                    Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(147, 112, 219)),
+                    Background = Brushes.Transparent,
+                    Foreground = new SolidColorBrush(Color.FromRgb(147, 112, 219)),
                     BorderThickness = new Thickness(0),
                     FontSize = 9,
                     Padding = new Thickness(6, 2, 6, 2),
-                    Cursor = System.Windows.Input.Cursors.Hand,
+                    Cursor = Cursors.Hand,
                     Tag = prompt.Id
                 };
                 activateBtn.Click += (s, e) =>
@@ -3603,12 +3633,12 @@ namespace ConditioningControlPanel
             var removeBtn = new Button
             {
                 Content = "×",
-                Background = System.Windows.Media.Brushes.Transparent,
-                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(128, 128, 128)),
+                Background = Brushes.Transparent,
+                Foreground = new SolidColorBrush(Color.FromRgb(128, 128, 128)),
                 BorderThickness = new Thickness(0),
                 FontSize = 12,
                 Padding = new Thickness(4, 0, 4, 0),
-                Cursor = System.Windows.Input.Cursors.Hand,
+                Cursor = Cursors.Hand,
                 Tag = prompt.Id,
                 ToolTip = "Remove"
             };
@@ -3632,7 +3662,7 @@ namespace ConditioningControlPanel
         /// Handles clicking on a companion card to switch companions.
         /// Also switches the avatar to match the selected companion.
         /// </summary>
-        private void CompanionCard_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private void CompanionCard_Click(object sender, MouseButtonEventArgs e)
         {
             // If the click came from the personality button, ignore it (let the button handle it)
             if (e.OriginalSource is FrameworkElement source)
@@ -3646,21 +3676,21 @@ namespace ConditioningControlPanel
                         App.Logger?.Information("Click originated from personality button, ignoring card click");
                         return; // Don't handle card click, let button handle it
                     }
-                    parent = System.Windows.Media.VisualTreeHelper.GetParent(parent) as FrameworkElement;
+                    parent = VisualTreeHelper.GetParent(parent) as FrameworkElement;
                 }
             }
 
             if (sender is not FrameworkElement element || element.Tag == null) return;
             if (!int.TryParse(element.Tag.ToString(), out int companionIndex)) return;
 
-            var companionId = (Models.CompanionId)companionIndex;
-            var def = Models.CompanionDefinition.GetById(companionId);
+            var companionId = (CompanionId)companionIndex;
+            var def = CompanionDefinition.GetById(companionId);
             var playerLevel = App.Settings?.Current?.PlayerLevel ?? 1;
 
             // Check level requirement using IsLevelUnlocked (respects OG unlock toggle)
             if (!(App.Settings?.Current?.IsLevelUnlocked(def.RequiredLevel) ?? false))
             {
-                System.Windows.MessageBox.Show(
+                MessageBox.Show(
                     $"{def.Name} unlocks at Level {def.RequiredLevel}.\n\nYou're currently Level {playerLevel}. Keep training to unlock!",
                     "Level Required",
                     MessageBoxButton.OK,
@@ -3684,7 +3714,7 @@ namespace ConditioningControlPanel
         /// Handles clicking the personality button on a companion card.
         /// Opens a dialog to assign a prompt JSON to this companion.
         /// </summary>
-        private void BtnCompanionPersonality_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private void BtnCompanionPersonality_Click(object sender, MouseButtonEventArgs e)
         {
             App.Logger?.Information("Personality button clicked");
             e.Handled = true; // Prevent card click from also triggering
@@ -3700,8 +3730,8 @@ namespace ConditioningControlPanel
                 return;
             }
 
-            var companionId = (Models.CompanionId)companionIndex;
-            var def = Models.CompanionDefinition.GetById(companionId);
+            var companionId = (CompanionId)companionIndex;
+            var def = CompanionDefinition.GetById(companionId);
             var isUnlocked = App.Companion?.IsCompanionUnlocked(companionId) ?? false;
 
             App.Logger?.Information("Personality clicked: {Companion}, unlocked: {Unlocked}", def.Name, isUnlocked);
@@ -3716,10 +3746,10 @@ namespace ConditioningControlPanel
 
             // Show options: Import JSON, Choose from installed, or Clear
             var currentPromptId = App.Settings?.Current?.GetCompanionPromptId(companionIndex);
-            var currentPromptName = Services.CompanionService.GetAssignedPromptName(companionId);
+            var currentPromptName = CompanionService.GetAssignedPromptName(companionId);
             var hasAssigned = !string.IsNullOrEmpty(currentPromptName);
 
-            var dialog = new Microsoft.Win32.OpenFileDialog
+            var dialog = new OpenFileDialog
             {
                 Title = $"Select AI Personality for {def.Name}",
                 Filter = "Prompt JSON files (*.json)|*.json",
@@ -3727,8 +3757,8 @@ namespace ConditioningControlPanel
             };
 
             // Check for prompts folder
-            var promptsFolder = System.IO.Path.Combine(App.EffectiveAssetsPath, "prompts");
-            if (System.IO.Directory.Exists(promptsFolder))
+            var promptsFolder = Path.Combine(App.EffectiveAssetsPath, "prompts");
+            if (Directory.Exists(promptsFolder))
             {
                 dialog.InitialDirectory = promptsFolder;
             }
@@ -3773,7 +3803,7 @@ namespace ConditioningControlPanel
 
             for (int i = 0; i < promptTexts.Length; i++)
             {
-                var promptName = Services.CompanionService.GetAssignedPromptName((Models.CompanionId)i);
+                var promptName = CompanionService.GetAssignedPromptName((CompanionId)i);
                 promptTexts[i].Text = promptName ?? "";
                 promptTexts[i].ToolTip = string.IsNullOrEmpty(promptName) ? null : $"AI Personality: {promptName}";
             }
@@ -3864,7 +3894,7 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var dialog = new Microsoft.Win32.OpenFileDialog
+                var dialog = new OpenFileDialog
                 {
                     Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*",
                     Title = "Import Community Prompt"
@@ -3906,7 +3936,7 @@ namespace ConditioningControlPanel
                     return;
                 }
 
-                var dialog = new Microsoft.Win32.SaveFileDialog
+                var dialog = new SaveFileDialog
                 {
                     Filter = "JSON files (*.json)|*.json",
                     Title = "Export Community Prompt",
@@ -4780,7 +4810,7 @@ namespace ConditioningControlPanel
                 SliderAudioSyncIntensity.Value = intensityPercent;
         }
 
-        private void AlgorithmCard_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private void AlgorithmCard_Click(object sender, MouseButtonEventArgs e)
         {
             // For now, only AudioReactive is enabled - future algorithms will be added here
             if (sender is Border card && card.Tag is string algorithmName)
@@ -4793,19 +4823,19 @@ namespace ConditioningControlPanel
             }
         }
 
-        private void CmbHapticProvider_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        private void CmbHapticProvider_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_isLoading || CmbHapticProvider.SelectedItem == null) return;
 
-            var item = CmbHapticProvider.SelectedItem as System.Windows.Controls.ComboBoxItem;
+            var item = CmbHapticProvider.SelectedItem as ComboBoxItem;
             var tag = item?.Tag?.ToString();
 
             App.Settings.Current.Haptics.Provider = tag switch
             {
-                "Mock" => Services.Haptics.HapticProviderType.Mock,
-                "Lovense" => Services.Haptics.HapticProviderType.Lovense,
-                "Buttplug" => Services.Haptics.HapticProviderType.Buttplug,
-                _ => Services.Haptics.HapticProviderType.Mock
+                "Mock" => HapticProviderType.Mock,
+                "Lovense" => HapticProviderType.Lovense,
+                "Buttplug" => HapticProviderType.Buttplug,
+                _ => HapticProviderType.Mock
             };
 
             // Load the saved URL for the selected provider (or use default)
@@ -4863,8 +4893,8 @@ namespace ConditioningControlPanel
                 await App.Haptics.DisconnectAsync();
                 BtnHapticConnect.Content = "Connect";
                 TxtHapticStatus.Text = "Disconnected";
-                TxtHapticStatus.Foreground = new System.Windows.Media.SolidColorBrush(
-                    System.Windows.Media.Color.FromRgb(0xFF, 0x6B, 0x6B));
+                TxtHapticStatus.Foreground = new SolidColorBrush(
+                    Color.FromRgb(0xFF, 0x6B, 0x6B));
                 TxtHapticDevices.Text = "No devices";
             }
             else
@@ -4880,8 +4910,8 @@ namespace ConditioningControlPanel
                     {
                         BtnHapticConnect.Content = "Disconnect";
                         TxtHapticStatus.Text = "Connected";
-                        TxtHapticStatus.Foreground = new System.Windows.Media.SolidColorBrush(
-                            System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
+                        TxtHapticStatus.Foreground = new SolidColorBrush(
+                            Color.FromRgb(0x00, 0xE6, 0x76));
 
                         var devices = App.Haptics.ConnectedDevices;
                         TxtHapticDevices.Text = devices.Count > 0
@@ -4892,8 +4922,8 @@ namespace ConditioningControlPanel
                     {
                         BtnHapticConnect.Content = "Connect";
                         TxtHapticStatus.Text = "Failed";
-                        TxtHapticStatus.Foreground = new System.Windows.Media.SolidColorBrush(
-                            System.Windows.Media.Color.FromRgb(0xFF, 0x6B, 0x6B));
+                        TxtHapticStatus.Foreground = new SolidColorBrush(
+                            Color.FromRgb(0xFF, 0x6B, 0x6B));
                     }
                 }
                 catch (Exception ex)
@@ -4909,8 +4939,8 @@ namespace ConditioningControlPanel
             }
         }
 
-        private System.Threading.CancellationTokenSource? _hapticSliderCts;
-        private System.Windows.Threading.DispatcherTimer? _hapticSliderDebounce;
+        private CancellationTokenSource? _hapticSliderCts;
+        private DispatcherTimer? _hapticSliderDebounce;
 
         private void SliderHapticIntensity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
@@ -4922,7 +4952,7 @@ namespace ConditioningControlPanel
 
             // Debounce: wait 150ms after slider stops moving before sending command
             _hapticSliderDebounce?.Stop();
-            _hapticSliderDebounce = new System.Windows.Threading.DispatcherTimer
+            _hapticSliderDebounce = new DispatcherTimer
             {
                 Interval = TimeSpan.FromMilliseconds(150)
             };
@@ -4955,9 +4985,9 @@ namespace ConditioningControlPanel
 
             // Save to the appropriate URL based on current provider
             var provider = App.Settings.Current.Haptics.Provider;
-            if (provider == Services.Haptics.HapticProviderType.Lovense)
+            if (provider == HapticProviderType.Lovense)
                 App.Settings.Current.Haptics.LovenseUrl = TxtHapticUrl.Text;
-            else if (provider == Services.Haptics.HapticProviderType.Buttplug)
+            else if (provider == HapticProviderType.Buttplug)
                 App.Settings.Current.Haptics.ButtplugUrl = TxtHapticUrl.Text;
         }
 
@@ -5009,7 +5039,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private System.Windows.Threading.DispatcherTimer? _hapticFeatureDebounce;
+        private DispatcherTimer? _hapticFeatureDebounce;
 
         private void SliderHapticFeature_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
@@ -5064,7 +5094,7 @@ namespace ConditioningControlPanel
 
             // Debounce: wait 150ms after slider stops moving before sending live vibration
             _hapticFeatureDebounce?.Stop();
-            _hapticFeatureDebounce = new System.Windows.Threading.DispatcherTimer
+            _hapticFeatureDebounce = new DispatcherTimer
             {
                 Interval = TimeSpan.FromMilliseconds(150)
             };
@@ -5087,7 +5117,7 @@ namespace ConditioningControlPanel
             if (combo == null) return;
 
             var tag = combo.Tag?.ToString();
-            var mode = (Models.VibrationMode)combo.SelectedIndex;
+            var mode = (VibrationMode)combo.SelectedIndex;
             var haptics = App.Settings.Current.Haptics;
 
             switch (tag)
@@ -5175,10 +5205,10 @@ namespace ConditioningControlPanel
 
             BtnKeywordTriggersStartStop.Content = running ? "Stop" : "Start";
             BtnKeywordTriggersStartStop.Background = running
-                ? new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#555555"))
-                : new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#FF69B4"));
+                ? new SolidColorBrush(
+                    (Color)ColorConverter.ConvertFromString("#555555"))
+                : new SolidColorBrush(
+                    (Color)ColorConverter.ConvertFromString("#FF69B4"));
         }
 
         private void SliderKeywordBufferTimeout_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -5353,7 +5383,7 @@ namespace ConditioningControlPanel
             var trigger = App.Settings.Current.KeywordTriggers.FirstOrDefault(t => t.Id == triggerId);
             if (trigger == null) return;
 
-            var dlg = new Microsoft.Win32.OpenFileDialog
+            var dlg = new OpenFileDialog
             {
                 Filter = "Audio Files|*.mp3;*.wav;*.ogg|All Files|*.*",
                 Title = "Select Trigger Audio File"
@@ -5810,40 +5840,40 @@ namespace ConditioningControlPanel
                     ResizeMode = ResizeMode.NoResize,
                     WindowStyle = WindowStyle.None,
                     AllowsTransparency = true,
-                    Background = System.Windows.Media.Brushes.Transparent
+                    Background = Brushes.Transparent
                 };
 
-                var border = new System.Windows.Controls.Border
+                var border = new Border
                 {
-                    BorderBrush = new System.Windows.Media.SolidColorBrush(
-                        System.Windows.Media.Color.FromRgb(0xFF, 0xD7, 0x00)), // Gold
+                    BorderBrush = new SolidColorBrush(
+                        Color.FromRgb(0xFF, 0xD7, 0x00)), // Gold
                     BorderThickness = new Thickness(2),
                     CornerRadius = new CornerRadius(10),
-                    Background = new System.Windows.Media.SolidColorBrush(
-                        System.Windows.Media.Color.FromRgb(0x1A, 0x1A, 0x2E)),
+                    Background = new SolidColorBrush(
+                        Color.FromRgb(0x1A, 0x1A, 0x2E)),
                     Padding = new Thickness(30)
                 };
 
-                var stack = new System.Windows.Controls.StackPanel
+                var stack = new StackPanel
                 {
                     HorizontalAlignment = HorizontalAlignment.Center,
                     MaxWidth = 400
                 };
 
                 // Star header
-                stack.Children.Add(new System.Windows.Controls.TextBlock
+                stack.Children.Add(new TextBlock
                 {
                     Text = "⭐ Welcome Back, Pioneer! ⭐",
                     FontSize = 24,
                     FontWeight = FontWeights.Bold,
-                    Foreground = new System.Windows.Media.SolidColorBrush(
-                        System.Windows.Media.Color.FromRgb(0xFF, 0xD7, 0x00)),
+                    Foreground = new SolidColorBrush(
+                        Color.FromRgb(0xFF, 0xD7, 0x00)),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     Margin = new Thickness(0, 0, 0, 15)
                 });
 
                 // Message
-                stack.Children.Add(new System.Windows.Controls.TextBlock
+                stack.Children.Add(new TextBlock
                 {
                     Text = "You've been recognized as a Season 0 OG.\n\n" +
                            "Your account has been reset for Season 1, but your legacy lives on:\n\n" +
@@ -5853,22 +5883,22 @@ namespace ConditioningControlPanel
                            "Your unlocks and achievements have been preserved.\n" +
                            "Good luck climbing the leaderboard again!",
                     FontSize = 13,
-                    Foreground = System.Windows.Media.Brushes.White,
+                    Foreground = Brushes.White,
                     TextWrapping = TextWrapping.Wrap,
                     HorizontalAlignment = HorizontalAlignment.Left,
                     Margin = new Thickness(0, 0, 0, 20)
                 });
 
                 // Continue button
-                var button = new System.Windows.Controls.Button
+                var button = new Button
                 {
                     Content = "Continue",
                     Padding = new Thickness(30, 10, 30, 10),
-                    Background = new System.Windows.Media.SolidColorBrush(
-                        System.Windows.Media.Color.FromRgb(0xFF, 0x69, 0xB4)),
-                    Foreground = System.Windows.Media.Brushes.White,
+                    Background = new SolidColorBrush(
+                        Color.FromRgb(0xFF, 0x69, 0xB4)),
+                    Foreground = Brushes.White,
                     BorderThickness = new Thickness(0),
-                    Cursor = System.Windows.Input.Cursors.Hand,
+                    Cursor = Cursors.Hand,
                     HorizontalAlignment = HorizontalAlignment.Center
                 };
                 button.Click += (s, e) => dialog.Close();
@@ -5878,7 +5908,7 @@ namespace ConditioningControlPanel
                 dialog.Content = border;
                 dialog.MouseLeftButtonDown += (s, e) =>
                 {
-                    if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed)
+                    if (e.LeftButton == MouseButtonState.Pressed)
                         dialog.DragMove();
                 };
 
@@ -5910,7 +5940,7 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var currentVersion = Services.UpdateService.AppVersion;
+                var currentVersion = UpdateService.AppVersion;
                 var lastSeenVersion = App.Settings?.Current?.LastSeenVersion ?? "";
 
                 // If versions differ, show the patch notes
@@ -5929,7 +5959,7 @@ namespace ConditioningControlPanel
                             App.Logger?.Information("What's New dialog showing, setting IsStartupDialogShowing=true");
 
                             MessageBox.Show(
-                                Services.UpdateService.CurrentPatchNotes,
+                                UpdateService.CurrentPatchNotes,
                                 $"What's New in v{currentVersion}",
                                 MessageBoxButton.OK,
                                 MessageBoxImage.Information);
@@ -5951,7 +5981,7 @@ namespace ConditioningControlPanel
                             IsStartupDialogShowing = false;
                             App.Logger?.Information("What's New dialog dismissed, setting IsStartupDialogShowing=false");
                         }
-                    }), System.Windows.Threading.DispatcherPriority.Loaded);
+                    }), DispatcherPriority.Loaded);
                 }
             }
             catch (Exception ex)
@@ -5971,25 +6001,25 @@ namespace ConditioningControlPanel
             var fadeInTarget = banners[nextIndex];
 
             // Create fade animations
-            var fadeOut = new System.Windows.Media.Animation.DoubleAnimation
+            var fadeOut = new DoubleAnimation
             {
                 From = 1,
                 To = 0,
                 Duration = TimeSpan.FromMilliseconds(500),
-                EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut }
             };
 
-            var fadeIn = new System.Windows.Media.Animation.DoubleAnimation
+            var fadeIn = new DoubleAnimation
             {
                 From = 0,
                 To = 1,
                 Duration = TimeSpan.FromMilliseconds(500),
-                EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut }
             };
 
             // Apply animations
-            fadeOutTarget.BeginAnimation(UIElement.OpacityProperty, fadeOut);
-            fadeInTarget.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+            fadeOutTarget.BeginAnimation(OpacityProperty, fadeOut);
+            fadeInTarget.BeginAnimation(OpacityProperty, fadeIn);
 
             // Disable hit testing on faded-out banner so hyperlinks don't capture clicks
             // (hyperlinks can still receive clicks even at Opacity=0)
@@ -6027,7 +6057,7 @@ namespace ConditioningControlPanel
             var tileStyle = FindResource("AchievementTile") as Style;
             
             // Add all achievements
-            foreach (var kvp in Models.Achievement.All)
+            foreach (var kvp in Achievement.All)
             {
                 var achievement = kvp.Value;
                 var isUnlocked = App.Achievements?.Progress.IsUnlocked(achievement.Id) ?? false;
@@ -6086,7 +6116,7 @@ namespace ConditioningControlPanel
             image.Effect = isUnlocked ? null : new BlurEffect { Radius = 15 };
 
             // Update tooltip
-            if (Models.Achievement.All.TryGetValue(achievementId, out var achievement))
+            if (Achievement.All.TryGetValue(achievementId, out var achievement))
             {
                 var parent = image.Parent as Border;
                 if (parent != null)
@@ -6110,7 +6140,7 @@ namespace ConditioningControlPanel
             App.Logger?.Debug("All achievement tiles refreshed");
         }
 
-        private void OnAchievementUnlockedInMainWindow(object? sender, Models.Achievement achievement)
+        private void OnAchievementUnlockedInMainWindow(object? sender, Achievement achievement)
         {
             Dispatcher.Invoke(() =>
             {
@@ -6125,7 +6155,7 @@ namespace ConditioningControlPanel
 
         private QuestCompletePopup? _questCompletePopup;
 
-        private void OnQuestCompleted(object? sender, Services.QuestCompletedEventArgs e)
+        private void OnQuestCompleted(object? sender, QuestCompletedEventArgs e)
         {
             Dispatcher.Invoke(() =>
             {
@@ -6171,7 +6201,7 @@ namespace ConditioningControlPanel
             });
         }
 
-        private void OnQuestProgressChanged(object? sender, Services.QuestProgressEventArgs e)
+        private void OnQuestProgressChanged(object? sender, QuestProgressEventArgs e)
         {
             Dispatcher.Invoke(() =>
             {
@@ -6287,7 +6317,7 @@ namespace ConditioningControlPanel
             DrawConnectionLines(nodePositions);
 
             // Draw skill nodes (excluding secret skills)
-            foreach (var skill in Models.SkillDefinition.All.Where(s => !s.IsSecret))
+            foreach (var skill in SkillDefinition.All.Where(s => !s.IsSecret))
             {
                 if (nodePositions.TryGetValue(skill.Id, out var pos))
                 {
@@ -6671,26 +6701,26 @@ namespace ConditioningControlPanel
                 brush.GradientStops.Add(new GradientStop(Color.FromRgb(35, 20, 60), 1.0));    // deeper purple edge
 
                 // Animate middle stop offset: drift 0.2 ↔ 0.8
-                var offsetAnim = new System.Windows.Media.Animation.DoubleAnimation
+                var offsetAnim = new DoubleAnimation
                 {
                     From = 0.2,
                     To = 0.8,
                     Duration = TimeSpan.FromSeconds(5),
                     AutoReverse = true,
-                    RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
-                    EasingFunction = new System.Windows.Media.Animation.SineEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }
+                    RepeatBehavior = RepeatBehavior.Forever,
+                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
                 };
                 brush.GradientStops[1].BeginAnimation(GradientStop.OffsetProperty, offsetAnim);
 
                 // Animate middle stop color: shift between purple tones
-                var colorAnim = new System.Windows.Media.Animation.ColorAnimation
+                var colorAnim = new ColorAnimation
                 {
                     From = Color.FromRgb(80, 30, 100),   // vivid purple
                     To = Color.FromRgb(120, 40, 90),      // bright magenta-purple
                     Duration = TimeSpan.FromSeconds(4),
                     AutoReverse = true,
-                    RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
-                    EasingFunction = new System.Windows.Media.Animation.SineEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }
+                    RepeatBehavior = RepeatBehavior.Forever,
+                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
                 };
                 brush.GradientStops[1].BeginAnimation(GradientStop.ColorProperty, colorAnim);
             }
@@ -6703,38 +6733,38 @@ namespace ConditioningControlPanel
                 brush.GradientStops.Add(new GradientStop(Color.FromRgb(25, 15, 50), 1.0));    // deep purple
 
                 // Animate stop[1] offset: drift 0.15 ↔ 0.5
-                var offset1Anim = new System.Windows.Media.Animation.DoubleAnimation
+                var offset1Anim = new DoubleAnimation
                 {
                     From = 0.15,
                     To = 0.5,
                     Duration = TimeSpan.FromSeconds(6),
                     AutoReverse = true,
-                    RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
-                    EasingFunction = new System.Windows.Media.Animation.SineEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }
+                    RepeatBehavior = RepeatBehavior.Forever,
+                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
                 };
                 brush.GradientStops[1].BeginAnimation(GradientStop.OffsetProperty, offset1Anim);
 
                 // Animate stop[2] offset: drift 0.5 ↔ 0.85
-                var offset2Anim = new System.Windows.Media.Animation.DoubleAnimation
+                var offset2Anim = new DoubleAnimation
                 {
                     From = 0.5,
                     To = 0.85,
                     Duration = TimeSpan.FromSeconds(8),
                     AutoReverse = true,
-                    RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
-                    EasingFunction = new System.Windows.Media.Animation.SineEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }
+                    RepeatBehavior = RepeatBehavior.Forever,
+                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
                 };
                 brush.GradientStops[2].BeginAnimation(GradientStop.OffsetProperty, offset2Anim);
 
                 // Animate stop[1] color: shift between purple and blue tones
-                var colorAnim = new System.Windows.Media.Animation.ColorAnimation
+                var colorAnim = new ColorAnimation
                 {
                     From = Color.FromRgb(60, 25, 80),    // vivid purple
                     To = Color.FromRgb(35, 40, 90),       // bright blue
                     Duration = TimeSpan.FromSeconds(7),
                     AutoReverse = true,
-                    RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
-                    EasingFunction = new System.Windows.Media.Animation.SineEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }
+                    RepeatBehavior = RepeatBehavior.Forever,
+                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
                 };
                 brush.GradientStops[1].BeginAnimation(GradientStop.ColorProperty, colorAnim);
             }
@@ -6760,7 +6790,7 @@ namespace ConditioningControlPanel
             for (int i = 0; i < 35; i++)
             {
                 var size = 3.0 + rng.NextDouble() * 5.0; // 3-8px
-                var ellipse = new System.Windows.Shapes.Ellipse
+                var ellipse = new Ellipse
                 {
                     Width = size,
                     Height = size,
@@ -6773,17 +6803,17 @@ namespace ConditioningControlPanel
                 Canvas.SetZIndex(ellipse, -1);
 
                 // Pulsing opacity animation with random duration and start delay
-                var opacityAnim = new System.Windows.Media.Animation.DoubleAnimation
+                var opacityAnim = new DoubleAnimation
                 {
                     From = 0,
                     To = 1,
                     Duration = TimeSpan.FromSeconds(2 + rng.NextDouble() * 3), // 2-5s
                     BeginTime = TimeSpan.FromSeconds(rng.NextDouble() * 5),     // 0-5s delay
                     AutoReverse = true,
-                    RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
-                    EasingFunction = new System.Windows.Media.Animation.SineEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }
+                    RepeatBehavior = RepeatBehavior.Forever,
+                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
                 };
-                ellipse.BeginAnimation(System.Windows.UIElement.OpacityProperty, opacityAnim);
+                ellipse.BeginAnimation(OpacityProperty, opacityAnim);
 
                 SkillTreeCanvas.Children.Add(ellipse);
             }
@@ -6792,7 +6822,7 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Redirects vertical mouse wheel scrolling to horizontal scrolling for the skill tree
         /// </summary>
-        private void SkillTreeScroller_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+        private void SkillTreeScroller_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
         {
             if (sender is ScrollViewer scrollViewer)
             {
@@ -6851,7 +6881,7 @@ namespace ConditioningControlPanel
                                    Color.FromRgb(60, 60, 80);
 
                     // HORIZONTAL LAYOUT: Connect right edge of parent to left edge of child
-                    var line = new System.Windows.Shapes.Line
+                    var line = new Line
                     {
                         X1 = parentPos.X + NodeWidth,           // Right edge of parent
                         Y1 = parentPos.Y + NodeHeight / 2,      // Vertical center of parent
@@ -6882,7 +6912,7 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Creates a skill node for the tree canvas with image background support
         /// </summary>
-        private Border CreateSkillNode(Models.SkillDefinition skill)
+        private Border CreateSkillNode(SkillDefinition skill)
         {
             var isUnlocked = App.SkillTree?.HasSkill(skill.Id) == true;
             var canPurchase = App.SkillTree?.CanPurchaseSkill(skill.Id) == true;
@@ -6905,10 +6935,10 @@ namespace ConditioningControlPanel
                 CornerRadius = new CornerRadius(10),
                 Width = NodeWidth,
                 Height = NodeHeight,
-                Cursor = canPurchase ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow,
+                Cursor = canPurchase ? Cursors.Hand : Cursors.Arrow,
                 Tag = skill.Id,
                 ClipToBounds = true,
-                RenderTransformOrigin = new System.Windows.Point(0.5, 0.5),
+                RenderTransformOrigin = new Point(0.5, 0.5),
                 RenderTransform = new ScaleTransform(1.0, 1.0)
             };
 
@@ -6941,11 +6971,11 @@ namespace ConditioningControlPanel
                 if (scaleTransform != null)
                 {
                     Canvas.SetZIndex(border, 10); // bring to front while hovered
-                    var anim = new System.Windows.Media.Animation.DoubleAnimation
+                    var anim = new DoubleAnimation
                     {
                         To = 1.25,
                         Duration = TimeSpan.FromMilliseconds(250),
-                        EasingFunction = new System.Windows.Media.Animation.BackEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut, Amplitude = 0.4 }
+                        EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.4 }
                     };
                     scaleTransform.BeginAnimation(ScaleTransform.ScaleXProperty, anim);
                     scaleTransform.BeginAnimation(ScaleTransform.ScaleYProperty, anim);
@@ -6958,11 +6988,11 @@ namespace ConditioningControlPanel
                 if (scaleTransform != null)
                 {
                     Canvas.SetZIndex(border, 0); // restore z-order
-                    var anim = new System.Windows.Media.Animation.DoubleAnimation
+                    var anim = new DoubleAnimation
                     {
                         To = 1.0,
                         Duration = TimeSpan.FromMilliseconds(200),
-                        EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }
+                        EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut }
                     };
                     scaleTransform.BeginAnimation(ScaleTransform.ScaleXProperty, anim);
                     scaleTransform.BeginAnimation(ScaleTransform.ScaleYProperty, anim);
@@ -6993,7 +7023,7 @@ namespace ConditioningControlPanel
             });
             if (!string.IsNullOrEmpty(skill.PrerequisiteId) && !hasPrereq)
             {
-                var prereqSkill = Models.SkillDefinition.All.FirstOrDefault(s => s.Id == skill.PrerequisiteId);
+                var prereqSkill = SkillDefinition.All.FirstOrDefault(s => s.Id == skill.PrerequisiteId);
                 tooltipStack.Children.Add(new TextBlock
                 {
                     Text = $"🔒 Requires: {prereqSkill?.Name ?? skill.PrerequisiteId}",
@@ -7025,7 +7055,7 @@ namespace ConditioningControlPanel
             try
             {
                 var imagePath = $"pack://application:,,,/Resources/skills/{skill.Id}.png";
-                var skillImage = new System.Windows.Controls.Image
+                var skillImage = new Image
                 {
                     Source = new BitmapImage(new Uri(imagePath, UriKind.Absolute)),
                     Stretch = Stretch.UniformToFill
@@ -7034,7 +7064,7 @@ namespace ConditioningControlPanel
                 // Blur effect if locked
                 if (isLocked)
                 {
-                    skillImage.Effect = new System.Windows.Media.Effects.BlurEffect
+                    skillImage.Effect = new BlurEffect
                     {
                         Radius = 8
                     };
@@ -7056,7 +7086,7 @@ namespace ConditioningControlPanel
                 // Blur gradient if locked
                 if (isLocked)
                 {
-                    imagePlaceholder.Effect = new System.Windows.Media.Effects.BlurEffect
+                    imagePlaceholder.Effect = new BlurEffect
                     {
                         Radius = 8
                     };
@@ -7136,8 +7166,8 @@ namespace ConditioningControlPanel
 
             return new LinearGradientBrush
             {
-                StartPoint = new System.Windows.Point(0, 0),
-                EndPoint = new System.Windows.Point(1, 1),
+                StartPoint = new Point(0, 0),
+                EndPoint = new Point(1, 1),
                 GradientStops = new GradientStopCollection
                 {
                     new GradientStop(startColor, 0),
@@ -7230,7 +7260,7 @@ namespace ConditioningControlPanel
             // DISABLED: Secret skills panel removed from UI
             return;
             // SecretSkills.Children.Clear();
-            var secrets = Models.SkillDefinition.All.Where(s => s.IsSecret).ToList();
+            var secrets = SkillDefinition.All.Where(s => s.IsSecret).ToList();
 
             foreach (var skill in secrets)
             {
@@ -7252,7 +7282,7 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Creates a hidden secret skill card showing only the requirement hint
         /// </summary>
-        private Border CreateHiddenSecretCard(Models.SkillDefinition skill)
+        private Border CreateHiddenSecretCard(SkillDefinition skill)
         {
             var border = new Border
             {
@@ -7304,7 +7334,7 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Creates a secret skill card (revealed but maybe not purchased)
         /// </summary>
-        private Border CreateSecretSkillCard(Models.SkillDefinition skill)
+        private Border CreateSecretSkillCard(SkillDefinition skill)
         {
             var settings = App.Settings?.Current;
             var isUnlocked = App.SkillTree?.HasSkill(skill.Id) == true;
@@ -7337,7 +7367,7 @@ namespace ConditioningControlPanel
                 Height = 100,
                 Margin = new Thickness(5),
                 Padding = new Thickness(8),
-                Cursor = canPurchase ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow,
+                Cursor = canPurchase ? Cursors.Hand : Cursors.Arrow,
                 Tag = skill.Id
             };
 
@@ -7448,11 +7478,11 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Handles clicking on a purchasable skill card
         /// </summary>
-        private void SkillCard_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private void SkillCard_Click(object sender, MouseButtonEventArgs e)
         {
             if (sender is Border border && border.Tag is string skillId)
             {
-                var skill = Models.SkillDefinition.All.FirstOrDefault(s => s.Id == skillId);
+                var skill = SkillDefinition.All.FirstOrDefault(s => s.Id == skillId);
                 if (skill == null) return;
 
                 // Show confirmation dialog
@@ -7623,11 +7653,11 @@ namespace ConditioningControlPanel
 
         private void SetHelpContent(Button helpButton, string sectionId)
         {
-            var content = Services.HelpContentService.GetContent(sectionId);
+            var content = HelpContentService.GetContent(sectionId);
             helpButton.ToolTip = CreateHelpTooltip(content);
         }
 
-        private ToolTip CreateHelpTooltip(Models.HelpContent content)
+        private ToolTip CreateHelpTooltip(HelpContent content)
         {
             var tooltip = new ToolTip
             {
@@ -7637,7 +7667,7 @@ namespace ConditioningControlPanel
             return tooltip;
         }
 
-        private StackPanel BuildHelpContentPanel(Models.HelpContent content)
+        private StackPanel BuildHelpContentPanel(HelpContent content)
         {
             var panel = new StackPanel { MaxWidth = 360 };
 
@@ -7761,13 +7791,13 @@ namespace ConditioningControlPanel
 
         #region Presets
 
-        private Models.Preset? _selectedPreset;
-        private List<Models.Preset> _allPresets = new();
+        private Preset? _selectedPreset;
+        private List<Preset> _allPresets = new();
 
         private void InitializePresets()
         {
             // Load default presets + user presets
-            _allPresets = Models.Preset.GetDefaultPresets();
+            _allPresets = Preset.GetDefaultPresets();
             _allPresets.AddRange(App.Settings.Current.UserPresets);
             
             // Populate the header dropdown
@@ -7853,7 +7883,7 @@ namespace ConditioningControlPanel
         private void RefreshPresetsList()
         {
             PresetCardsPanel.Children.Clear();
-            _allPresets = Models.Preset.GetDefaultPresets();
+            _allPresets = Preset.GetDefaultPresets();
             _allPresets.AddRange(App.Settings.Current.UserPresets);
             
             foreach (var preset in _allPresets)
@@ -7863,7 +7893,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private Border CreatePresetCard(Models.Preset preset)
+        private Border CreatePresetCard(Preset preset)
         {
             var isSelected = _selectedPreset?.Id == preset.Id;
             var pinkBrush = FindResource("PinkBrush") as SolidColorBrush;
@@ -7939,7 +7969,7 @@ namespace ConditioningControlPanel
             });
         }
 
-        private string GetPresetQuickStats(Models.Preset preset)
+        private string GetPresetQuickStats(Preset preset)
         {
             var features = new List<string>();
             if (preset.FlashEnabled) features.Add("Flash");
@@ -7952,7 +7982,7 @@ namespace ConditioningControlPanel
             return features.Count > 0 ? string.Join(" • ", features) : "Minimal";
         }
 
-        private void SelectPreset(Models.Preset preset)
+        private void SelectPreset(Preset preset)
         {
             _selectedPreset = preset;
             _selectedSession = null;
@@ -7994,7 +8024,7 @@ namespace ConditioningControlPanel
             BtnDeletePreset.IsEnabled = !preset.IsDefault;
         }
         
-        private void SessionCard_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private void SessionCard_Click(object sender, MouseButtonEventArgs e)
         {
             if (sender is Border border && border.Tag is string sessionType)
             {
@@ -8016,7 +8046,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private Models.Session? _selectedSession;
+        private Session? _selectedSession;
         
         private void ChkCornerGifEnabled_Changed(object sender, RoutedEventArgs e)
         {
@@ -8032,17 +8062,17 @@ namespace ConditioningControlPanel
         
         private void BtnSelectCornerGif_Click(object sender, RoutedEventArgs e)
         {
-            var dialog = new Microsoft.Win32.OpenFileDialog
+            var dialog = new OpenFileDialog
             {
                 Title = "Select Corner GIF",
                 Filter = "GIF files (*.gif)|*.gif|All files (*.*)|*.*",
-                InitialDirectory = System.IO.Path.Combine(App.EffectiveAssetsPath, "images")
+                InitialDirectory = Path.Combine(App.EffectiveAssetsPath, "images")
             };
 
             if (dialog.ShowDialog() == true)
             {
                 _selectedCornerGifPath = dialog.FileName;
-                BtnSelectCornerGif.Content = $"📁 {System.IO.Path.GetFileName(dialog.FileName)}";
+                BtnSelectCornerGif.Content = $"📁 {Path.GetFileName(dialog.FileName)}";
             }
         }
 
@@ -8073,12 +8103,12 @@ namespace ConditioningControlPanel
 
         private string _selectedCornerGifPath = "";
         
-        private Models.CornerPosition GetSelectedCornerPosition()
+        private CornerPosition GetSelectedCornerPosition()
         {
-            if (RbCornerTL.IsChecked == true) return Models.CornerPosition.TopLeft;
-            if (RbCornerTR.IsChecked == true) return Models.CornerPosition.TopRight;
-            if (RbCornerBR.IsChecked == true) return Models.CornerPosition.BottomRight;
-            return Models.CornerPosition.BottomLeft;
+            if (RbCornerTL.IsChecked == true) return CornerPosition.TopLeft;
+            if (RbCornerTR.IsChecked == true) return CornerPosition.TopRight;
+            if (RbCornerBR.IsChecked == true) return CornerPosition.BottomRight;
+            return CornerPosition.BottomLeft;
         }
         
         private void BtnRevealSpoilers_Click(object sender, RoutedEventArgs e)
@@ -8140,7 +8170,7 @@ namespace ConditioningControlPanel
                 ResizeMode = ResizeMode.NoResize,
                 WindowStyle = WindowStyle.None,
                 AllowsTransparency = true,
-                Background = System.Windows.Media.Brushes.Transparent
+                Background = Brushes.Transparent
             };
             
             var border = new Border
@@ -8253,7 +8283,7 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Get a list of features used by a session that the player hasn't unlocked yet
         /// </summary>
-        private List<string> GetLockedFeaturesForSession(Models.Session session)
+        private List<string> GetLockedFeaturesForSession(Session session)
         {
             var locked = new List<string>();
             var s = App.Settings.Current;
@@ -8287,7 +8317,7 @@ namespace ConditioningControlPanel
             return locked;
         }
         
-        private async void StartSession(Models.Session session)
+        private async void StartSession(Session session)
         {
             // Apply corner GIF settings if enabled
             if (session.HasCornerGifOption && ChkCornerGifEnabled.IsChecked == true)
@@ -8409,8 +8439,8 @@ namespace ConditioningControlPanel
                     TxtStartLabel.Text = name;
 
                     // Make button red during session
-                    BtnStart.Background = new System.Windows.Media.SolidColorBrush(
-                        System.Windows.Media.Color.FromRgb(220, 53, 69)); // Bootstrap danger red
+                    BtnStart.Background = new SolidColorBrush(
+                        Color.FromRgb(220, 53, 69)); // Bootstrap danger red
 
                     // Show pause button
                     BtnPauseSession.Visibility = Visibility.Visible;
@@ -8436,7 +8466,7 @@ namespace ConditioningControlPanel
                 TxtStartLabel.Text = "START";
 
                 // Restore pink color
-                BtnStart.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
+                BtnStart.ClearValue(BackgroundProperty);
 
                 // Hide pause button
                 BtnPauseSession.Visibility = Visibility.Collapsed;
@@ -8642,7 +8672,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private void HandleHyperlinkClick(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
+        private void HandleHyperlinkClick(object sender, RequestNavigateEventArgs e)
         {
             try
             {
@@ -8655,7 +8685,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private void LoadPreset(Models.Preset preset)
+        private void LoadPreset(Preset preset)
         {
             preset.ApplyTo(App.Settings.Current);
             App.Settings.Save();
@@ -8709,7 +8739,7 @@ namespace ConditioningControlPanel
                     return;
                 }
                 
-                var preset = Models.Preset.FromSettings(App.Settings.Current, name, "Custom preset created by user");
+                var preset = Preset.FromSettings(App.Settings.Current, name, "Custom preset created by user");
                 App.Settings.Current.UserPresets.Add(preset);
                 App.Settings.Current.CurrentPresetName = name;
                 App.Settings.Save();
@@ -8737,7 +8767,7 @@ namespace ConditioningControlPanel
             if (result == MessageBoxResult.Yes)
             {
                 // Update the preset with current settings
-                var updated = Models.Preset.FromSettings(App.Settings.Current, _selectedPreset.Name, _selectedPreset.Description);
+                var updated = Preset.FromSettings(App.Settings.Current, _selectedPreset.Name, _selectedPreset.Description);
                 updated.Id = _selectedPreset.Id;
                 updated.CreatedAt = _selectedPreset.CreatedAt;
                 
@@ -8786,14 +8816,14 @@ namespace ConditioningControlPanel
 
         #region Session Import/Export
 
-        private Services.SessionManager? _sessionManager;
-        private Services.SessionFileService? _sessionFileService;
-        private Services.AssetImportService? _assetImportService;
+        private SessionManager? _sessionManager;
+        private SessionFileService? _sessionFileService;
+        private AssetImportService? _assetImportService;
 
         private void InitializeSessionManager()
         {
-            _sessionFileService = new Services.SessionFileService();
-            _sessionManager = new Services.SessionManager();
+            _sessionFileService = new SessionFileService();
+            _sessionManager = new SessionManager();
             _sessionManager.SessionAdded += OnSessionAdded;
             _sessionManager.SessionRemoved += OnSessionRemoved;
             _sessionManager.LoadAllSessions();
@@ -8805,7 +8835,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private void OnSessionAdded(Models.Session session)
+        private void OnSessionAdded(Session session)
         {
             Dispatcher.Invoke(() =>
             {
@@ -8820,7 +8850,7 @@ namespace ConditioningControlPanel
             });
         }
 
-        private void OnSessionRemoved(Models.Session session)
+        private void OnSessionRemoved(Session session)
         {
             Dispatcher.Invoke(() =>
             {
@@ -8829,7 +8859,7 @@ namespace ConditioningControlPanel
             });
         }
 
-        private void AddCustomSessionCard(Models.Session session)
+        private void AddCustomSessionCard(Session session)
         {
             // Show the "Your Sessions" header
             TxtCustomSessionsHeader.Visibility = Visibility.Visible;
@@ -8840,7 +8870,7 @@ namespace ConditioningControlPanel
                 CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(16, 14, 16, 14),
                 Margin = new Thickness(0, 0, 0, 8),
-                Cursor = System.Windows.Input.Cursors.Hand,
+                Cursor = Cursors.Hand,
                 Tag = session.Id
             };
 
@@ -8891,10 +8921,10 @@ namespace ConditioningControlPanel
             // Difficulty badge
             var (diffBg, diffFg) = session.Difficulty switch
             {
-                Models.SessionDifficulty.Easy => ("#2A3A2A", "#90EE90"),
-                Models.SessionDifficulty.Medium => ("#3A3A2A", "#FFD700"),
-                Models.SessionDifficulty.Hard => ("#4A3A2A", "#FFA500"),
-                Models.SessionDifficulty.Extreme => ("#4A2A2A", "#FF6347"),
+                SessionDifficulty.Easy => ("#2A3A2A", "#90EE90"),
+                SessionDifficulty.Medium => ("#3A3A2A", "#FFD700"),
+                SessionDifficulty.Hard => ("#4A3A2A", "#FFA500"),
+                SessionDifficulty.Extreme => ("#4A2A2A", "#FF6347"),
                 _ => ("#2A3A2A", "#90EE90")
             };
             var diffBadge = new Border
@@ -8981,7 +9011,7 @@ namespace ConditioningControlPanel
                 Foreground = new SolidColorBrush(Color.FromRgb(144, 144, 144)),
                 BorderThickness = new Thickness(0),
                 FontSize = 12,
-                Cursor = System.Windows.Input.Cursors.Hand,
+                Cursor = Cursors.Hand,
                 Margin = new Thickness(2, 0, 0, 0)
             };
             btn.Click += handler;
@@ -8989,17 +9019,17 @@ namespace ConditioningControlPanel
             // Create template for rounded corners and hover effect
             var template = new ControlTemplate(typeof(Button));
             var borderFactory = new FrameworkElementFactory(typeof(Border));
-            borderFactory.SetBinding(Border.BackgroundProperty, new System.Windows.Data.Binding("Background") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+            borderFactory.SetBinding(Border.BackgroundProperty, new Binding("Background") { RelativeSource = RelativeSource.TemplatedParent });
             borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
             var contentFactory = new FrameworkElementFactory(typeof(ContentPresenter));
-            contentFactory.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-            contentFactory.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            contentFactory.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            contentFactory.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
             borderFactory.AppendChild(contentFactory);
             template.VisualTree = borderFactory;
 
-            var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hoverTrigger.Setters.Add(new Setter(Control.BackgroundProperty, FindResource("PinkBrush")));
-            hoverTrigger.Setters.Add(new Setter(Control.ForegroundProperty, new SolidColorBrush(Colors.White)));
+            var hoverTrigger = new Trigger { Property = IsMouseOverProperty, Value = true };
+            hoverTrigger.Setters.Add(new Setter(BackgroundProperty, FindResource("PinkBrush")));
+            hoverTrigger.Setters.Add(new Setter(ForegroundProperty, new SolidColorBrush(Colors.White)));
             template.Triggers.Add(hoverTrigger);
 
             btn.Template = template;
@@ -9013,24 +9043,24 @@ namespace ConditioningControlPanel
             // Update hover to red
             var template = new ControlTemplate(typeof(Button));
             var borderFactory = new FrameworkElementFactory(typeof(Border));
-            borderFactory.SetBinding(Border.BackgroundProperty, new System.Windows.Data.Binding("Background") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+            borderFactory.SetBinding(Border.BackgroundProperty, new Binding("Background") { RelativeSource = RelativeSource.TemplatedParent });
             borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
             var contentFactory = new FrameworkElementFactory(typeof(ContentPresenter));
-            contentFactory.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-            contentFactory.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            contentFactory.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            contentFactory.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
             borderFactory.AppendChild(contentFactory);
             template.VisualTree = borderFactory;
 
-            var hoverTrigger = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hoverTrigger.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(232, 17, 35))));
-            hoverTrigger.Setters.Add(new Setter(Control.ForegroundProperty, new SolidColorBrush(Colors.White)));
+            var hoverTrigger = new Trigger { Property = IsMouseOverProperty, Value = true };
+            hoverTrigger.Setters.Add(new Setter(BackgroundProperty, new SolidColorBrush(Color.FromRgb(232, 17, 35))));
+            hoverTrigger.Setters.Add(new Setter(ForegroundProperty, new SolidColorBrush(Colors.White)));
             template.Triggers.Add(hoverTrigger);
 
             btn.Template = template;
             return btn;
         }
 
-        private void RemoveCustomSessionCard(Models.Session session)
+        private void RemoveCustomSessionCard(Session session)
         {
             var cardToRemove = CustomSessionsPanel.Children
                 .OfType<Border>()
@@ -9048,7 +9078,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private void SelectSession(Models.Session session)
+        private void SelectSession(Session session)
         {
             _selectedSession = session;
 
@@ -9090,10 +9120,10 @@ namespace ConditioningControlPanel
             // Update XP color based on difficulty
             TxtSessionXP.Foreground = session.Difficulty switch
             {
-                Models.SessionDifficulty.Easy => new SolidColorBrush(Color.FromRgb(144, 238, 144)),
-                Models.SessionDifficulty.Medium => new SolidColorBrush(Color.FromRgb(255, 215, 0)),
-                Models.SessionDifficulty.Hard => new SolidColorBrush(Color.FromRgb(255, 165, 0)),
-                Models.SessionDifficulty.Extreme => new SolidColorBrush(Color.FromRgb(255, 99, 71)),
+                SessionDifficulty.Easy => new SolidColorBrush(Color.FromRgb(144, 238, 144)),
+                SessionDifficulty.Medium => new SolidColorBrush(Color.FromRgb(255, 215, 0)),
+                SessionDifficulty.Hard => new SolidColorBrush(Color.FromRgb(255, 165, 0)),
+                SessionDifficulty.Extreme => new SolidColorBrush(Color.FromRgb(255, 99, 71)),
                 _ => new SolidColorBrush(Color.FromRgb(144, 238, 144))
             };
 
@@ -9113,7 +9143,7 @@ namespace ConditioningControlPanel
             BtnExportSession.IsEnabled = true;
         }
 
-        private string GenerateSessionTimelineDescription(Models.Session session)
+        private string GenerateSessionTimelineDescription(Session session)
         {
             var parts = new List<string>();
 
@@ -9362,7 +9392,7 @@ namespace ConditioningControlPanel
             // Validate and import session
             if (_sessionFileService == null)
             {
-                _sessionFileService = new Services.SessionFileService();
+                _sessionFileService = new SessionFileService();
             }
 
             if (!_sessionFileService.ValidateSessionFile(filePath, out var errorMessage))
@@ -9392,9 +9422,9 @@ namespace ConditioningControlPanel
         {
             try
             {
-                _assetImportService ??= new Services.AssetImportService();
+                _assetImportService ??= new AssetImportService();
 
-                var progress = new Progress<Services.ImportProgress>(p =>
+                var progress = new Progress<ImportProgress>(p =>
                 {
                     // Could update a progress indicator here if needed
                     App.Logger?.Debug("Import progress: {Current}/{Total} - {File}", p.Current, p.Total, p.CurrentFile);
@@ -9453,17 +9483,17 @@ namespace ConditioningControlPanel
                 editor.Owner = this;
                 if (editor.ShowDialog() == true && editor.ResultSession != null)
                 {
-                    if (_sessionFileService == null) _sessionFileService = new Services.SessionFileService();
+                    if (_sessionFileService == null) _sessionFileService = new SessionFileService();
                     if (_sessionManager == null) InitializeSessionManager();
 
                     var editedSession = editor.ResultSession;
 
-                    if (session.Source == Models.SessionSource.BuiltIn)
+                    if (session.Source == SessionSource.BuiltIn)
                     {
                         // Editing a built-in session creates a new custom session
                         editedSession.Id = Guid.NewGuid().ToString(); // New ID
 
-                        var dialog = new Microsoft.Win32.SaveFileDialog
+                        var dialog = new SaveFileDialog
                         {
                             Filter = "Session Files (*.session.json)|*.session.json",
                             Title = "Save as New Custom Session",
@@ -9536,7 +9566,7 @@ namespace ConditioningControlPanel
             e.Handled = true;
         }
 
-        private Models.Session? GetSessionById(string sessionId)
+        private Session? GetSessionById(string sessionId)
         {
             // Check session manager first
             if (_sessionManager != null)
@@ -9546,7 +9576,7 @@ namespace ConditioningControlPanel
             }
 
             // Fall back to hardcoded sessions
-            return Models.Session.GetAllSessions().FirstOrDefault(s => s.Id == sessionId);
+            return Session.GetAllSessions().FirstOrDefault(s => s.Id == sessionId);
         }
 
         private void SessionDropZone_Drop(object sender, DragEventArgs e)
@@ -9574,7 +9604,7 @@ namespace ConditioningControlPanel
             // Validate and import
             if (_sessionFileService == null)
             {
-                _sessionFileService = new Services.SessionFileService();
+                _sessionFileService = new SessionFileService();
             }
 
             if (!_sessionFileService.ValidateSessionFile(filePath, out var errorMessage))
@@ -9609,7 +9639,7 @@ namespace ConditioningControlPanel
             DropZoneStatus.Visibility = Visibility.Visible;
 
             // Auto-hide after 3 seconds
-            var timer = new System.Windows.Threading.DispatcherTimer
+            var timer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(3)
             };
@@ -9635,12 +9665,12 @@ namespace ConditioningControlPanel
             {
                 if (_sessionFileService == null)
                 {
-                    _sessionFileService = new Services.SessionFileService();
+                    _sessionFileService = new SessionFileService();
                 }
 
                 var session = editor.ResultSession;
 
-                var dialog = new Microsoft.Win32.SaveFileDialog
+                var dialog = new SaveFileDialog
                 {
                     Filter = "Session Files (*.session.json)|*.session.json",
                     Title = "Save New Session",
@@ -9664,7 +9694,7 @@ namespace ConditioningControlPanel
         {
             if (sender is MenuItem menuItem && menuItem.Tag is string sessionId)
             {
-                var sessions = Models.Session.GetAllSessions();
+                var sessions = Session.GetAllSessions();
                 var session = sessions.FirstOrDefault(s => s.Id == sessionId);
                 if (session != null)
                 {
@@ -9673,18 +9703,18 @@ namespace ConditioningControlPanel
             }
         }
 
-        private void ExportSessionToFile(Models.Session session)
+        private void ExportSessionToFile(Session session)
         {
             if (_sessionFileService == null)
             {
-                _sessionFileService = new Services.SessionFileService();
+                _sessionFileService = new SessionFileService();
             }
 
-            var dialog = new Microsoft.Win32.SaveFileDialog
+            var dialog = new SaveFileDialog
             {
                 Title = "Export Session",
                 Filter = "Session files (*.session.json)|*.session.json",
-                FileName = Services.SessionFileService.GetExportFileName(session),
+                FileName = SessionFileService.GetExportFileName(session),
                 DefaultExt = ".session.json"
             };
 
@@ -9708,7 +9738,7 @@ namespace ConditioningControlPanel
 
         #region Browser
 
-        private async System.Threading.Tasks.Task InitializeBrowserAsync()
+        private async Task InitializeBrowserAsync()
         {
             if (_browserInitialized) return;
 
@@ -9767,8 +9797,8 @@ namespace ConditioningControlPanel
                 BrowserLoadingText.Text = "🌐 Creating browser...";
 
                 // Navigate to mode-appropriate site
-                var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-                var startUrl = Models.ContentModeConfig.GetDefaultBrowserUrl(mode);
+                var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+                var startUrl = ContentModeConfig.GetDefaultBrowserUrl(mode);
                 var webView = await _browser.CreateBrowserAsync(startUrl);
 
                 if (webView != null)
@@ -9798,7 +9828,7 @@ namespace ConditioningControlPanel
                 TxtBrowserStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 107, 107));
                 MessageBox.Show(invEx.Message, "WebView2 Not Installed", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
-            catch (System.Runtime.InteropServices.COMException comEx)
+            catch (COMException comEx)
             {
                 var errorMsg = $"WebView2 COM Error:\n{comEx.Message}\n\nError Code: {comEx.HResult}";
                 BrowserLoadingText.Text = $"❌ COM Error\n\nInstall WebView2:\ngo.microsoft.com/fwlink/p/?LinkId=2124703";
@@ -9806,7 +9836,7 @@ namespace ConditioningControlPanel
                 TxtBrowserStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 107, 107));
                 MessageBox.Show(errorMsg, "WebView2 Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
-            catch (System.DllNotFoundException dllEx)
+            catch (DllNotFoundException dllEx)
             {
                 var errorMsg = $"WebView2 DLL not found:\n{dllEx.Message}";
                 BrowserLoadingText.Text = $"❌ Missing DLL\n\nInstall WebView2:\ngo.microsoft.com/fwlink/p/?LinkId=2124703";
@@ -9841,7 +9871,7 @@ namespace ConditioningControlPanel
             var isBambiCloud = RbBambiCloud.IsChecked == true;
             var url = isBambiCloud
                 ? "https://bambicloud.com/"
-                : "https://hypnotube.com/";
+                : "https://giveinto.me/";
 
             // Set zoom: 50% for both sites
             _browser.ZoomFactor = 0.5;
@@ -9889,7 +9919,7 @@ namespace ConditioningControlPanel
                     _skipSiteToggleNavigation = true;
                     RbBambiCloud.IsChecked = true;
                 }
-                else if (lowerUrl.Contains("hypnotube.com") && RbHypnoTube.IsChecked != true)
+                else if (lowerUrl.Contains("giveinto.me") && RbHypnoTube.IsChecked != true)
                 {
                     _skipSiteToggleNavigation = true;
                     RbHypnoTube.IsChecked = true;
@@ -9900,7 +9930,7 @@ namespace ConditioningControlPanel
                 // If auto-play fullscreen requested, set up handler for when navigation completes
                 if (autoPlayFullscreen && _browser.WebView?.CoreWebView2 != null)
                 {
-                    void OnNavigationCompleted(object? sender, Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs e)
+                    void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
                     {
                         _browser.WebView.CoreWebView2.NavigationCompleted -= OnNavigationCompleted;
 
@@ -9918,7 +9948,7 @@ namespace ConditioningControlPanel
                 _browser.Navigate(url);
 
                 App.Logger?.Information("Speech link navigated to: {Url} (Site: {Site}, AutoPlay: {AutoPlay})",
-                    url, lowerUrl.Contains("bambicloud") ? "BambiCloud" : "HypnoTube", autoPlayFullscreen);
+                    url, lowerUrl.Contains("bambicloud") ? "BambiCloud" : "GiveInToMe", autoPlayFullscreen);
 
                 return true;
             }
@@ -10028,7 +10058,7 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Handles messages from JavaScript in the browser (video ended, fullscreen exit, etc.)
         /// </summary>
-        private void OnBrowserWebMessageReceived(object? sender, Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
+        private void OnBrowserWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
             try
             {
@@ -10098,14 +10128,14 @@ namespace ConditioningControlPanel
             try
             {
                 // Extract URL from message
-                var urlMatch = System.Text.RegularExpressions.Regex.Match(message, "\"url\":\"([^\"]+)\"");
+                var urlMatch = Regex.Match(message, "\"url\":\"([^\"]+)\"");
                 if (urlMatch.Success)
                 {
                     var videoUrl = urlMatch.Groups[1].Value;
                     App.Logger?.Information("AudioSync: Starting processing for video URL: {Url}", videoUrl);
 
                     // Wire up progress events
-                    void OnProgress(object? sender, Services.Audio.ChunkProgressEventArgs e)
+                    void OnProgress(object? sender, ChunkProgressEventArgs e)
                     {
                         Dispatcher.BeginInvoke(async () =>
                         {
@@ -10205,12 +10235,12 @@ namespace ConditioningControlPanel
             try
             {
                 // Extract currentTime and paused from message
-                var timeMatch = System.Text.RegularExpressions.Regex.Match(message, "\"currentTime\":([\\d.]+)");
-                var pausedMatch = System.Text.RegularExpressions.Regex.Match(message, "\"paused\":(true|false)");
+                var timeMatch = Regex.Match(message, "\"currentTime\":([\\d.]+)");
+                var pausedMatch = Regex.Match(message, "\"paused\":(true|false)");
 
                 if (timeMatch.Success)
                 {
-                    var currentTime = double.Parse(timeMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                    var currentTime = double.Parse(timeMatch.Groups[1].Value, CultureInfo.InvariantCulture);
                     var paused = pausedMatch.Success && pausedMatch.Groups[1].Value == "true";
 
                     App.AudioSync.OnPlaybackStateUpdate(currentTime, paused);
@@ -10228,10 +10258,10 @@ namespace ConditioningControlPanel
 
             try
             {
-                var timeMatch = System.Text.RegularExpressions.Regex.Match(message, "\"currentTime\":([\\d.]+)");
+                var timeMatch = Regex.Match(message, "\"currentTime\":([\\d.]+)");
                 if (timeMatch.Success)
                 {
-                    var newTime = double.Parse(timeMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                    var newTime = double.Parse(timeMatch.Groups[1].Value, CultureInfo.InvariantCulture);
                     App.AudioSync.OnVideoSeek(newTime);
                 }
             }
@@ -10366,9 +10396,9 @@ namespace ConditioningControlPanel
 
         #region Profile Viewer
 
-        private void TxtProfileSearch_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        private void TxtProfileSearch_KeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key == System.Windows.Input.Key.Enter)
+            if (e.Key == Key.Enter)
             {
                 SearchAndDisplayProfile(TxtProfileSearch?.Text);
             }
@@ -10413,7 +10443,7 @@ namespace ConditioningControlPanel
             if (OgBorderContainer != null)
             {
                 OgBorderContainer.Visibility = Visibility.Collapsed;
-                if (OgBorderContainer.Resources["OgBorderAnimation"] is System.Windows.Media.Animation.Storyboard storyboard)
+                if (OgBorderContainer.Resources["OgBorderAnimation"] is Storyboard storyboard)
                 {
                     storyboard.Stop(OgBorderContainer);
                 }
@@ -10430,14 +10460,14 @@ namespace ConditioningControlPanel
             }
         }
 
-        private void ProfileDiscordHandle_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private void ProfileDiscordHandle_Click(object sender, MouseButtonEventArgs e)
         {
             var discordId = TxtProfileDiscordId?.Text;
             if (!string.IsNullOrEmpty(discordId))
             {
                 try
                 {
-                    System.Windows.Clipboard.SetText(discordId);
+                    Clipboard.SetText(discordId);
                     // Show brief feedback
                     var originalText = TxtProfileDiscordId.Text;
                     TxtProfileDiscordId.Text = "Copied!";
@@ -10474,13 +10504,13 @@ namespace ConditioningControlPanel
                 {
                     // Open Discord profile in browser using rundll32 to force browser
                     var profileUrl = $"https://discord.com/users/{discordId}";
-                    var startInfo = new System.Diagnostics.ProcessStartInfo
+                    var startInfo = new ProcessStartInfo
                     {
                         FileName = "rundll32.exe",
                         Arguments = $"url.dll,FileProtocolHandler {profileUrl}",
                         UseShellExecute = false
                     };
-                    System.Diagnostics.Process.Start(startInfo);
+                    Process.Start(startInfo);
                     App.Logger?.Information("Opened Discord profile for user: {DiscordId}", discordId);
                 }
                 catch (Exception ex)
@@ -10489,7 +10519,7 @@ namespace ConditioningControlPanel
                     // Fallback: copy to clipboard
                     try
                     {
-                        System.Windows.Clipboard.SetText(discordId);
+                        Clipboard.SetText(discordId);
                         if (TxtProfileDiscordId != null)
                         {
                             var originalText = TxtProfileDiscordId.Text;
@@ -10727,7 +10757,7 @@ namespace ConditioningControlPanel
                 if (isOg)
                 {
                     OgBorderContainer.Visibility = Visibility.Visible;
-                    if (OgBorderContainer.Resources["OgBorderAnimation"] is System.Windows.Media.Animation.Storyboard storyboard)
+                    if (OgBorderContainer.Resources["OgBorderAnimation"] is Storyboard storyboard)
                     {
                         storyboard.Begin(OgBorderContainer, true);
                     }
@@ -10735,7 +10765,7 @@ namespace ConditioningControlPanel
                 else
                 {
                     OgBorderContainer.Visibility = Visibility.Collapsed;
-                    if (OgBorderContainer.Resources["OgBorderAnimation"] is System.Windows.Media.Animation.Storyboard storyboard)
+                    if (OgBorderContainer.Resources["OgBorderAnimation"] is Storyboard storyboard)
                     {
                         storyboard.Stop(OgBorderContainer);
                     }
@@ -10761,10 +10791,10 @@ namespace ConditioningControlPanel
                 {
                     try
                     {
-                        var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                        var bitmap = new BitmapImage();
                         bitmap.BeginInit();
                         bitmap.UriSource = new Uri(avatarUrl);
-                        bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                        bitmap.CacheOption = BitmapCacheOption.OnLoad;
                         bitmap.EndInit();
                         ProfileViewerAvatar.ImageSource = bitmap;
                     }
@@ -10799,12 +10829,12 @@ namespace ConditioningControlPanel
             if (TxtProfileViewerOnline != null)
             {
                 TxtProfileViewerOnline.Text = "Online";
-                TxtProfileViewerOnline.Foreground = new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#43B581"));
+                TxtProfileViewerOnline.Foreground = new SolidColorBrush(
+                    (Color)ColorConverter.ConvertFromString("#43B581"));
             }
             if (ProfileOnlineIndicator != null)
-                ProfileOnlineIndicator.Fill = new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#43B581"));
+                ProfileOnlineIndicator.Fill = new SolidColorBrush(
+                    (Color)ColorConverter.ConvertFromString("#43B581"));
 
             // Discord button
             if (BtnProfileDiscord != null && TxtProfileDiscordId != null)
@@ -10854,7 +10884,7 @@ namespace ConditioningControlPanel
             if (TxtProfileViewerAchievements != null)
             {
                 var unlocked = App.Achievements?.GetUnlockedCount() ?? 0;
-                var total = Models.Achievement.All.Values.Count;
+                var total = Achievement.All.Values.Count;
                 TxtProfileViewerAchievements.Text = $"{unlocked}/{total}";
             }
 
@@ -10901,7 +10931,7 @@ namespace ConditioningControlPanel
                     {
                         // Tier 3 = Prime subject, everyone else = Pink filter
                         var bannerImage = patreonTier >= 3 ? "prime subject.webp" : "Pink filter.webp";
-                        ImgPatreonTierBanner.Source = new System.Windows.Media.Imaging.BitmapImage(
+                        ImgPatreonTierBanner.Source = new BitmapImage(
                             new Uri($"pack://application:,,,/Resources/{bannerImage}", UriKind.Absolute));
                     }
                     catch (Exception ex)
@@ -10932,7 +10962,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private void DisplayProfileEntry(Services.LeaderboardEntry entry)
+        private void DisplayProfileEntry(LeaderboardEntry entry)
         {
             try
             {
@@ -10946,7 +10976,7 @@ namespace ConditioningControlPanel
                 {
                     OgBorderContainer.Visibility = Visibility.Visible;
                     // Start the rotation animation
-                    if (OgBorderContainer.Resources["OgBorderAnimation"] is System.Windows.Media.Animation.Storyboard storyboard)
+                    if (OgBorderContainer.Resources["OgBorderAnimation"] is Storyboard storyboard)
                     {
                         storyboard.Begin(OgBorderContainer, true);
                     }
@@ -10955,7 +10985,7 @@ namespace ConditioningControlPanel
                 {
                     OgBorderContainer.Visibility = Visibility.Collapsed;
                     // Stop any running animation
-                    if (OgBorderContainer.Resources["OgBorderAnimation"] is System.Windows.Media.Animation.Storyboard storyboard)
+                    if (OgBorderContainer.Resources["OgBorderAnimation"] is Storyboard storyboard)
                     {
                         storyboard.Stop(OgBorderContainer);
                     }
@@ -10981,13 +11011,13 @@ namespace ConditioningControlPanel
             if (TxtProfileViewerOnline != null)
             {
                 TxtProfileViewerOnline.Text = entry.IsOnline ? "Online" : "Offline";
-                TxtProfileViewerOnline.Foreground = new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
+                TxtProfileViewerOnline.Foreground = new SolidColorBrush(
+                    (Color)ColorConverter.ConvertFromString(
                         entry.IsOnline ? "#43B581" : "#747F8D"));
             }
             if (ProfileOnlineIndicator != null)
-                ProfileOnlineIndicator.Fill = new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
+                ProfileOnlineIndicator.Fill = new SolidColorBrush(
+                    (Color)ColorConverter.ConvertFromString(
                         entry.IsOnline ? "#43B581" : "#747F8D"));
 
             // Trigger async lookup to get fresh online status and avatar
@@ -11101,7 +11131,7 @@ namespace ConditioningControlPanel
                     {
                         // Tier 3 = Prime subject, everyone else = Pink filter
                         var bannerImage = tierToUse >= 3 ? "prime subject.webp" : "Pink filter.webp";
-                        ImgPatreonTierBanner.Source = new System.Windows.Media.Imaging.BitmapImage(
+                        ImgPatreonTierBanner.Source = new BitmapImage(
                             new Uri($"pack://application:,,,/Resources/{bannerImage}", UriKind.Absolute));
                     }
                     catch
@@ -11153,14 +11183,14 @@ namespace ConditioningControlPanel
                     if (TxtProfileViewerOnline != null)
                     {
                         TxtProfileViewerOnline.Text = lookup.IsOnline ? "Online" : "Offline";
-                        TxtProfileViewerOnline.Foreground = new System.Windows.Media.SolidColorBrush(
-                            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
+                        TxtProfileViewerOnline.Foreground = new SolidColorBrush(
+                            (Color)ColorConverter.ConvertFromString(
                                 lookup.IsOnline ? "#43B581" : "#747F8D"));
                     }
                     if (ProfileOnlineIndicator != null)
                     {
-                        ProfileOnlineIndicator.Fill = new System.Windows.Media.SolidColorBrush(
-                            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
+                        ProfileOnlineIndicator.Fill = new SolidColorBrush(
+                            (Color)ColorConverter.ConvertFromString(
                                 lookup.IsOnline ? "#43B581" : "#747F8D"));
                     }
 
@@ -11187,10 +11217,10 @@ namespace ConditioningControlPanel
                         {
                             try
                             {
-                                var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                                var bitmap = new BitmapImage();
                                 bitmap.BeginInit();
                                 bitmap.UriSource = new Uri(avatarUrl);
-                                bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                                bitmap.CacheOption = BitmapCacheOption.OnLoad;
                                 bitmap.EndInit();
                                 ProfileViewerAvatar.ImageSource = bitmap;
                             }
@@ -11234,7 +11264,7 @@ namespace ConditioningControlPanel
             }
         }
 
-        private System.Windows.Media.Imaging.BitmapImage? LoadPatreonBadgeImage(int tier)
+        private BitmapImage? LoadPatreonBadgeImage(int tier)
         {
             try
             {
@@ -11245,7 +11275,7 @@ namespace ConditioningControlPanel
                     3 => "Patreon tier3.png",
                     _ => "Patreon tier1.png"
                 };
-                return new System.Windows.Media.Imaging.BitmapImage(
+                return new BitmapImage(
                     new Uri($"pack://application:,,,/Resources/{imageName}", UriKind.Absolute));
             }
             catch
@@ -11270,7 +11300,7 @@ namespace ConditioningControlPanel
             var achievementItems = new List<object>();
             foreach (var achievementId in unlockedAchievements)
             {
-                var achievement = Models.Achievement.All.Values.FirstOrDefault(a => a.Id == achievementId);
+                var achievement = Achievement.All.Values.FirstOrDefault(a => a.Id == achievementId);
                 if (achievement != null)
                 {
                     var image = LoadAchievementImage(achievement.ImageName);
@@ -11328,7 +11358,7 @@ namespace ConditioningControlPanel
                     MinWidth = 400,
                     MinHeight = 300,
                     WindowStartupLocation = WindowStartupLocation.CenterScreen,
-                    Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1A, 0x1A, 0x2E)),
+                    Background = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x2E)),
                     Content = _browser.WebView
                 };
 
@@ -11451,7 +11481,7 @@ namespace ConditioningControlPanel
                     ResizeMode = ResizeMode.NoResize,
                     Topmost = true,
                     ShowInTaskbar = false,
-                    Background = System.Windows.Media.Brushes.Black,
+                    Background = Brushes.Black,
                     Left = primary.Bounds.Left,
                     Top = primary.Bounds.Top,
                     Width = primary.Bounds.Width,
@@ -11882,7 +11912,7 @@ namespace ConditioningControlPanel
                 App.Logger?.Information("Ramp complete - ending session");
                 Dispatcher.Invoke(() =>
                 {
-                    _trayIcon?.ShowNotification("Session Complete", "Intensity ramp finished. Stopping...", System.Windows.Forms.ToolTipIcon.Info);
+                    _trayIcon?.ShowNotification("Session Complete", "Intensity ramp finished. Stopping...", ToolTipIcon.Info);
                     StopEngine();
                 });
             }
@@ -11906,7 +11936,7 @@ namespace ConditioningControlPanel
 
                 // Minimize to tray and start engine
                 _trayIcon?.MinimizeToTray();
-                _trayIcon?.ShowNotification("Scheduler Active", "Session auto-started based on schedule.", System.Windows.Forms.ToolTipIcon.Info);
+                _trayIcon?.ShowNotification("Scheduler Active", "Session auto-started based on schedule.", ToolTipIcon.Info);
 
                 StartEngine();
                 _schedulerAutoStarted = true;
@@ -11924,7 +11954,7 @@ namespace ConditioningControlPanel
             {
                 App.Logger?.Information("Scheduler: In time window after settings change - auto-starting");
 
-                _trayIcon?.ShowNotification("Scheduler Active", "Session auto-started based on schedule.", System.Windows.Forms.ToolTipIcon.Info);
+                _trayIcon?.ShowNotification("Scheduler Active", "Session auto-started based on schedule.", ToolTipIcon.Info);
 
                 StartEngine();
                 _schedulerAutoStarted = true;
@@ -11946,7 +11976,7 @@ namespace ConditioningControlPanel
                 Dispatcher.Invoke(() =>
                 {
                     _trayIcon?.MinimizeToTray();
-                    _trayIcon?.ShowNotification("Scheduler Active", "Session auto-started based on schedule.", System.Windows.Forms.ToolTipIcon.Info);
+                    _trayIcon?.ShowNotification("Scheduler Active", "Session auto-started based on schedule.", ToolTipIcon.Info);
 
                     StartEngine();
                     _schedulerAutoStarted = true;
@@ -11961,7 +11991,7 @@ namespace ConditioningControlPanel
                 {
                     StopEngine();
                     _schedulerAutoStarted = false;
-                    _trayIcon?.ShowNotification("Scheduler", "Scheduled session ended.", System.Windows.Forms.ToolTipIcon.Info);
+                    _trayIcon?.ShowNotification("Scheduler", "Scheduled session ended.", ToolTipIcon.Info);
                 });
             }
             else if (!inWindow)
@@ -12261,9 +12291,9 @@ namespace ConditioningControlPanel
             }
 
             // Startup video display
-            if (!string.IsNullOrEmpty(s.StartupVideoPath) && System.IO.File.Exists(s.StartupVideoPath))
+            if (!string.IsNullOrEmpty(s.StartupVideoPath) && File.Exists(s.StartupVideoPath))
             {
-                TxtStartupVideo.Text = System.IO.Path.GetFileName(s.StartupVideoPath);
+                TxtStartupVideo.Text = Path.GetFileName(s.StartupVideoPath);
             }
             else
             {
@@ -12356,7 +12386,7 @@ namespace ConditioningControlPanel
             SliderHapticIntensity.Value = s.Haptics.GlobalIntensity * 100;
 
             // Set provider combo box first
-            foreach (System.Windows.Controls.ComboBoxItem item in CmbHapticProvider.Items)
+            foreach (ComboBoxItem item in CmbHapticProvider.Items)
             {
                 if (item.Tag?.ToString() == s.Haptics.Provider.ToString())
                 {
@@ -12368,16 +12398,16 @@ namespace ConditioningControlPanel
             // Then set URL based on provider
             TxtHapticUrl.Text = s.Haptics.Provider switch
             {
-                Services.Haptics.HapticProviderType.Lovense => s.Haptics.LovenseUrl,
-                Services.Haptics.HapticProviderType.Buttplug => s.Haptics.ButtplugUrl,
+                HapticProviderType.Lovense => s.Haptics.LovenseUrl,
+                HapticProviderType.Buttplug => s.Haptics.ButtplugUrl,
                 _ => s.Haptics.LovenseUrl
             };
 
             // Set hint text based on provider
             TxtHapticUrlHint.Text = s.Haptics.Provider switch
             {
-                Services.Haptics.HapticProviderType.Lovense => "Lovense: Enter IP from Lovense Remote → Settings → Game Mode (http://IP:30010)",
-                Services.Haptics.HapticProviderType.Buttplug => "Buttplug: Start Intiface Central, use default ws://localhost:12345",
+                HapticProviderType.Lovense => "Lovense: Enter IP from Lovense Remote → Settings → Game Mode (http://IP:30010)",
+                HapticProviderType.Buttplug => "Buttplug: Start Intiface Central, use default ws://localhost:12345",
                 _ => "Lovense: Enter IP from Lovense Remote → Settings → Game Mode (http://IP:30010)"
             };
 
@@ -12615,7 +12645,7 @@ namespace ConditioningControlPanel
                 _schedulerAutoStarted = false;
                 _manuallyStoppedDuringSchedule = false;
                 // Check scheduler immediately after save completes
-                Dispatcher.BeginInvoke(new Action(() => CheckSchedulerAfterSettingsChange()), System.Windows.Threading.DispatcherPriority.Background);
+                Dispatcher.BeginInvoke(new Action(() => CheckSchedulerAfterSettingsChange()), DispatcherPriority.Background);
             }
             s.IntensityRampEnabled = ChkRampEnabled.IsChecked ?? false;
             s.RampDurationMinutes = (int)SliderRampDuration.Value;
@@ -12674,7 +12704,7 @@ namespace ConditioningControlPanel
                 if (result == MessageBoxResult.Yes)
                 {
                     // Overwrite existing preset
-                    var updated = Models.Preset.FromSettings(App.Settings.Current, currentPreset.Name, currentPreset.Description);
+                    var updated = Preset.FromSettings(App.Settings.Current, currentPreset.Name, currentPreset.Description);
                     updated.Id = currentPreset.Id;
                     updated.CreatedAt = currentPreset.CreatedAt;
 
@@ -12842,7 +12872,7 @@ namespace ConditioningControlPanel
         {
             try
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                Process.Start(new ProcessStartInfo
                 {
                     FileName = "https://linktr.ee/CodeBambi",
                     UseShellExecute = true
@@ -13345,7 +13375,7 @@ namespace ConditioningControlPanel
 
                 if (blur)
                 {
-                    featureImageRect.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 15 };
+                    featureImageRect.Effect = new BlurEffect { Radius = 15 };
                     App.Logger?.Debug("SetFeatureImageBlur: Applied blur to {ElementName}", featureImageRect.Name);
                 }
                 else
@@ -13840,11 +13870,11 @@ namespace ConditioningControlPanel
             App.Settings.Save();
         }
 
-        private void CmbBubbleCountDifficulty_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        private void CmbBubbleCountDifficulty_Changed(object sender, SelectionChangedEventArgs e)
         {
             if (_isLoading || CmbBubbleCountDifficulty.SelectedItem == null) return;
             
-            var item = CmbBubbleCountDifficulty.SelectedItem as System.Windows.Controls.ComboBoxItem;
+            var item = CmbBubbleCountDifficulty.SelectedItem as ComboBoxItem;
             if (item?.Tag != null && int.TryParse(item.Tag.ToString(), out int difficulty))
             {
                 App.Settings.Current.BubbleCountDifficulty = difficulty;
@@ -14248,7 +14278,7 @@ namespace ConditioningControlPanel
             App.Logger?.Information("MainWindow.SyncAutonomyCheckbox called with isEnabled={IsEnabled}, actualSetting={Actual}", isEnabled, actualValue);
 
             // Use BeginInvoke to ensure UI update happens after current operation completes
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Normal, new Action(() =>
+            Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
             {
                 try
                 {
@@ -14380,7 +14410,7 @@ namespace ConditioningControlPanel
 
         #region Button Events
         
-        private void ImgLogo_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private void ImgLogo_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             // Track for Neon Obsession achievement (20 rapid clicks on the avatar/logo)
             App.Achievements?.TrackAvatarClick();
@@ -14413,7 +14443,7 @@ namespace ConditioningControlPanel
             // Visual feedback - quick pulse effect
             if (ImgLogo != null)
             {
-                var pulse = new System.Windows.Media.Animation.DoubleAnimation
+                var pulse = new DoubleAnimation
                 {
                     From = 1.0,
                     To = 1.05,
@@ -14421,16 +14451,16 @@ namespace ConditioningControlPanel
                     AutoReverse = true
                 };
 
-                var scaleTransform = ImgLogo.RenderTransform as System.Windows.Media.ScaleTransform;
+                var scaleTransform = ImgLogo.RenderTransform as ScaleTransform;
                 if (scaleTransform == null)
                 {
-                    scaleTransform = new System.Windows.Media.ScaleTransform(1, 1);
+                    scaleTransform = new ScaleTransform(1, 1);
                     ImgLogo.RenderTransformOrigin = new Point(0.5, 0.5);
                     ImgLogo.RenderTransform = scaleTransform;
                 }
 
-                scaleTransform.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, pulse);
-                scaleTransform.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, pulse);
+                scaleTransform.BeginAnimation(ScaleTransform.ScaleXProperty, pulse);
+                scaleTransform.BeginAnimation(ScaleTransform.ScaleYProperty, pulse);
             }
         }
 
@@ -14456,7 +14486,7 @@ namespace ConditioningControlPanel
                 // Start immediately if already loaded
                 if (MarqueeText.IsLoaded)
                 {
-                    Dispatcher.BeginInvoke(new Action(StartMarqueeAnimation), System.Windows.Threading.DispatcherPriority.Loaded);
+                    Dispatcher.BeginInvoke(new Action(StartMarqueeAnimation), DispatcherPriority.Loaded);
                 }
 
                 // Fetch from server on startup (with short delay)
@@ -14496,7 +14526,7 @@ namespace ConditioningControlPanel
             try
             {
                 // Fetch marquee message from server
-                using var httpClient = new System.Net.Http.HttpClient
+                using var httpClient = new HttpClient
                 {
                     Timeout = TimeSpan.FromSeconds(10)
                 };
@@ -14505,7 +14535,7 @@ namespace ConditioningControlPanel
                 if (response.IsSuccessStatusCode)
                 {
                     var json = await response.Content.ReadAsStringAsync();
-                    var result = System.Text.Json.JsonSerializer.Deserialize<MarqueeResponse>(json);
+                    var result = JsonSerializer.Deserialize<MarqueeResponse>(json);
                     var newMessage = result?.message;
 
                     if (!string.IsNullOrWhiteSpace(newMessage) && newMessage != _currentMarqueeMessage)
@@ -14550,7 +14580,7 @@ namespace ConditioningControlPanel
         {
             try
             {
-                using var httpClient = new System.Net.Http.HttpClient
+                using var httpClient = new HttpClient
                 {
                     Timeout = TimeSpan.FromSeconds(10)
                 };
@@ -14559,12 +14589,12 @@ namespace ConditioningControlPanel
                 if (response.IsSuccessStatusCode)
                 {
                     var json = await response.Content.ReadAsStringAsync();
-                    var result = System.Text.Json.JsonSerializer.Deserialize<UpdateBannerResponse>(json);
+                    var result = JsonSerializer.Deserialize<UpdateBannerResponse>(json);
 
                     if (result?.enabled == true && !string.IsNullOrWhiteSpace(result.version))
                     {
                         // Check if user is on an older version than the one in the banner
-                        var currentVersion = Services.UpdateService.GetCurrentVersion();
+                        var currentVersion = UpdateService.GetCurrentVersion();
                         if (Version.TryParse(result.version, out var bannerVersion) && bannerVersion > currentVersion)
                         {
                             App.Logger?.Information("Server update banner enabled: version={Version}, message={Message}",
@@ -14620,7 +14650,7 @@ namespace ConditioningControlPanel
         {
             try
             {
-                using var httpClient = new System.Net.Http.HttpClient
+                using var httpClient = new HttpClient
                 {
                     Timeout = TimeSpan.FromSeconds(10)
                 };
@@ -14636,7 +14666,7 @@ namespace ConditioningControlPanel
                 if (response.IsSuccessStatusCode)
                 {
                     var json = await response.Content.ReadAsStringAsync();
-                    var result = System.Text.Json.JsonSerializer.Deserialize<AnnouncementResponse>(json);
+                    var result = JsonSerializer.Deserialize<AnnouncementResponse>(json);
 
                     if (result?.enabled == true
                         && !string.IsNullOrWhiteSpace(result.id)
@@ -14712,18 +14742,18 @@ namespace ConditioningControlPanel
 
                 // Animation: scroll exactly one segment width, then loop back seamlessly
                 // From 0 to -segmentWidth creates perfect loop since next segment is identical
-                var animation = new System.Windows.Media.Animation.DoubleAnimation
+                var animation = new DoubleAnimation
                 {
                     From = 0,
                     To = -segmentWidth,
                     Duration = TimeSpan.FromSeconds(segmentWidth / 80), // Speed: 80 pixels per second
-                    RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever
+                    RepeatBehavior = RepeatBehavior.Forever
                 };
 
-                _marqueeStoryboard = new System.Windows.Media.Animation.Storyboard();
+                _marqueeStoryboard = new Storyboard();
                 _marqueeStoryboard.Children.Add(animation);
-                System.Windows.Media.Animation.Storyboard.SetTarget(animation, MarqueeText);
-                System.Windows.Media.Animation.Storyboard.SetTargetProperty(animation,
+                Storyboard.SetTarget(animation, MarqueeText);
+                Storyboard.SetTargetProperty(animation,
                     new PropertyPath("(UIElement.RenderTransform).(TranslateTransform.X)"));
 
                 _marqueeStoryboard.Begin();
@@ -14834,7 +14864,7 @@ namespace ConditioningControlPanel
             var startupPath = App.Settings.Current.StartupVideoPath;
 
             // If a specific video is configured, play that one
-            if (!string.IsNullOrEmpty(startupPath) && System.IO.File.Exists(startupPath))
+            if (!string.IsNullOrEmpty(startupPath) && File.Exists(startupPath))
             {
                 App.Logger?.Information("Playing startup video: {Path}", startupPath);
                 App.Video.PlaySpecificVideo(startupPath, App.Settings.Current.StrictLockEnabled);
@@ -14849,17 +14879,17 @@ namespace ConditioningControlPanel
 
         private void BtnSelectStartupVideo_Click(object sender, RoutedEventArgs e)
         {
-            var dialog = new Microsoft.Win32.OpenFileDialog
+            var dialog = new OpenFileDialog
             {
                 Title = "Select Startup Video",
                 Filter = "Video Files|*.mp4;*.mov;*.avi;*.wmv;*.mkv;*.webm|All Files|*.*",
-                InitialDirectory = System.IO.Path.Combine(App.EffectiveAssetsPath, "videos")
+                InitialDirectory = Path.Combine(App.EffectiveAssetsPath, "videos")
             };
 
             if (dialog.ShowDialog() == true)
             {
                 App.Settings.Current.StartupVideoPath = dialog.FileName;
-                TxtStartupVideo.Text = System.IO.Path.GetFileName(dialog.FileName);
+                TxtStartupVideo.Text = Path.GetFileName(dialog.FileName);
                 App.Settings.Save();
                 App.Logger?.Information("Startup video set to: {Path}", dialog.FileName);
             }
@@ -14980,7 +15010,7 @@ namespace ConditioningControlPanel
 
         private void BtnSelectSpiral_Click(object sender, RoutedEventArgs e)
         {
-            var dialog = new Microsoft.Win32.OpenFileDialog
+            var dialog = new OpenFileDialog
             {
                 Filter = "GIF Files (*.gif)|*.gif|All Image Files|*.gif;*.png;*.jpg;*.jpeg",
                 Title = "Select Spiral GIF"
@@ -15708,7 +15738,7 @@ namespace ConditioningControlPanel
         private static readonly Dictionary<string, ImageSource> _packThumbnailCache = new();
         private static readonly SemaphoreSlim _thumbnailSemaphore = new(4); // Limit concurrent loads
 
-        private async Task LoadPackThumbnailAsync(AssetFileItem item, string packId, Services.PackFileEntry file)
+        private async Task LoadPackThumbnailAsync(AssetFileItem item, string packId, PackFileEntry file)
         {
             item.IsLoadingThumbnail = true;
             try
@@ -15749,7 +15779,7 @@ namespace ConditioningControlPanel
                                 var tempPath = App.ContentPacks?.GetPackFileTempPath(packId, file);
                                 if (!string.IsNullOrEmpty(tempPath) && File.Exists(tempPath))
                                 {
-                                    thumbnail = Helpers.ShellThumbnailHelper.GetThumbnail(tempPath, 100, 100);
+                                    thumbnail = ShellThumbnailHelper.GetThumbnail(tempPath, 100, 100);
                                     // Clean up temp file
                                     try { File.Delete(tempPath); } catch { }
                                 }
@@ -15842,7 +15872,7 @@ namespace ConditioningControlPanel
                     {
                         // Use Windows Shell API for thumbnails - works for both images and videos
                         // This gives us the same thumbnails Windows Explorer shows
-                        var thumbnail = Helpers.ShellThumbnailHelper.GetThumbnail(item.FullPath, 100, 100);
+                        var thumbnail = ShellThumbnailHelper.GetThumbnail(item.FullPath, 100, 100);
 
                         if (thumbnail != null)
                         {
@@ -16046,9 +16076,9 @@ namespace ConditioningControlPanel
                 try
                 {
                     var filePath = file.FullPath;
-                    if (System.IO.File.Exists(filePath))
+                    if (File.Exists(filePath))
                     {
-                        System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{filePath}\"");
+                        Process.Start("explorer.exe", $"/select,\"{filePath}\"");
                     }
                 }
                 catch (Exception ex)
@@ -16079,7 +16109,7 @@ namespace ConditioningControlPanel
                     }
                 }
 
-                if (!System.IO.File.Exists(filePath))
+                if (!File.Exists(filePath))
                 {
                     App.Logger?.Warning("File not found for preview: {File}", filePath);
                     return;
@@ -16223,7 +16253,7 @@ namespace ConditioningControlPanel
             // Ensure default preset exists
             if (!App.Settings.Current.AssetPresets.Any(p => p.IsDefault))
             {
-                App.Settings.Current.AssetPresets.Insert(0, Models.AssetPreset.CreateDefault());
+                App.Settings.Current.AssetPresets.Insert(0, AssetPreset.CreateDefault());
             }
 
             // Update default preset counts (it should show all assets including packs)
@@ -16367,7 +16397,7 @@ namespace ConditioningControlPanel
         private void CmbAssetPresets_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_isLoadingPreset) return;
-            if (CmbAssetPresets.SelectedItem is not Models.AssetPreset preset) return;
+            if (CmbAssetPresets.SelectedItem is not AssetPreset preset) return;
 
             // Apply preset's disabled paths
             var presetDisabledCount = preset.DisabledAssetPaths?.Count ?? 0;
@@ -16397,7 +16427,7 @@ namespace ConditioningControlPanel
             var (imageCount, videoCount) = GetCurrentActiveAssetCounts();
 
             // Simple input dialog using WPF
-            var dialog = new System.Windows.Window
+            var dialog = new Window
             {
                 Title = "Save Asset Preset",
                 Width = 350,
@@ -16471,7 +16501,7 @@ namespace ConditioningControlPanel
             if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(textBox.Text))
             {
                 var disabledCount = App.Settings.Current.DisabledAssetPaths.Count;
-                var preset = Models.AssetPreset.FromCurrentSettings(textBox.Text.Trim(), imageCount, videoCount);
+                var preset = AssetPreset.FromCurrentSettings(textBox.Text.Trim(), imageCount, videoCount);
                 App.Settings.Current.AssetPresets.Add(preset);
                 App.Settings.Current.CurrentAssetPresetId = preset.Id;
                 App.Settings.Save();
@@ -16492,7 +16522,7 @@ namespace ConditioningControlPanel
 
         private void BtnUpdateAssetPreset_Click(object sender, RoutedEventArgs e)
         {
-            if (CmbAssetPresets.SelectedItem is not Models.AssetPreset preset)
+            if (CmbAssetPresets.SelectedItem is not AssetPreset preset)
             {
                 MessageBox.Show("Please select a preset to update.", "No Preset Selected", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
@@ -16534,7 +16564,7 @@ namespace ConditioningControlPanel
 
         private void BtnDeleteAssetPreset_Click(object sender, RoutedEventArgs e)
         {
-            if (CmbAssetPresets.SelectedItem is not Models.AssetPreset preset)
+            if (CmbAssetPresets.SelectedItem is not AssetPreset preset)
             {
                 MessageBox.Show("Please select a preset to delete.", "No Preset Selected", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
@@ -16733,7 +16763,7 @@ namespace ConditioningControlPanel
                         // Auth error - already handled by OnPackAuthenticationRequired event
                         App.Logger?.Debug("Pack install cancelled - authentication required");
                     }
-                    catch (Services.PackRateLimitException)
+                    catch (PackRateLimitException)
                     {
                         // Rate limit error - already handled by OnPackRateLimitExceeded event
                         App.Logger?.Debug("Pack install cancelled - rate limit exceeded");
@@ -16806,7 +16836,7 @@ namespace ConditioningControlPanel
 
         private void BtnPickAssetsFolder_Click(object sender, RoutedEventArgs e)
         {
-            var dialog = new System.Windows.Forms.FolderBrowserDialog
+            var dialog = new FolderBrowserDialog
             {
                 Description = "Select a folder for your custom assets (images and videos).\nTwo subfolders 'images' and 'videos' will be created.",
                 ShowNewFolderButton = true,
@@ -16861,8 +16891,8 @@ namespace ConditioningControlPanel
                         string packName = Path.GetFileName(dir); // Default to GUID if we can't read name
                         try
                         {
-                            var json = Services.PackEncryptionService.LoadEncryptedManifest(manifestPath);
-                            var manifest = Newtonsoft.Json.JsonConvert.DeserializeObject<dynamic>(json);
+                            var json = PackEncryptionService.LoadEncryptedManifest(manifestPath);
+                            var manifest = JsonConvert.DeserializeObject<dynamic>(json);
                             if (manifest?.PackName != null)
                             {
                                 packName = (string)manifest.PackName;
@@ -16944,8 +16974,8 @@ namespace ConditioningControlPanel
                             {
                                 try
                                 {
-                                    var json = Services.PackEncryptionService.LoadEncryptedManifest(manifestPath);
-                                    var manifest = Newtonsoft.Json.JsonConvert.DeserializeObject<dynamic>(json);
+                                    var json = PackEncryptionService.LoadEncryptedManifest(manifestPath);
+                                    var manifest = JsonConvert.DeserializeObject<dynamic>(json);
                                     var packId = (string?)manifest?.PackId;
 
                                     if (!string.IsNullOrEmpty(packId))
@@ -17246,8 +17276,8 @@ namespace ConditioningControlPanel
                 {
                     TxtBrowserStatus.Text = isOffline ? "● Offline" : "● Ready";
                     TxtBrowserStatus.Foreground = isOffline
-                        ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(128, 128, 128))
-                        : (System.Windows.Media.Brush)FindResource("PinkBrush");
+                        ? new SolidColorBrush(Color.FromRgb(128, 128, 128))
+                        : (Brush)FindResource("PinkBrush");
                 }
 
                 // Navigate browser to blank page and show offline message
@@ -17297,7 +17327,7 @@ namespace ConditioningControlPanel
                             var isBambiCloud = RbBambiCloud?.IsChecked == true;
                             var url = isBambiCloud
                                 ? "https://bambicloud.com/"
-                                : "https://hypnotube.com/";
+                                : "https://giveinto.me/";
                             _browser.Navigate(url);
                             App.Logger?.Information("Browser reloaded after exiting offline mode: {Url}", url);
                         }
@@ -17436,7 +17466,7 @@ namespace ConditioningControlPanel
 
         #region Window Events
 
-        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+        protected override void OnClosing(CancelEventArgs e)
         {
             // Only allow actual close if exit was explicitly requested
             if (_exitRequested)

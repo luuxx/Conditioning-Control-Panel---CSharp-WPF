@@ -16,7 +16,7 @@
     <Copyright>Copyright © 2024-2026 CodeBambi</Copyright>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <PublishSingleFile>true</PublishSingleFile>
+    <PublishSingleFile>false</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
@@ -230,10 +230,23 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
+    <!-- Theme files - compiled as Page for BAML, but also copied as loose XAML for customization -->
+    <Page Update="Resources\Theme\**\*.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <None Include="Resources\Theme\**\*.xaml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <Content Include="Resources\Theme\**\*" Exclude="Resources\Theme\**\*.xaml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Themes\" />
+    <Folder Include="Resources\Theme\" />
   </ItemGroup>
 
   <!-- Ensure all content files are copied during publish -->
@@ -242,10 +255,12 @@
       <SoundFiles Include="$(ProjectDir)Resources\sounds\**\*" />
       <SubAudioFiles Include="$(ProjectDir)Resources\sub_audio\**\*" />
       <SpiralFiles Include="$(ProjectDir)Spirals\**\*" />
+      <ThemeFiles Include="$(ProjectDir)Resources\Theme\**\*" />
     </ItemGroup>
     <Copy SourceFiles="@(SoundFiles)" DestinationFolder="$(PublishDir)Resources\sounds\%(RecursiveDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(SubAudioFiles)" DestinationFolder="$(PublishDir)Resources\sub_audio\%(RecursiveDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(SpiralFiles)" DestinationFolder="$(PublishDir)Spirals\%(RecursiveDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(ThemeFiles)" DestinationFolder="$(PublishDir)Resources\Theme\%(RecursiveDir)" SkipUnchangedFiles="true" />
     <Message Importance="High" Text="Copied content files to publish folder" />
   </Target>
 

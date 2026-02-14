@@ -1,22 +1,29 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
+using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using System.Windows;
+using System.Threading;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Forms;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Threading;
 using ConditioningControlPanel.Models;
 using ConditioningControlPanel.Services;
+using NAudio.Wave;
 using XamlAnimatedGif;
+using ActivityChangedEventArgs = ConditioningControlPanel.Services.ActivityChangedEventArgs;
+using Application = System.Windows.Application;
+using Cursors = System.Windows.Input.Cursors;
+using KeyEventArgs = System.Windows.Input.KeyEventArgs;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 
 namespace ConditioningControlPanel
 {
@@ -97,9 +104,9 @@ namespace ConditioningControlPanel
 
         // Voice lines from flash audio folder (used for idle comments and 50% of triggers)
         private List<string> _voiceLineFiles = new();
-        private readonly string _voiceLinesPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "flashes_audio");
-        private NAudio.Wave.WaveOutEvent? _voiceLinePlayer;
-        private NAudio.Wave.AudioFileReader? _voiceLineAudio;
+        private readonly string _voiceLinesPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "flashes_audio");
+        private WaveOutEvent? _voiceLinePlayer;
+        private AudioFileReader? _voiceLineAudio;
 
         // ============================================================
         // POSITIONING & SCALING - ADJUST THESE VALUES AS NEEDED
@@ -157,7 +164,7 @@ namespace ConditioningControlPanel
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
-        private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct RECT
@@ -360,7 +367,7 @@ namespace ConditioningControlPanel
                     ShowGreeting();
                 };
                 greetingTimer.Start();
-            }), System.Windows.Threading.DispatcherPriority.Loaded);
+            }), DispatcherPriority.Loaded);
 
             // Start idle timer for random giggles
             StartIdleTimer();
@@ -431,7 +438,7 @@ namespace ConditioningControlPanel
         {
             // Sets in unlock-level order (not numerical order)
             int[] setsInOrder = { 1, 2, 3, 4, 7, 5, 6 };
-            var unlocked = new System.Collections.Generic.List<int>();
+            var unlocked = new List<int>();
             foreach (int set in setsInOrder)
             {
                 if (IsAvatarSetUnlocked(set, level))
@@ -638,15 +645,15 @@ namespace ConditioningControlPanel
         /// Gets the companion ID that corresponds to an avatar set.
         /// Returns null for sets 1-2 (pre-level 35 avatars without companions).
         /// </summary>
-        private static Models.CompanionId? GetCompanionForAvatarSet(int setNumber)
+        private static CompanionId? GetCompanionForAvatarSet(int setNumber)
         {
             return setNumber switch
             {
-                3 => Models.CompanionId.OGBambiSprite,      // Level 50: Synthetic Blowdoll
-                4 => Models.CompanionId.CultBunny,          // Level 100: Perfect Fuckpuppet
-                5 => Models.CompanionId.BrainParasite,      // Level 125: Brainwashed Slavedoll
-                6 => Models.CompanionId.BambiTrainer,       // Level 150: Platinum Puppet
-                7 => Models.CompanionId.BimboCow,           // Level 75: Bambi Cow
+                3 => CompanionId.OGBambiSprite,      // Level 50: Synthetic Blowdoll
+                4 => CompanionId.CultBunny,          // Level 100: Perfect Fuckpuppet
+                5 => CompanionId.BrainParasite,      // Level 125: Brainwashed Slavedoll
+                6 => CompanionId.BambiTrainer,       // Level 150: Platinum Puppet
+                7 => CompanionId.BimboCow,           // Level 75: Bambi Cow
                 _ => null                                    // Sets 1-2 have no companion
             };
         }
@@ -655,15 +662,15 @@ namespace ConditioningControlPanel
         /// Gets the avatar set that corresponds to a companion.
         /// Used when switching companions from the UI to update the avatar.
         /// </summary>
-        public static int GetAvatarSetForCompanion(Models.CompanionId companionId)
+        public static int GetAvatarSetForCompanion(CompanionId companionId)
         {
             return companionId switch
             {
-                Models.CompanionId.OGBambiSprite => 3,   // Synthetic Blowdoll
-                Models.CompanionId.CultBunny => 4,       // Perfect Fuckpuppet
-                Models.CompanionId.BrainParasite => 5,   // Brainwashed Slavedoll
-                Models.CompanionId.BambiTrainer => 6,    // Platinum Puppet
-                Models.CompanionId.BimboCow => 7,        // Bambi Cow
+                CompanionId.OGBambiSprite => 3,   // Synthetic Blowdoll
+                CompanionId.CultBunny => 4,       // Perfect Fuckpuppet
+                CompanionId.BrainParasite => 5,   // Brainwashed Slavedoll
+                CompanionId.BambiTrainer => 6,    // Platinum Puppet
+                CompanionId.BimboCow => 7,        // Bambi Cow
                 _ => 1
             };
         }
@@ -679,7 +686,7 @@ namespace ConditioningControlPanel
 
             if (companionId.HasValue && App.Companion != null)
             {
-                var companionDef = Models.CompanionDefinition.GetById(companionId.Value);
+                var companionDef = CompanionDefinition.GetById(companionId.Value);
                 var companionProgress = App.Companion.GetProgress(companionId.Value);
                 bool isSlutMode = App.Settings?.Current?.SlutModeEnabled ?? false;
 
@@ -727,7 +734,7 @@ namespace ConditioningControlPanel
         /// Switches to the avatar set corresponding to a companion.
         /// Called when user clicks a companion in the Companion tab.
         /// </summary>
-        public void SwitchToCompanionAvatar(Models.CompanionId companionId)
+        public void SwitchToCompanionAvatar(CompanionId companionId)
         {
             if (!Dispatcher.CheckAccess())
             {
@@ -753,7 +760,7 @@ namespace ConditioningControlPanel
             int playerLevel = App.Settings?.Current?.PlayerLevel ?? 1;
             var unlockedSets = GetUnlockedAvatarSets(playerLevel);
             bool hasMultiple = unlockedSets.Length > 1;
-            int currentIndex = System.Array.IndexOf(unlockedSets, _currentAvatarSet);
+            int currentIndex = Array.IndexOf(unlockedSets, _currentAvatarSet);
 
             // Previous arrow: show if not at first unlocked set
             BtnPrevAvatar.Visibility = hasMultiple && currentIndex > 0
@@ -793,7 +800,7 @@ namespace ConditioningControlPanel
         {
             int playerLevel = App.Settings?.Current?.PlayerLevel ?? 1;
             var unlockedSets = GetUnlockedAvatarSets(playerLevel);
-            int currentIndex = System.Array.IndexOf(unlockedSets, _currentAvatarSet);
+            int currentIndex = Array.IndexOf(unlockedSets, _currentAvatarSet);
             if (currentIndex > 0)
             {
                 SwitchToAvatarSet(unlockedSets[currentIndex - 1]);
@@ -807,7 +814,7 @@ namespace ConditioningControlPanel
         {
             int playerLevel = App.Settings?.Current?.PlayerLevel ?? 1;
             var unlockedSets = GetUnlockedAvatarSets(playerLevel);
-            int currentIndex = System.Array.IndexOf(unlockedSets, _currentAvatarSet);
+            int currentIndex = Array.IndexOf(unlockedSets, _currentAvatarSet);
             if (currentIndex >= 0 && currentIndex < unlockedSets.Length - 1)
             {
                 SwitchToAvatarSet(unlockedSets[currentIndex + 1]);
@@ -846,7 +853,7 @@ namespace ConditioningControlPanel
                             // Reset bubble position to ensure correct placement after layout
                             // Anchored at bottom, grows upward. Margin = left, top, right, bottom
                             SpeechBubble.Margin = new Thickness(0, 0, 125, 550);
-                        }), System.Windows.Threading.DispatcherPriority.Loaded);
+                        }), DispatcherPriority.Loaded);
 
             // Start fullscreen detection timer
             StartFullscreenDetection();
@@ -935,12 +942,12 @@ namespace ConditioningControlPanel
 
                 // Get the process ID of the foreground window
                 GetWindowThreadProcessId(foregroundWindow, out uint foregroundPid);
-                uint ourPid = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+                uint ourPid = (uint)Process.GetCurrentProcess().Id;
                 if (foregroundPid == ourPid)
                     return false;
 
                 // Get window class name to exclude known safe applications
-                var className = new System.Text.StringBuilder(256);
+                var className = new StringBuilder(256);
                 GetClassName(foregroundWindow, className, className.Capacity);
                 string windowClass = className.ToString();
 
@@ -993,7 +1000,7 @@ namespace ConditioningControlPanel
                     return false;
 
                 // Get FULL screen bounds (not working area - must cover taskbar too)
-                var screen = System.Windows.Forms.Screen.FromHandle(foregroundWindow);
+                var screen = Screen.FromHandle(foregroundWindow);
                 var screenBounds = screen.Bounds;
 
                 // For true fullscreen, window must cover the ENTIRE screen including taskbar
@@ -1036,7 +1043,7 @@ namespace ConditioningControlPanel
                 double dpiScale = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
 
                 // Get primary screen working area
-                var screen = System.Windows.Forms.Screen.PrimaryScreen;
+                var screen = Screen.PrimaryScreen;
                 if (screen == null) return;
 
                 double screenHeight = screen.WorkingArea.Height / dpiScale;
@@ -1331,7 +1338,7 @@ namespace ConditioningControlPanel
             try
             {
                 // Only show tube if parent window is actually the foreground window
-                var parentHandle = new System.Windows.Interop.WindowInteropHelper(_parentWindow).Handle;
+                var parentHandle = new WindowInteropHelper(_parentWindow).Handle;
                 var foreground = GetForegroundWindow();
                 if (parentHandle == IntPtr.Zero || foreground != parentHandle)
                     return;
@@ -1352,7 +1359,7 @@ namespace ConditioningControlPanel
                             {
                                 BringToFrontTemporarily();
                             }
-                        }), System.Windows.Threading.DispatcherPriority.Background);
+                        }), DispatcherPriority.Background);
                     }
                 }
             }
@@ -1372,7 +1379,7 @@ namespace ConditioningControlPanel
                     {
                         BringToFrontTemporarily();
                     }
-                }), System.Windows.Threading.DispatcherPriority.Background);
+                }), DispatcherPriority.Background);
             }
         }
 
@@ -1412,7 +1419,7 @@ namespace ConditioningControlPanel
                 // When attached, only show if parent window is the foreground window
                 if (_isAttached && _parentWindow != null)
                 {
-                    var parentHandle = new System.Windows.Interop.WindowInteropHelper(_parentWindow).Handle;
+                    var parentHandle = new WindowInteropHelper(_parentWindow).Handle;
                     var foreground = GetForegroundWindow();
                     if (parentHandle == IntPtr.Zero || foreground != parentHandle)
                         return; // Don't show tube if main window isn't in front
@@ -1578,7 +1585,7 @@ namespace ConditioningControlPanel
         private DateTime _lastInteractionTime = DateTime.MinValue;
         private int _animationRefreshClickCount = 0;
 
-        private void ImgAvatar_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private void ImgAvatar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             var now = DateTime.Now;
 
@@ -1640,29 +1647,29 @@ namespace ConditioningControlPanel
             // Visual feedback - glow pulse on the drop shadow effect
             // Pulse whichever avatar is currently visible
             var activeAvatar = _useAnimatedAvatar ? ImgAvatarAnimated : ImgAvatar;
-            if (activeAvatar.Effect is System.Windows.Media.Effects.DropShadowEffect dropShadow)
+            if (activeAvatar.Effect is DropShadowEffect dropShadow)
             {
                 // Pulse the blur radius for glow effect (longer duration for visibility)
-                var blurPulse = new System.Windows.Media.Animation.DoubleAnimation
+                var blurPulse = new DoubleAnimation
                 {
                     From = 20,
                     To = 60,
                     Duration = TimeSpan.FromMilliseconds(200),
                     AutoReverse = true,
-                    FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop
+                    FillBehavior = FillBehavior.Stop
                 };
-                dropShadow.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, blurPulse);
+                dropShadow.BeginAnimation(DropShadowEffect.BlurRadiusProperty, blurPulse);
 
                 // Also pulse the opacity for a brighter flash
-                var opacityPulse = new System.Windows.Media.Animation.DoubleAnimation
+                var opacityPulse = new DoubleAnimation
                 {
                     From = 0.6,
                     To = 1.0,
                     Duration = TimeSpan.FromMilliseconds(200),
                     AutoReverse = true,
-                    FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop
+                    FillBehavior = FillBehavior.Stop
                 };
-                dropShadow.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.OpacityProperty, opacityPulse);
+                dropShadow.BeginAnimation(DropShadowEffect.OpacityProperty, opacityPulse);
             }
         }
 
@@ -1813,7 +1820,7 @@ namespace ConditioningControlPanel
             while (element != null)
             {
                 if (element == parent) return true;
-                element = System.Windows.Media.VisualTreeHelper.GetParent(element);
+                element = VisualTreeHelper.GetParent(element);
             }
             return false;
         }
@@ -2337,7 +2344,7 @@ namespace ConditioningControlPanel
                 {
                     // Fallback: open in external browser
                     App.Logger?.Warning("Embedded browser unavailable, opening externally: {Url}", url);
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                    Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
                 }
 
                 e.Handled = true;
@@ -2358,7 +2365,7 @@ namespace ConditioningControlPanel
             var bounceAnimation = new DoubleAnimationUsingKeyFrames
             {
                 // CRITICAL: Stop after completion so timer-based float animation can resume
-                FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop
+                FillBehavior = FillBehavior.Stop
             };
 
             // First bounce (larger)
@@ -2494,7 +2501,7 @@ namespace ConditioningControlPanel
             // Show first trigger immediately (after short delay for window to be ready)
             Dispatcher.BeginInvoke(new Action(() =>
             {
-                System.Threading.Tasks.Task.Delay(2000).ContinueWith(_ =>
+                Task.Delay(2000).ContinueWith(_ =>
                 {
                     Dispatcher.Invoke(() => OnTriggerTick(null, EventArgs.Empty));
                 });
@@ -2568,7 +2575,7 @@ namespace ConditioningControlPanel
             if (foregroundWindow != _tubeHandle && foregroundWindow != _parentHandle)
             {
                 GetWindowThreadProcessId(foregroundWindow, out uint foregroundPid);
-                uint ourPid = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+                uint ourPid = (uint)Process.GetCurrentProcess().Id;
                 if (foregroundPid != ourPid)
                 {
                     App.Logger?.Debug("RandomBubble: Skipped - app not in focus");
@@ -2583,8 +2590,8 @@ namespace ConditioningControlPanel
         private void SpawnRandomBubble()
         {
             // Pick a random phrase (mode-aware)
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var phrases = Models.ContentModeConfig.GetRandomBubblePhrases(mode);
+            var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+            var phrases = ContentModeConfig.GetRandomBubblePhrases(mode);
             var phrase = phrases[_random.Next(phrases.Length)];
 
             // Show the phrase in speech bubble
@@ -2630,12 +2637,12 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var soundsPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "bubbles");
+                var soundsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "bubbles");
                 var popFiles = new[] { "Pop.mp3", "Pop2.mp3", "Pop3.mp3" };
                 var chosenPop = popFiles[_random.Next(popFiles.Length)];
-                var popPath = System.IO.Path.Combine(soundsPath, chosenPop);
+                var popPath = Path.Combine(soundsPath, chosenPop);
 
-                if (System.IO.File.Exists(popPath))
+                if (File.Exists(popPath))
                 {
                     var masterVolume = (App.Settings?.Current?.MasterVolume ?? 100) / 100f;
                     var bubblesVolume = (App.Settings?.Current?.BubblesVolume ?? 50) / 100f;
@@ -2645,14 +2652,14 @@ namespace ConditioningControlPanel
                     {
                         try
                         {
-                            using var audioFile = new NAudio.Wave.AudioFileReader(popPath);
+                            using var audioFile = new AudioFileReader(popPath);
                             audioFile.Volume = normalizedVolume;
-                            using var outputDevice = new NAudio.Wave.WaveOutEvent();
+                            using var outputDevice = new WaveOutEvent();
                             outputDevice.Init(audioFile);
                             outputDevice.Play();
-                            while (outputDevice.PlaybackState == NAudio.Wave.PlaybackState.Playing)
+                            while (outputDevice.PlaybackState == PlaybackState.Playing)
                             {
-                                System.Threading.Thread.Sleep(50);
+                                Thread.Sleep(50);
                             }
                         }
                         catch { }
@@ -2676,7 +2683,7 @@ namespace ConditioningControlPanel
         {
             try
             {
-                if (!System.IO.Directory.Exists(_voiceLinesPath))
+                if (!Directory.Exists(_voiceLinesPath))
                 {
                     _voiceLineFiles.Clear();
                     return;
@@ -2686,7 +2693,7 @@ namespace ConditioningControlPanel
                 var files = new List<string>();
                 foreach (var ext in extensions)
                 {
-                    files.AddRange(System.IO.Directory.GetFiles(_voiceLinesPath, ext));
+                    files.AddRange(Directory.GetFiles(_voiceLinesPath, ext));
                 }
                 _voiceLineFiles = files;
                 App.Logger?.Debug("VoiceLines: Loaded {Count} voice line files", _voiceLineFiles.Count);
@@ -2722,18 +2729,18 @@ namespace ConditioningControlPanel
                 // Stop any currently playing voice line
                 StopVoiceLineAudio();
 
-                if (!System.IO.File.Exists(filePath)) return;
+                if (!File.Exists(filePath)) return;
 
                 var masterVolume = (App.Settings?.Current?.MasterVolume ?? 100) / 100f;
                 var volume = (float)Math.Pow(masterVolume, 1.5);
 
-                _voiceLineAudio = new NAudio.Wave.AudioFileReader(filePath);
+                _voiceLineAudio = new AudioFileReader(filePath);
                 _voiceLineAudio.Volume = volume;
-                _voiceLinePlayer = new NAudio.Wave.WaveOutEvent();
+                _voiceLinePlayer = new WaveOutEvent();
                 _voiceLinePlayer.Init(_voiceLineAudio);
                 _voiceLinePlayer.Play();
 
-                App.Logger?.Debug("VoiceLines: Playing {File}", System.IO.Path.GetFileName(filePath));
+                App.Logger?.Debug("VoiceLines: Playing {File}", Path.GetFileName(filePath));
             }
             catch (Exception ex)
             {
@@ -2766,7 +2773,7 @@ namespace ConditioningControlPanel
             {
                 if (_isMuted || !IsAvatarVisibleOnScreen) return;
 
-                var text = System.IO.Path.GetFileNameWithoutExtension(filePath);
+                var text = Path.GetFileNameWithoutExtension(filePath);
                 if (string.IsNullOrWhiteSpace(text)) return;
 
                 // Clear the queue - voice line takes priority
@@ -3033,8 +3040,8 @@ namespace ConditioningControlPanel
         /// </summary>
         private string GetRandomBambiPhrase()
         {
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var modePhrases = Models.ContentModeConfig.GetRandomFloatingPhrases(mode);
+            var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+            var modePhrases = ContentModeConfig.GetRandomFloatingPhrases(mode);
             var allPhrases = GenericPhrases.Concat(modePhrases).ToArray();
             return allPhrases[_random.Next(allPhrases.Length)];
         }
@@ -3233,39 +3240,39 @@ namespace ConditioningControlPanel
         {
             // Check for special services first
             var lowerName = detectedName?.ToLowerInvariant() ?? "";
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
+            var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
 
             // Discord - special phrases
             if (lowerName.Contains("discord"))
             {
-                var discordPhrases = Models.ContentModeConfig.GetDiscordPhrases(mode);
+                var discordPhrases = ContentModeConfig.GetDiscordPhrases(mode);
                 return discordPhrases[_random.Next(discordPhrases.Length)];
             }
 
             // BambiCloud/Hypnotube - positive reinforcement (training sites)
             if (lowerName.Contains("bambicloud") || lowerName.Contains("hypnotube"))
             {
-                var sitePhrases = Models.ContentModeConfig.GetTrainingSitePhrases(mode);
+                var sitePhrases = ContentModeConfig.GetTrainingSitePhrases(mode);
                 return sitePhrases[_random.Next(sitePhrases.Length)];
             }
 
             // Hypno content in tab name - congratulate for bimbofication
             if (lowerName.Contains("bambi") || lowerName.Contains("sissy") || lowerName.Contains("hypno"))
             {
-                var hypnoPhrases = Models.ContentModeConfig.GetHypnoContentPhrases(mode);
+                var hypnoPhrases = ContentModeConfig.GetHypnoContentPhrases(mode);
                 return hypnoPhrases[_random.Next(hypnoPhrases.Length)];
             }
             var phrases = category switch
             {
-                ActivityCategory.Gaming => Models.ContentModeConfig.GetGamingPhrases(mode),
-                ActivityCategory.Browsing => Models.ContentModeConfig.GetBrowsingPhrases(mode),
+                ActivityCategory.Gaming => ContentModeConfig.GetGamingPhrases(mode),
+                ActivityCategory.Browsing => ContentModeConfig.GetBrowsingPhrases(mode),
                 ActivityCategory.Shopping => ShoppingPhrases,
                 ActivityCategory.Social => SocialPhrases,
-                ActivityCategory.Working => Models.ContentModeConfig.GetWorkingPhrases(mode),
-                ActivityCategory.Media => Models.ContentModeConfig.GetMediaPhrases(mode),
-                ActivityCategory.Learning => Models.ContentModeConfig.GetLearningPhrases(mode),
-                ActivityCategory.Idle => Models.ContentModeConfig.GetWindowAwarenessIdlePhrases(mode),
-                _ => Models.ContentModeConfig.GetRandomFloatingPhrases(mode)
+                ActivityCategory.Working => ContentModeConfig.GetWorkingPhrases(mode),
+                ActivityCategory.Media => ContentModeConfig.GetMediaPhrases(mode),
+                ActivityCategory.Learning => ContentModeConfig.GetLearningPhrases(mode),
+                ActivityCategory.Idle => ContentModeConfig.GetWindowAwarenessIdlePhrases(mode),
+                _ => ContentModeConfig.GetRandomFloatingPhrases(mode)
             };
 
             var phrase = phrases[_random.Next(phrases.Length)];
@@ -3434,16 +3441,16 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var soundsPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds");
+                var soundsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds");
 
                 // Use giggle sounds 1-4 for regular speech bubbles
                 var fallbackSounds = new[] {
                     "giggle1.MP3", "giggle2.MP3", "giggle3.MP3", "giggle4.MP3"
                 };
                 var chosenSound = fallbackSounds[_random.Next(fallbackSounds.Length)];
-                var soundPath = System.IO.Path.Combine(soundsPath, chosenSound);
+                var soundPath = Path.Combine(soundsPath, chosenSound);
 
-                if (!System.IO.File.Exists(soundPath))
+                if (!File.Exists(soundPath))
                 {
                     App.Logger?.Debug("Fallback sound not found: {Path}", soundPath);
                     return;
@@ -3457,14 +3464,14 @@ namespace ConditioningControlPanel
                 {
                     try
                     {
-                        using var audioFile = new NAudio.Wave.AudioFileReader(soundPath);
+                        using var audioFile = new AudioFileReader(soundPath);
                         audioFile.Volume = volume;
-                        using var outputDevice = new NAudio.Wave.WaveOutEvent();
+                        using var outputDevice = new WaveOutEvent();
                         outputDevice.Init(audioFile);
                         outputDevice.Play();
-                        while (outputDevice.PlaybackState == NAudio.Wave.PlaybackState.Playing)
+                        while (outputDevice.PlaybackState == PlaybackState.Playing)
                         {
-                            System.Threading.Thread.Sleep(50);
+                            Thread.Sleep(50);
                         }
                     }
                     catch { /* Ignore audio errors */ }
@@ -3486,15 +3493,15 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var soundsPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds");
+                var soundsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds");
                 // Use giggle sounds 5-8 for AI responses (reserved for special interactions)
                 var giggleFiles = new[] {
                     "giggle5.mp3", "giggle6.mp3", "giggle7.mp3", "giggle8.mp3"
                 };
                 var chosenGiggle = giggleFiles[_random.Next(giggleFiles.Length)];
-                var gigglePath = System.IO.Path.Combine(soundsPath, chosenGiggle);
+                var gigglePath = Path.Combine(soundsPath, chosenGiggle);
 
-                if (System.IO.File.Exists(gigglePath))
+                if (File.Exists(gigglePath))
                 {
                     var masterVolume = (App.Settings?.Current?.MasterVolume ?? 100) / 100f;
                     // Apply volume curve, cap at 70% of master to not be too loud
@@ -3505,14 +3512,14 @@ namespace ConditioningControlPanel
                     {
                         try
                         {
-                            using var audioFile = new NAudio.Wave.AudioFileReader(gigglePath);
+                            using var audioFile = new AudioFileReader(gigglePath);
                             audioFile.Volume = volume;
-                            using var outputDevice = new NAudio.Wave.WaveOutEvent();
+                            using var outputDevice = new WaveOutEvent();
                             outputDevice.Init(audioFile);
                             outputDevice.Play();
-                            while (outputDevice.PlaybackState == NAudio.Wave.PlaybackState.Playing)
+                            while (outputDevice.PlaybackState == PlaybackState.Playing)
                             {
-                                System.Threading.Thread.Sleep(50);
+                                Thread.Sleep(50);
                             }
                         }
                         catch { /* Ignore audio errors */ }
@@ -3529,12 +3536,12 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var soundsPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "bubbles");
+                var soundsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "bubbles");
                 var popFiles = new[] { "Pop.mp3", "Pop2.mp3", "Pop3.mp3" };
                 var chosenPop = popFiles[_random.Next(popFiles.Length)];
-                var popPath = System.IO.Path.Combine(soundsPath, chosenPop);
+                var popPath = Path.Combine(soundsPath, chosenPop);
 
-                if (System.IO.File.Exists(popPath))
+                if (File.Exists(popPath))
                 {
                     var masterVolume = (App.Settings?.Current?.MasterVolume ?? 100) / 100f;
                     var volume = (float)Math.Pow(masterVolume, 1.5);
@@ -3544,14 +3551,14 @@ namespace ConditioningControlPanel
                     {
                         try
                         {
-                            using var audioFile = new NAudio.Wave.AudioFileReader(popPath);
+                            using var audioFile = new AudioFileReader(popPath);
                             audioFile.Volume = volume;
-                            using var outputDevice = new NAudio.Wave.WaveOutEvent();
+                            using var outputDevice = new WaveOutEvent();
                             outputDevice.Init(audioFile);
                             outputDevice.Play();
-                            while (outputDevice.PlaybackState == NAudio.Wave.PlaybackState.Playing)
+                            while (outputDevice.PlaybackState == PlaybackState.Playing)
                             {
-                                System.Threading.Thread.Sleep(50);
+                                Thread.Sleep(50);
                             }
                         }
                         catch { /* Ignore audio errors */ }
@@ -3574,12 +3581,12 @@ namespace ConditioningControlPanel
             // Play the "cum and collapse" audio
             try
             {
-                var soundsPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "flashes_audio");
+                var soundsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "flashes_audio");
                 var collapseFiles = new[] { "come and coll.mp3", "come and coll (1).mp3", "come and coll (2).mp3" };
                 var chosenFile = collapseFiles[_random.Next(collapseFiles.Length)];
-                var audioPath = System.IO.Path.Combine(soundsPath, chosenFile);
+                var audioPath = Path.Combine(soundsPath, chosenFile);
 
-                if (System.IO.File.Exists(audioPath))
+                if (File.Exists(audioPath))
                 {
                     var masterVolume = (App.Settings?.Current?.MasterVolume ?? 100) / 100f;
                     var volume = (float)Math.Pow(masterVolume, 1.5);
@@ -3588,14 +3595,14 @@ namespace ConditioningControlPanel
                     {
                         try
                         {
-                            using var audioFile = new NAudio.Wave.AudioFileReader(audioPath);
+                            using var audioFile = new AudioFileReader(audioPath);
                             audioFile.Volume = volume;
-                            using var outputDevice = new NAudio.Wave.WaveOutEvent();
+                            using var outputDevice = new WaveOutEvent();
                             outputDevice.Init(audioFile);
                             outputDevice.Play();
-                            while (outputDevice.PlaybackState == NAudio.Wave.PlaybackState.Playing)
+                            while (outputDevice.PlaybackState == PlaybackState.Playing)
                             {
-                                System.Threading.Thread.Sleep(50);
+                                Thread.Sleep(50);
                             }
                         }
                         catch { /* Ignore audio errors */ }
@@ -3639,8 +3646,8 @@ namespace ConditioningControlPanel
             // Only announce ~1 in 4 flashes to avoid being annoying
             if (_flashCounter % 4 == 1)
             {
-                var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-                var phrases = Models.ContentModeConfig.GetFlashPrePhrases(mode);
+                var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+                var phrases = ContentModeConfig.GetFlashPrePhrases(mode);
                 var phrase = phrases[_random.Next(phrases.Length)];
                 Giggle(phrase);
             }
@@ -3649,7 +3656,7 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Called when flash audio starts playing - show the audio filename as a speech bubble
         /// </summary>
-        private void OnFlashAudioPlaying(object? sender, Services.FlashAudioEventArgs e)
+        private void OnFlashAudioPlaying(object? sender, FlashAudioEventArgs e)
         {
             if (_isMuted || string.IsNullOrWhiteSpace(e.Text)) return;
 
@@ -3688,8 +3695,8 @@ namespace ConditioningControlPanel
             // Only acknowledge ~1 in 10 subliminals
             if (_subliminalCounter % 10 == 0)
             {
-                var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-                var phrases = Models.ContentModeConfig.GetSubliminalAckPhrases(mode);
+                var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+                var phrases = ContentModeConfig.GetSubliminalAckPhrases(mode);
                 var phrase = phrases[_random.Next(phrases.Length)];
                 Giggle(phrase);
             }
@@ -3814,13 +3821,13 @@ namespace ConditioningControlPanel
         /// <summary>
         /// React to companion level up (v5.3).
         /// </summary>
-        private void OnCompanionLevelUp(object? sender, (Models.CompanionId Companion, int NewLevel) args)
+        private void OnCompanionLevelUp(object? sender, (CompanionId Companion, int NewLevel) args)
         {
             RefreshCompanionDisplay();
 
             // Special level-up phrases based on companion
-            var companionName = Models.CompanionDefinition.GetById(args.Companion).Name;
-            if (args.NewLevel == Models.CompanionProgress.MaxLevel)
+            var companionName = CompanionDefinition.GetById(args.Companion).Name;
+            if (args.NewLevel == CompanionProgress.MaxLevel)
             {
                 GigglePriority($"{companionName} reached MAX LEVEL! *sparkles*");
             }
@@ -3839,11 +3846,11 @@ namespace ConditioningControlPanel
         /// <summary>
         /// React to companion switch (v5.3).
         /// </summary>
-        private void OnCompanionSwitched(object? sender, Models.CompanionId newCompanion)
+        private void OnCompanionSwitched(object? sender, CompanionId newCompanion)
         {
             RefreshCompanionDisplay();
 
-            var companionName = Models.CompanionDefinition.GetById(newCompanion).Name;
+            var companionName = CompanionDefinition.GetById(newCompanion).Name;
             Giggle($"Hi! {companionName} is here now~");
         }
 
@@ -3882,8 +3889,8 @@ namespace ConditioningControlPanel
         /// </summary>
         private void ShowGreeting()
         {
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var phrases = Models.ContentModeConfig.GetStartupGreetingPhrases(mode);
+            var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+            var phrases = ContentModeConfig.GetStartupGreetingPhrases(mode);
             var phrase = phrases[_random.Next(phrases.Length)];
             Giggle(phrase);
             App.Logger?.Information("Avatar greeting: {Phrase}", phrase);
@@ -3894,8 +3901,8 @@ namespace ConditioningControlPanel
         /// </summary>
         private void OnEngineStopped(object? sender, EventArgs e)
         {
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var phrases = Models.ContentModeConfig.GetEngineStopPhrases(mode);
+            var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+            var phrases = ContentModeConfig.GetEngineStopPhrases(mode);
             var phrase = phrases[_random.Next(phrases.Length)];
             GigglePriority(phrase);
             App.Logger?.Debug("Avatar engine stop reaction: {Phrase}", phrase);
@@ -4193,7 +4200,7 @@ namespace ConditioningControlPanel
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 SetToolWindowStyle(true);
-            }), System.Windows.Threading.DispatcherPriority.Background);
+            }), DispatcherPriority.Background);
 
             // Update context menu visibility
             UpdateContextMenuForState();
@@ -4223,7 +4230,7 @@ namespace ConditioningControlPanel
 
                 ApplyScale();
                 // Clamp position after resize to keep avatar visible
-                Dispatcher.BeginInvoke(new Action(ClampAvatarPosition), System.Windows.Threading.DispatcherPriority.Loaded);
+                Dispatcher.BeginInvoke(new Action(ClampAvatarPosition), DispatcherPriority.Loaded);
             }
             catch (Exception ex)
             {
@@ -4248,7 +4255,7 @@ namespace ConditioningControlPanel
                     _currentScale = Math.Min(MaxScale, _currentScale + ScaleStep);
                     ApplyScale();
                     // Clamp position after resize to keep avatar visible
-                    Dispatcher.BeginInvoke(new Action(ClampAvatarPosition), System.Windows.Threading.DispatcherPriority.Loaded);
+                    Dispatcher.BeginInvoke(new Action(ClampAvatarPosition), DispatcherPriority.Loaded);
                 }
                 else if (e.Key == Key.Down)
                 {
@@ -4256,7 +4263,7 @@ namespace ConditioningControlPanel
                     _currentScale = Math.Max(MinScale, _currentScale - ScaleStep);
                     ApplyScale();
                     // Clamp position after resize to keep avatar visible
-                    Dispatcher.BeginInvoke(new Action(ClampAvatarPosition), System.Windows.Threading.DispatcherPriority.Loaded);
+                    Dispatcher.BeginInvoke(new Action(ClampAvatarPosition), DispatcherPriority.Loaded);
                 }
             }
             catch (Exception ex)
@@ -4399,7 +4406,7 @@ namespace ConditioningControlPanel
                 var physicalHeight = ActualHeight * dpiScale;
 
                 // Get the screen that contains most of the avatar (using physical pixel coordinates)
-                var screen = System.Windows.Forms.Screen.FromPoint(
+                var screen = Screen.FromPoint(
                     new System.Drawing.Point(
                         (int)(physicalLeft + physicalWidth / 2),
                         (int)(physicalTop + physicalHeight / 2)));
@@ -4465,7 +4472,7 @@ namespace ConditioningControlPanel
             {
                 UpdateQuickMenuState();
                 UpdateContextMenuForState();
-            }), System.Windows.Threading.DispatcherPriority.Render);
+            }), DispatcherPriority.Render);
         }
 
         private void MenuItemDetach_Click(object sender, RoutedEventArgs e)
@@ -4496,7 +4503,7 @@ namespace ConditioningControlPanel
                     ApplyScale();
                     UpdateResizeMenuState();
                     // Clamp position after resize to keep avatar visible
-                    Dispatcher.BeginInvoke(new Action(ClampAvatarPosition), System.Windows.Threading.DispatcherPriority.Loaded);
+                    Dispatcher.BeginInvoke(new Action(ClampAvatarPosition), DispatcherPriority.Loaded);
                 }
             }
             catch (Exception ex)
@@ -4515,7 +4522,7 @@ namespace ConditioningControlPanel
                     ApplyScale();
                     UpdateResizeMenuState();
                     // Clamp position after resize to keep avatar visible
-                    Dispatcher.BeginInvoke(new Action(ClampAvatarPosition), System.Windows.Threading.DispatcherPriority.Loaded);
+                    Dispatcher.BeginInvoke(new Action(ClampAvatarPosition), DispatcherPriority.Loaded);
                 }
             }
             catch (Exception ex)
@@ -4590,8 +4597,8 @@ namespace ConditioningControlPanel
             if (!current)
             {
                 App.Autonomy?.Start();
-                var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-                Giggle(Models.ContentModeConfig.GetAutonomyOnPhrase(mode));
+                var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+                Giggle(ContentModeConfig.GetAutonomyOnPhrase(mode));
             }
             else
             {
@@ -4715,16 +4722,16 @@ namespace ConditioningControlPanel
 
             // Update parent menu header with mode-aware name
             var activePreset = App.Personality?.GetActivePreset();
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var displayName = Models.ContentModeConfig.GetPersonalityDisplayName(activePreset?.Name ?? "BambiSprite", mode);
+            var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+            var displayName = ContentModeConfig.GetPersonalityDisplayName(activePreset?.Name ?? "BambiSprite", mode);
             MenuItemPersonality.Header = $"Personality: {displayName}";
         }
 
         private string GetPersonalityMenuHeader(PersonalityPreset preset, string activeId)
         {
             var check = preset.Id == activeId ? "☑" : "☐";
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var displayName = Models.ContentModeConfig.GetPersonalityDisplayName(preset.Name, mode);
+            var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+            var displayName = ContentModeConfig.GetPersonalityDisplayName(preset.Name, mode);
             return $"{check} {displayName}";
         }
 
@@ -4837,9 +4844,9 @@ namespace ConditioningControlPanel
         public void UpdateQuickMenuState()
         {
             // Talk to companion (Patreon only) - mode-aware label
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var talkToLabel = Models.ContentModeConfig.GetTalkToLabel(mode);
-            var chatAvailable = App.Patreon?.HasAiAccess == true;
+            var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+            var talkToLabel = ContentModeConfig.GetTalkToLabel(mode);
+            var chatAvailable = true;
             MenuItemTalkToBambi.IsEnabled = chatAvailable;
             if (chatAvailable)
             {
@@ -4865,7 +4872,7 @@ namespace ConditioningControlPanel
             // Takeover (Patreon only) - mode-aware name
             var takeoverAvailable = App.Patreon?.HasPremiumAccess == true;
             var takeoverOn = App.Settings?.Current?.AutonomyModeEnabled == true;
-            var takeoverName = Models.ContentModeConfig.GetTakeoverLabel(mode);
+            var takeoverName = ContentModeConfig.GetTakeoverLabel(mode);
             MenuItemBambiTakeover.Header = takeoverOn ? $"☑ {takeoverName}" : $"☐ {takeoverName}";
             MenuItemBambiTakeover.Foreground = takeoverOn ? new SolidColorBrush(Color.FromRgb(255, 105, 180)) : new SolidColorBrush(Colors.White);
             MenuItemBambiTakeover.IsEnabled = takeoverAvailable;

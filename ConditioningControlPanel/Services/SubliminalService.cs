@@ -1,15 +1,17 @@
-using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
+using System.Runtime.InteropServices;
 using System.Windows.Controls;
+using System.Windows.Forms;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Shapes;
 using System.Windows.Threading;
+using ConditioningControlPanel.Models;
 using NAudio.Wave;
+using Application = System.Windows.Application;
+using HorizontalAlignment = System.Windows.HorizontalAlignment;
+using Path = System.IO.Path;
 
 namespace ConditioningControlPanel.Services
 {
@@ -173,8 +175,8 @@ namespace ConditioningControlPanel.Services
                 App.Logger?.Debug("Triggering Bambi Freeze (subliminals disabled but special trigger allowed)");
             }
 
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var text = Models.ContentModeConfig.GetFreezeTriggerText(mode);
+            var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+            var text = ContentModeConfig.GetFreezeTriggerText(mode);
             string? audioPath = FindLinkedAudio(text);
 
             if (audioPath != null)
@@ -268,8 +270,8 @@ namespace ConditioningControlPanel.Services
         /// </summary>
         private void PlayBambiReset()
         {
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var resetText = Models.ContentModeConfig.GetResetTriggerText(mode);
+            var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+            var resetText = ContentModeConfig.GetResetTriggerText(mode);
             string? resetAudio = FindLinkedAudio(resetText);
 
             if (resetAudio != null && App.Settings.Current.SubAudioEnabled)
@@ -494,7 +496,7 @@ namespace ConditioningControlPanel.Services
 
         private const int WS_EX_LAYERED = 0x00080000;
 
-        private Window CreateSubliminalWindow(System.Windows.Forms.Screen screen, string text,
+        private Window CreateSubliminalWindow(Screen screen, string text,
             double targetOpacity, Color bgColor, Color textColor,
             Color borderColor, bool bgTransparent, bool stealsFocus)
         {
@@ -541,19 +543,19 @@ namespace ConditioningControlPanel.Services
             {
                 Background = Brushes.Transparent,
                 IsHitTestVisible = false,
-                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch,
-                VerticalAlignment = System.Windows.VerticalAlignment.Stretch
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch
             };
 
             // Add colored background as child element if not transparent
             if (!bgTransparent)
             {
-                var bgRect = new System.Windows.Shapes.Rectangle
+                var bgRect = new Rectangle
                 {
                     Fill = new SolidColorBrush(bgColor),
                     IsHitTestVisible = false,
-                    HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch,
-                    VerticalAlignment = System.Windows.VerticalAlignment.Stretch
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    VerticalAlignment = VerticalAlignment.Stretch
                 };
                 grid.Children.Add(bgRect);
             }
@@ -562,8 +564,8 @@ namespace ConditioningControlPanel.Services
             var textCanvas = new Canvas
             {
                 IsHitTestVisible = false,
-                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch,
-                VerticalAlignment = System.Windows.VerticalAlignment.Stretch
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch
             };
 
             var fontSize = 120;
@@ -595,7 +597,7 @@ namespace ConditioningControlPanel.Services
             // This is the same pattern OverlayService uses and prevents focus stealing during Show()
             win.SourceInitialized += (s, e) =>
             {
-                var hwnd = new System.Windows.Interop.WindowInteropHelper(win).Handle;
+                var hwnd = new WindowInteropHelper(win).Handle;
                 if (hwnd != IntPtr.Zero)
                 {
                     var exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
@@ -645,7 +647,7 @@ namespace ConditioningControlPanel.Services
         {
             try
             {
-                var primary = System.Windows.Forms.Screen.PrimaryScreen;
+                var primary = Screen.PrimaryScreen;
                 if (primary != null)
                 {
                     var hMonitor = MonitorFromPoint(new POINT { X = primary.Bounds.X + 1, Y = primary.Bounds.Y + 1 }, 2);
@@ -663,7 +665,7 @@ namespace ConditioningControlPanel.Services
             return 96.0;
         }
 
-        private double GetMonitorDpi(System.Windows.Forms.Screen screen)
+        private double GetMonitorDpi(Screen screen)
         {
             try
             {
@@ -682,13 +684,13 @@ namespace ConditioningControlPanel.Services
             return 96.0;
         }
 
-        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        [StructLayout(LayoutKind.Sequential)]
         private struct POINT { public int X; public int Y; }
 
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [DllImport("user32.dll")]
         private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
 
-        [System.Runtime.InteropServices.DllImport("shcore.dll")]
+        [DllImport("shcore.dll")]
         private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
 
         private TextBlock CreateTextBlock(string text, double fontSize, Color color)
@@ -779,16 +781,16 @@ namespace ConditioningControlPanel.Services
         private const uint SWP_SHOWWINDOW = 0x0040;
         private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
 
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [DllImport("user32.dll")]
         private static extern int GetWindowLong(IntPtr hwnd, int index);
 
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [DllImport("user32.dll")]
         private static extern int SetWindowLong(IntPtr hwnd, int index, int newStyle);
 
-        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        [DllImport("user32.dll", SetLastError = true)]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [DllImport("user32.dll")]
         private static extern bool SetWindowDisplayAffinity(IntPtr hwnd, uint dwAffinity);
 
         private const uint WDA_EXCLUDEFROMCAPTURE = 0x11;

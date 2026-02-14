@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace ConditioningControlPanel.Models
 {
     /// <summary>
@@ -281,7 +279,7 @@ namespace ConditioningControlPanel.Models
         public static string GetDefaultBrowserUrl(ContentMode mode) => mode switch
         {
             ContentMode.BambiSleep => "https://bambicloud.com/",
-            ContentMode.SissyHypno => "https://hypnotube.com/",
+            ContentMode.SissyHypno => "https://giveinto.me/",
             _ => "https://bambicloud.com/"
         };
 

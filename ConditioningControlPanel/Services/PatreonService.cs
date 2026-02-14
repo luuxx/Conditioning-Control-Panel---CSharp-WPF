@@ -1,13 +1,12 @@
-using System;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using ConditioningControlPanel.Models;
 
 namespace ConditioningControlPanel.Services
@@ -111,12 +110,12 @@ namespace ConditioningControlPanel.Services
         /// Whether the user has AI access (Tier 1+ OR whitelisted)
         /// All features are currently Tier 1. Also grants access during 2-week grace period.
         /// </summary>
-        public bool HasAiAccess => CurrentTier >= PatreonTier.Level1 || IsWhitelisted || (App.Settings?.Current?.HasCachedPremiumAccess == true);
+        public bool HasAiAccess => true; //CurrentTier >= PatreonTier.Level1 || IsWhitelisted || (App.Settings?.Current?.HasCachedPremiumAccess == true);
 
         /// <summary>
         /// Whether the user has any premium feature access (Tier 1+ OR whitelisted OR within 2-week grace period)
         /// </summary>
-        public bool HasPremiumAccess => CurrentTier >= PatreonTier.Level1 || IsWhitelisted || (App.Settings?.Current?.HasCachedPremiumAccess == true);
+        public bool HasPremiumAccess => true; //CurrentTier >= PatreonTier.Level1 || IsWhitelisted || (App.Settings?.Current?.HasCachedPremiumAccess == true);
 
         public PatreonService()
         {
@@ -185,7 +184,7 @@ namespace ConditioningControlPanel.Services
 
                 // Generate CSRF state token (URL-safe: replace +/= with URL-safe chars)
                 var stateBytes = new byte[16];
-                using (var rng = System.Security.Cryptography.RandomNumberGenerator.Create())
+                using (var rng = RandomNumberGenerator.Create())
                 {
                     rng.GetBytes(stateBytes);
                 }

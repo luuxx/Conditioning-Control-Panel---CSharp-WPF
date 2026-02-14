@@ -1,5 +1,3 @@
-using System;
-using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Newtonsoft.Json;
@@ -1068,7 +1066,7 @@ namespace ConditioningControlPanel.Models
         /// <summary>
         /// Check if cached Patreon premium access is still valid (within 2-week window)
         /// </summary>
-        [Newtonsoft.Json.JsonIgnore]
+        [JsonIgnore]
         [System.Text.Json.Serialization.JsonIgnore]
         public bool HasCachedPremiumAccess => _patreonPremiumValidUntil.HasValue && DateTime.UtcNow < _patreonPremiumValidUntil.Value;
 
