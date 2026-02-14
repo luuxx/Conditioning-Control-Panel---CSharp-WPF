@@ -1,4 +1,4 @@
-<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- Colors (central source) -->
@@ -9,11 +9,14 @@
     <Color x:Key="DarkerBgColor">#FF1A1A2E</Color>
     <Color x:Key="TextLightColor">#FFE0E0E0</Color>
     <Color x:Key="TextMutedColor">#FF808080</Color>
+    <Color x:Key="TextSecondaryColor">#FF808080</Color>
     <Color x:Key="PanelAccentColor">#FF404060</Color>
     <Color x:Key="PanelAccentHoverColor">#FF505080</Color>
     <Color x:Key="PreviewBgColor">#FF101020</Color>
+    <Color x:Key="MiniGameBackgroundColor">#FF101020</Color>
 
     <Color x:Key="DangerColor">#FFE53935</Color>
+    <Color x:Key="DangerHoverColor">#FFD32F2F</Color>
     <Color x:Key="TransparentPinkColor">#30FF69B4</Color>
 
     <Color x:Key="PinkButtonHoveredColor">#FFFF8FAF</Color>
@@ -114,6 +117,7 @@
     <Color x:Key="AttentionTargetBackgroundColor">#101020</Color>
     <Color x:Key="WarningRedBackgroundColor">#F44336</Color>
     <Color x:Key="SuccessGreenBackgroundColor">#00AA00</Color>
+    <Color x:Key="DeepPanelColor">#403949</Color>
     <Color x:Key="GridDeepPanelColor">#403949</Color>
     <Color x:Key="GridMutedBlueColor">#303050</Color>
     <Color x:Key="GridDarkestBgColor">#151528</Color>

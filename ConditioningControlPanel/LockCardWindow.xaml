@@ -1,4 +1,4 @@
-<Window x:Class="ConditioningControlPanel.LockCardWindow"
+﻿<Window x:Class="ConditioningControlPanel.LockCardWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Lock Card"

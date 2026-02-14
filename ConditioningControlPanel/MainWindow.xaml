@@ -1130,11 +1130,11 @@
                 
                 <!-- Window Control Buttons -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
-                    <Button x:Name="BtnMinimize" Content="-" Width="46" Height="36" 
+                    <Button x:Name="BtnMinimize" Content="─" Width="46" Height="36" 
                             Click="BtnMinimize_Click" Style="{StaticResource WindowControlButton}"/>
-                    <Button x:Name="BtnMaximize" Content="?" Width="46" Height="36" 
+                    <Button x:Name="BtnMaximize" Content="☐" Width="46" Height="36" 
                             Click="BtnMaximize_Click" Style="{StaticResource WindowControlButton}"/>
-                    <Button x:Name="BtnClose" Content="?" Width="46" Height="36" 
+                    <Button x:Name="BtnClose" Content="✕" Width="46" Height="36" 
                             Click="BtnClose_Click" Style="{StaticResource WindowCloseButton}"/>
                 </StackPanel>
             </Grid>
@@ -1193,10 +1193,10 @@
                     <StackPanel x:Name="StreakFirePill" Orientation="Horizontal" VerticalAlignment="Center"
                                 Margin="10,0,0,0" Visibility="Collapsed"
                                 ToolTip="Daily login streak (Good Girl Streak skill)">
-                        <TextBlock Text="??" FontFamily="Segoe UI Emoji" FontSize="14" VerticalAlignment="Center"/>
+                        <TextBlock Text="🔥" FontFamily="Segoe UI Emoji" FontSize="14" VerticalAlignment="Center"/>
                         <TextBlock x:Name="TxtStreakFireCount" Text="0" Foreground="{StaticResource OrangeAccentBrush}" FontSize="14"
                                    FontWeight="Bold" VerticalAlignment="Center" Margin="2,0,0,0"/>
-                        <TextBlock x:Name="TxtStreakShieldIcon" Text="???" FontFamily="Segoe UI Emoji" FontSize="12"
+                        <TextBlock x:Name="TxtStreakShieldIcon" Text="🛡️" FontFamily="Segoe UI Emoji" FontSize="12"
                                    VerticalAlignment="Center" Margin="4,0,0,0" Visibility="Collapsed"
                                    ToolTip="Streak shield available � protects your streak if you miss a day"/>
                     </StackPanel>
@@ -1207,49 +1207,49 @@
                     <Button x:Name="BtnSettings" Tag="Settings" Style="{StaticResource TabButtonActive}"
                             Margin="6,0" Click="BtnSettings_Click" ToolTip="Dashboard">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="??" FontSize="14" Margin="0,0,6,0"/>
+                            <TextBlock Text="📊" FontSize="14" Margin="0,0,6,0"/>
                             <TextBlock Text="Dashboard" FontSize="12"/>
                         </StackPanel>
                     </Button>
                     <Button x:Name="BtnPresets" Tag="Presets" Style="{StaticResource TabButton}"
                             Margin="6,0" Click="BtnPresets_Click" ToolTip="Presets &amp; Sessions">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="??" FontSize="14" Margin="0,0,6,0"/>
+                            <TextBlock Text="💾" FontSize="14" Margin="0,0,6,0"/>
                             <TextBlock Text="Presets" FontSize="12"/>
                         </StackPanel>
                     </Button>
                     <Button x:Name="BtnProgression" Tag="Progression" Style="{StaticResource TabButton}"
                             Margin="6,0" Click="BtnProgression_Click" ToolTip="Level &amp; Progression">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="??" FontSize="14" Margin="0,0,6,0"/>
+                            <TextBlock Text="📊" FontSize="14" Margin="0,0,6,0"/>
                             <TextBlock Text="Progression" FontSize="12"/>
                         </StackPanel>
                     </Button>
                     <Button x:Name="BtnQuests" Tag="Quests" Style="{StaticResource TabButton}"
                             Margin="6,0" Click="BtnQuests_Click" ToolTip="Daily &amp; Weekly Quests">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="??" FontSize="14" Margin="0,0,6,0"/>
+                            <TextBlock Text="📜" FontSize="14" Margin="0,0,6,0"/>
                             <TextBlock Text="Quests" FontSize="12"/>
                         </StackPanel>
                     </Button>
                     <Button x:Name="BtnEnhancements" Tag="Enhancements" Style="{StaticResource TabButton}"
                             Margin="6,0" Click="BtnEnhancements_Click" ToolTip="Bimbo Enhancement Tree">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="?" FontSize="14" Margin="0,0,6,0"/>
+                            <TextBlock Text="✨" FontSize="14" Margin="0,0,6,0"/>
                             <TextBlock Text="Enhancements" FontSize="12"/>
                         </StackPanel>
                     </Button>
                     <Button x:Name="BtnOpenAssetsTop" Tag="Assets" Style="{StaticResource TabButton}"
                             Margin="6,0" Click="BtnAssets_Click" ToolTip="Assets &amp; Content Packs">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="??" FontSize="14" Margin="0,0,6,0"/>
+                            <TextBlock Text="📁" FontSize="14" Margin="0,0,6,0"/>
                             <TextBlock Text="Assets" FontSize="12"/>
                         </StackPanel>
                     </Button>
                     <Button x:Name="BtnLab" Tag="Lab" Style="{StaticResource TabButton}"
-                            Margin="6,0" Click="BtnLab_Click" ToolTip="The Lab � Experimental Features">
+                            Margin="6,0" Click="BtnLab_Click" ToolTip="The Lab — Experimental Features">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="??" FontSize="14" Margin="0,0,6,0"/>
+                            <TextBlock Text="🧪" FontSize="14" Margin="0,0,6,0"/>
                             <TextBlock Text="The Lab" FontSize="12"/>
                         </StackPanel>
                     </Button>
@@ -1454,21 +1454,21 @@
                     <Button Grid.Column="0" x:Name="BtnAchievements" Tag="Achievements" Style="{StaticResource TabButton}"
                             Margin="2,0" Click="BtnAchievements_Click" ToolTip="Achievements">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="??" FontSize="11" Margin="0,0,3,0"/>
+                            <TextBlock Text="🏆" FontSize="11" Margin="0,0,3,0"/>
                             <TextBlock Text="Achievements" FontSize="10"/>
                         </StackPanel>
                     </Button>
                     <Button Grid.Column="1" x:Name="BtnLeaderboard" Tag="Leaderboard" Style="{StaticResource TabButton}"
                             Margin="2,0" Click="BtnLeaderboard_Click" ToolTip="Leaderboard">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="??" FontSize="11" Margin="0,0,3,0"/>
+                            <TextBlock Text="📊" FontSize="11" Margin="0,0,3,0"/>
                             <TextBlock Text="Leaderboard" FontSize="10"/>
                         </StackPanel>
                     </Button>
                     <Button Grid.Column="2" x:Name="BtnCompanion" Tag="Companion" Style="{StaticResource TabButton}"
                             Margin="2,0" Click="BtnCompanion_Click" ToolTip="Companion Settings">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="??" FontSize="11" Margin="0,0,3,0"/>
+                            <TextBlock Text="🤖" FontSize="11" Margin="0,0,3,0"/>
                             <TextBlock Text="Companion" FontSize="10"/>
                         </StackPanel>
                     </Button>
@@ -1501,7 +1501,7 @@
                             </Style>
                         </Button.Style>
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="??" FontSize="11" Margin="0,0,4,0"/>
+                            <TextBlock Text="👤" FontSize="11" Margin="0,0,4,0"/>
                             <TextBlock Text="Profile" FontSize="10"/>
                         </StackPanel>
                     </Button>
@@ -1533,7 +1533,7 @@
                             </Style>
                         </Button.Style>
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="?" FontSize="11" Margin="0,0,4,0"/>
+                            <TextBlock Text="⭐" FontSize="11" Margin="0,0,4,0"/>
                             <TextBlock Text="Exclusives" FontSize="10"/>
                         </StackPanel>
                     </Button>
@@ -1803,10 +1803,10 @@
                         </Border.Effect>
                         <StackPanel>
                             <Grid>
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="?? Mandatory Video"/>
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="🎬 Mandatory Video"/>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button x:Name="HelpBtnVideo" Style="{StaticResource HelpButtonStyle}" Tag="Video" Margin="0,0,8,0"/>
-                                    <Button x:Name="BtnTestVideo" Content="? Test" Style="{StaticResource OutlineButton}"
+                                    <Button x:Name="BtnTestVideo" Content="🧪 Test" Style="{StaticResource OutlineButton}"
                                             Padding="10,4" Click="BtnTestVideo_Click"
                                             ToolTip="Play a random video now to test"/>
                                 </StackPanel>
@@ -1827,7 +1827,7 @@
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" ToolTip="Strict mode: videos cannot be skipped, must watch entirely">
                                     <CheckBox x:Name="ChkStrictLock" Style="{StaticResource ToggleStyle}" Checked="ChkStrictLock_Checked" Unchecked="ChkStrictLock_Unchecked"/>
-                                    <TextBlock Style="{StaticResource SettingLabel}" Text="? Strict" Foreground="{StaticResource OrangeAccentBrush}" Margin="6,0,15,0"/>
+                                    <TextBlock Style="{StaticResource SettingLabel}" Text="🔒 Strict" Foreground="{StaticResource OrangeAccentBrush}" Margin="6,0,15,0"/>
                                 </StackPanel>
                                 <Slider Grid.Column="2" x:Name="SliderPerHour" Minimum="1" Maximum="20" Value="2" ValueChanged="SliderPerHour_Changed"
                                         ToolTip="Videos per hour"/>
@@ -1839,7 +1839,7 @@
                                 <StackPanel>
                                     <Grid>
                                         <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="?? Mini-Game" Foreground="{StaticResource PinkBrush}" FontSize="12" FontWeight="Bold"/>
+                                            <TextBlock Text="🎯 Mini-Game" Foreground="{StaticResource PinkBrush}" FontSize="12" FontWeight="Bold"/>
                                             <Button x:Name="HelpBtnMiniGame" Style="{StaticResource HelpButtonStyle}" Tag="MiniGame"/>
                                         </StackPanel>
                                         <CheckBox x:Name="ChkMiniGameEnabled" Style="{StaticResource ToggleStyle}" HorizontalAlignment="Right"
@@ -1861,7 +1861,7 @@
                                                     <CheckBox x:Name="ChkRandomizeTargets" Margin="6,0,0,0" VerticalAlignment="Center"
                                                               ToolTip="Randomize target count (1 to max)"
                                                               Checked="ChkRandomizeTargets_Changed" Unchecked="ChkRandomizeTargets_Changed">
-                                                        <TextBlock Text="??" FontSize="9" ToolTip="Randomize"/>
+                                                        <TextBlock Text="🎨" FontSize="9" ToolTip="Randomize"/>
                                                     </CheckBox>
                                                 </StackPanel>
                                                 <TextBlock x:Name="TxtTargets" Text="3" FontSize="11" Foreground="{StaticResource TextLightBrush}" HorizontalAlignment="Right"/>
@@ -1879,9 +1879,9 @@
                                     </Grid>
 
                                     <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
-                                        <Button Content="?? Phrases" Style="{StaticResource PinkButton}" Padding="8,5" Click="BtnManageAttention_Click"
+                                        <Button Content="💬 Phrases" Style="{StaticResource PinkButton}" Padding="8,5" Click="BtnManageAttention_Click"
                                                 ToolTip="Edit attention check phrases"/>
-                                        <Button Content="?? Style" Style="{StaticResource OutlineButton}" Margin="8,0,0,0" Padding="8,5" Click="BtnAttentionStyle_Click"
+                                        <Button Content="🎨 Style" Style="{StaticResource OutlineButton}" Margin="8,0,0,0" Padding="8,5" Click="BtnAttentionStyle_Click"
                                                 ToolTip="Customize target appearance (colors, border, font)"/>
                                     </StackPanel>
                                 </StackPanel>
@@ -1898,12 +1898,12 @@
                         </Border.Effect>
                         <StackPanel>
                             <Grid>
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="?? Subliminals"/>
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="💭 Subliminals"/>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button x:Name="HelpBtnSubliminals" Style="{StaticResource HelpButtonStyle}" Tag="Subliminals" Margin="0,0,8,0"/>
-                                    <Button Content="??" Style="{StaticResource OutlineButton}" Padding="6,3" Click="BtnManageMessages_Click" Margin="0,0,4,0"
+                                    <Button Content="💬" Style="{StaticResource OutlineButton}" Padding="6,3" Click="BtnManageMessages_Click" Margin="0,0,4,0"
                                             ToolTip="Edit subliminal messages"/>
-                                    <Button Content="?" Style="{StaticResource OutlineButton}" Padding="6,3" Click="BtnSubliminalSettings_Click" Margin="0,0,8,0"
+                                    <Button Content="⚙" Style="{StaticResource OutlineButton}" Padding="6,3" Click="BtnSubliminalSettings_Click" Margin="0,0,8,0"
                                             ToolTip="Advanced subliminal visual settings"/>
                                     <CheckBox x:Name="ChkSubliminalEnabled" Style="{StaticResource ToggleStyle}"
                                               Checked="ChkSubliminalEnabled_Changed" Unchecked="ChkSubliminalEnabled_Changed"
@@ -1937,7 +1937,7 @@
                                 <StackPanel Orientation="Horizontal">
                                     <CheckBox x:Name="ChkAudioWhispers" Style="{StaticResource ToggleStyle}"
                                               Checked="ChkAudioWhispers_Changed" Unchecked="ChkAudioWhispers_Changed"/>
-                                    <TextBlock Style="{StaticResource SettingLabel}" Text="?? Audio Whispers" Margin="6,0,0,0"/>
+                                    <TextBlock Style="{StaticResource SettingLabel}" Text="💭 Audio Whispers" Margin="6,0,0,0"/>
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Slider x:Name="SliderWhisperVol" Minimum="0" Maximum="100" Value="50" Width="100" ValueChanged="SliderWhisperVol_Changed"/>
@@ -1956,13 +1956,13 @@
                         </Border.Effect>
                         <StackPanel>
                             <Grid>
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="? System"/>
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="⚙ System"/>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button x:Name="HelpBtnSystem" Style="{StaticResource HelpButtonStyle}" Tag="System" Margin="0,0,8,0"/>
-                                    <Button Content="??" Style="{StaticResource OutlineButton}"
+                                    <Button Content="📂" Style="{StaticResource OutlineButton}"
                                             Padding="6,3" Click="BtnPickAssetsFolder_Click" Margin="0,0,4,0"
                                             ToolTip="Set custom assets folder"/>
-                                    <Button Content="?? Assets" Style="{StaticResource OutlineButton}"
+                                    <Button Content="📁 Assets" Style="{StaticResource OutlineButton}"
                                             Padding="8,3" Click="BtnOpenAssetsFolder_Click"
                                             ToolTip="Open assets folder (images, videos, sounds)"/>
                                 </StackPanel>
@@ -2551,7 +2551,7 @@
                         </Grid.RowDefinitions>
 
                         <Grid Grid.Row="0" Margin="0,0,0,10">
-                            <TextBlock Style="{StaticResource SectionHeader}" Text="?? Sessions"/>
+                            <TextBlock Style="{StaticResource SectionHeader}" Text="🎯 Sessions"/>
                             <Button x:Name="HelpBtnSessions" Style="{StaticResource HelpButtonStyle}" HorizontalAlignment="Right" Tag="Sessions"/>
                         </Grid>
 
@@ -2578,12 +2578,12 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0">
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="?? Morning Drift" Foreground="White" FontWeight="SemiBold" FontSize="15"/>
+                                                <TextBlock Text="🎯 Morning Drift" Foreground="White" FontWeight="SemiBold" FontSize="15"/>
                                                 <Border Background="{StaticResource PinkBrush}" CornerRadius="3" Padding="8,3" Margin="10,0,0,0">
                                                     <TextBlock Text="30 MIN" Foreground="White" FontSize="10" FontWeight="Bold"/>
                                                 </Border>
                                                 <Border Background="{StaticResource PrimaryActionDarkGreenBrush}" CornerRadius="3" Padding="8,3" Margin="6,0,0,0">
-                                                    <TextBlock Text="? Easy" Foreground="{StaticResource SuccessBrush}" FontSize="10" FontWeight="Bold"/>
+                                                    <TextBlock Text="⭐ Easy" Foreground="{StaticResource SuccessBrush}" FontSize="10" FontWeight="Bold"/>
                                                 </Border>
                                                 <Border Background="{StaticResource PrimaryActionDarkGreenBrush}" CornerRadius="3" Padding="8,3" Margin="6,0,0,0">
                                                     <TextBlock Text="+400 XP" Foreground="{StaticResource SuccessBrush}" FontSize="10" FontWeight="Bold"/>
@@ -2593,9 +2593,9 @@
                                                        Foreground="{StaticResource TextSilverBrush}" FontSize="13" Margin="0,6,0,0"/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Button Style="{StaticResource SessionActionButton}" Content="?" ToolTip="Edit Session"
+                                            <Button Style="{StaticResource SessionActionButton}" Content="✏" ToolTip="Edit Session"
                                                     Tag="morning_drift" Click="SessionBtn_Edit"/>
-                                            <Button Style="{StaticResource SessionActionButton}" Content="??" ToolTip="Export Session"
+                                            <Button Style="{StaticResource SessionActionButton}" Content="📤" ToolTip="Export Session"
                                                     Tag="morning_drift" Click="SessionBtn_Export"/>
                                         </StackPanel>
                                     </Grid>
@@ -2622,12 +2622,12 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0">
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="?? Gamer Girl" Foreground="White" FontWeight="SemiBold" FontSize="15"/>
+                                                <TextBlock Text="🎯 Gamer Girl" Foreground="White" FontWeight="SemiBold" FontSize="15"/>
                                                 <Border Background="{StaticResource PinkBrush}" CornerRadius="3" Padding="8,3" Margin="10,0,0,0">
                                                     <TextBlock Text="45 MIN" Foreground="White" FontSize="10" FontWeight="Bold"/>
                                                 </Border>
                                                 <Border Background="{StaticResource PrimaryActionDarkGreenBrush}" CornerRadius="3" Padding="8,3" Margin="6,0,0,0">
-                                                    <TextBlock Text="?? Medium" Foreground="{StaticResource GoldBrush}" FontSize="10" FontWeight="Bold"/>
+                                                    <TextBlock Text="⭐ Medium" Foreground="{StaticResource GoldBrush}" FontSize="10" FontWeight="Bold"/>
                                                 </Border>
                                                 <Border Background="{StaticResource PrimaryActionDarkGreenBrush}" CornerRadius="3" Padding="8,3" Margin="6,0,0,0">
                                                     <TextBlock Text="+800 XP" Foreground="{StaticResource GoldBrush}" FontSize="10" FontWeight="Bold"/>
@@ -2637,9 +2637,9 @@
                                                        Foreground="{StaticResource TextSilverBrush}" FontSize="13" Margin="0,6,0,0"/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Button Style="{StaticResource SessionActionButton}" Content="?" ToolTip="Edit Session"
+                                            <Button Style="{StaticResource SessionActionButton}" Content="✏" ToolTip="Edit Session"
                                                     Tag="gamer_girl" Click="SessionBtn_Edit"/>
-                                            <Button Style="{StaticResource SessionActionButton}" Content="??" ToolTip="Export Session"
+                                            <Button Style="{StaticResource SessionActionButton}" Content="📤" ToolTip="Export Session"
                                                     Tag="gamer_girl" Click="SessionBtn_Export"/>
                                         </StackPanel>
                                     </Grid>

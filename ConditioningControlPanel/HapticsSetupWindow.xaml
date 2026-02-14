@@ -1,4 +1,4 @@
-<Window x:Class="ConditioningControlPanel.HapticsSetupWindow"
+﻿<Window x:Class="ConditioningControlPanel.HapticsSetupWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Haptics Setup Guide" Height="700" Width="450"
