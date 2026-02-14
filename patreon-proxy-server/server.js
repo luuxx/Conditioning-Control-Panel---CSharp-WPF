@@ -434,6 +434,7 @@ const WHITELISTED_NAMES = new Set([
     'layla 🤍',
     'layla ❤',
     'Mimi Mi',
+    'Mimi  Mi',
 ].map(n => n.toLowerCase()));
 
 function isWhitelisted(email, name, displayName = null) {
@@ -11060,9 +11061,9 @@ app.post('/v2/remote/start', async (req, res) => {
         const now = new Date().toISOString();
         const expiresAt = new Date(Date.now() + REMOTE_SESSION_TTL * 1000).toISOString();
 
-        // Privacy: if display_name matches patron_name and wasn't explicitly set, don't expose it
+        // Privacy: never expose display_name if it matches the real patron_name
         let safeName = user.display_name || null;
-        if (safeName && user.patron_name && !user.display_name_set_at &&
+        if (safeName && user.patron_name &&
             safeName.toLowerCase().trim() === user.patron_name.toLowerCase().trim()) {
             safeName = null;
         }
