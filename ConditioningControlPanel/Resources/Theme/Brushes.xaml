@@ -32,7 +32,7 @@
     <SolidColorBrush x:Key="WindowBackgroundBrush" Color="{StaticResource DarkerBgColor}"/>
     <SolidColorBrush x:Key="DefaultButtonBackgroundBrush" Color="{StaticResource PinkColor}"/>
     <SolidColorBrush x:Key="DefaultButtonHoverBrush" Color="{StaticResource PinkButtonHoveredColor}"/>
-    <SolidColorBrush x:Key="DefaultButtonPressedBrush" Color="#FFE0507A"/>
+    <SolidColorBrush x:Key="DefaultButtonPressedBrush" Color="{StaticResource ButtonPinkPressedColor}"/>
 
     <!-- New generic brushes -->
     <SolidColorBrush x:Key="DeepBlueBrush" Color="{StaticResource DeepBlueColor}"/>
@@ -52,12 +52,12 @@
     <SolidColorBrush x:Key="AchievementTileBackgroundBrush" Color="{StaticResource DeepBlueColor}"/>
 
     <!-- Help buttons -->
-    <SolidColorBrush x:Key="HelpButtonForegroundBrush" Color="#FF808090"/>
-    <SolidColorBrush x:Key="HelpButtonBorderBrush" Color="#FF505060"/>
-    <SolidColorBrush x:Key="HelpButtonHoverBackgroundBrush" Color="#20FF69B4"/>
+    <SolidColorBrush x:Key="HelpButtonForegroundBrush" Color="{StaticResource HelpButtonForegroundColor}"/>
+    <SolidColorBrush x:Key="HelpButtonBorderBrush" Color="{StaticResource HelpButtonBorderColor}"/>
+    <SolidColorBrush x:Key="HelpButtonHoverBackgroundBrush" Color="{StaticResource HelpButtonHoverBackgroundColor}"/>
 
     <!-- Tooltip brushes -->
-    <SolidColorBrush x:Key="HelpTooltipBackgroundBrush" Color="#F0252542"/>
+    <SolidColorBrush x:Key="HelpTooltipBackgroundBrush" Color="{StaticResource HelpTooltipBackgroundColor}"/>
     <LinearGradientBrush x:Key="SectionBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
         <GradientStop Color="{StaticResource DeepBlueColor}" Offset="0"/>
         <GradientStop Color="{StaticResource NavyBlueColor}" Offset="1"/>
@@ -68,11 +68,11 @@
     </LinearGradientBrush>
 
     <!-- Update button brushes -->
-    <SolidColorBrush x:Key="UpdateButtonBackgroundBrush" Color="#FF3D1A3D"/>
-    <SolidColorBrush x:Key="UpdateButtonHoverBackgroundBrush" Color="#FF2D2D50"/>
-    <SolidColorBrush x:Key="UpdateButtonBorderBrush" Color="#FF3D3D60"/>
-    <SolidColorBrush x:Key="UpdateButtonHoverBorderBrush" Color="#FF5D5D80"/>
-    <SolidColorBrush x:Key="ContentModeToggleBackgroundBrush" Color="#FF252545"/>
+    <SolidColorBrush x:Key="UpdateButtonBackgroundBrush" Color="{StaticResource UpdateButtonBackgroundColor}"/>
+    <SolidColorBrush x:Key="UpdateButtonHoverBackgroundBrush" Color="{StaticResource UpdateButtonHoverBackgroundColor}"/>
+    <SolidColorBrush x:Key="UpdateButtonBorderBrush" Color="{StaticResource UpdateButtonBorderColor}"/>
+    <SolidColorBrush x:Key="UpdateButtonHoverBorderBrush" Color="{StaticResource UpdateButtonHoverBorderColor}"/>
+    <SolidColorBrush x:Key="ContentModeToggleBackgroundBrush" Color="{StaticResource ContentModeToggleBackgroundColor}"/>
     <LinearGradientBrush x:Key="VideoSectionBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
         <GradientStop Color="{StaticResource DeepBlueColor}" Offset="0"/>
         <GradientStop Color="{StaticResource NavyBlueColor}" Offset="1"/>
@@ -83,9 +83,9 @@
     </LinearGradientBrush>
 
     <!-- Session buttons -->
-    <SolidColorBrush x:Key="SessionButtonBackgroundBrush" Color="#FF353555"/>
-    <SolidColorBrush x:Key="SessionButtonForegroundBrush" Color="#FF909090"/>
-    <SolidColorBrush x:Key="SessionDeleteButtonHoverBrush" Color="#FFE81123"/>
+    <SolidColorBrush x:Key="SessionButtonBackgroundBrush" Color="{StaticResource SessionButtonBackgroundColor}"/>
+    <SolidColorBrush x:Key="SessionButtonForegroundBrush" Color="{StaticResource SessionButtonForegroundColor}"/>
+    <SolidColorBrush x:Key="SessionDeleteButtonHoverBrush" Color="{StaticResource SessionDeleteButtonHoverColor}"/>
 
     <!-- Brand brushes -->
     <SolidColorBrush x:Key="DiscordBrush" Color="{StaticResource DiscordColor}"/>
@@ -98,7 +98,7 @@
     <SolidColorBrush x:Key="SliderTrackBackgroundBrush" Color="{StaticResource PanelAccentColor}"/>
     <SolidColorBrush x:Key="SmallPinkButtonBackgroundBrush" Color="{StaticResource PinkColor}"/>
     <SolidColorBrush x:Key="SmallPinkButtonHoverBrush" Color="{StaticResource PinkButtonHoveredColor}"/>
-    <SolidColorBrush x:Key="SmallPinkButtonPressedBrush" Color="#FFE0507A"/>
+    <SolidColorBrush x:Key="SmallPinkButtonPressedBrush" Color="{StaticResource ButtonPinkPressedColor}"/>
     <SolidColorBrush x:Key="LightPinkBrush" Color="{StaticResource LightPinkColor}"/>
     <SolidColorBrush x:Key="DeepPanelBrush" Color="{StaticResource DeepPanelColor}"/>
     <SolidColorBrush x:Key="PillBackgroundBrush" Color="{StaticResource PillBackgroundColor}"/>
@@ -155,16 +155,16 @@
     <!-- MainWindow -->
     <SolidColorBrush x:Key="LoggedInStatusPanelBackgroundBrush" Color="{StaticResource PanelBgColor}"/>
     <SolidColorBrush x:Key="BtnQuickLogoutBackgroundBrush" Color="{StaticResource DarkPurpleColor}"/>
-    <SolidColorBrush x:Key="MarqueeBannerBackgroundBrush" Color="#FF1A0A1A"/>
+    <SolidColorBrush x:Key="MarqueeBannerBackgroundBrush" Color="{StaticResource MarqueeBannerBackgroundColor}"/>
     <SolidColorBrush x:Key="SessionDropZoneBackgroundBrush" Color="{StaticResource DeepBlueColor}"/>
     <SolidColorBrush x:Key="BtnCreateSessionBackgroundBrush" Color="{StaticResource PinkColor}"/>
     <SolidColorBrush x:Key="BtnExportSessionBackgroundBrush" Color="{StaticResource PillBackgroundColor}"/>
     <SolidColorBrush x:Key="DifficultyBadgeBackgroundBrush" Color="{StaticResource PillBackgroundColor}"/>
-    <SolidColorBrush x:Key="CornerGifOptionPanelBackgroundBrush" Color="#FF252540"/>
+    <SolidColorBrush x:Key="CornerGifOptionPanelBackgroundBrush" Color="{StaticResource CornerGifOptionPanelBackgroundColor}"/>
     <SolidColorBrush x:Key="CmbBubbleCountDifficultyBackgroundBrush" Color="{StaticResource DeepBlueColor}"/>
     <SolidColorBrush x:Key="DailyProgressFillBackgroundBrush" Color="{StaticResource GoldColor}"/>
     <SolidColorBrush x:Key="WeeklyProgressFillBackgroundBrush" Color="{StaticResource LightPurpleColor}"/>
-    <SolidColorBrush x:Key="QuestCompleteBannerBackgroundBrush" Color="#FF2D4A2D"/>
+    <SolidColorBrush x:Key="QuestCompleteBannerBackgroundBrush" Color="{StaticResource QuestCompleteBannerBackgroundColor}"/>
     
     <!-- LoginDialog -->
     <SolidColorBrush x:Key="BtnLoginDiscordBackgroundBrush" Color="{StaticResource DiscordColor}"/>
@@ -173,5 +173,87 @@
     <!-- AvatarTubeWindow -->
     <SolidColorBrush x:Key="InputPanelBackgroundBrush" Color="{StaticResource PanelBgColor}"/>
     <SolidColorBrush x:Key="TxtUserInputBackgroundBrush" Color="{StaticResource DarkerBgColor}"/>
+
+    <!-- New Brushes for UI Fixes -->
+    <SolidColorBrush x:Key="ButtonPinkPressedBrush" Color="{StaticResource ButtonPinkPressedColor}"/>
+    <SolidColorBrush x:Key="HapticsGridBrush" Color="{StaticResource HapticsGridColor}"/>
+    <SolidColorBrush x:Key="AchievementBackgroundTransparentBrush" Color="{StaticResource AchievementBackgroundTransparentColor}"/>
+    <SolidColorBrush x:Key="BubbleCountBackgroundBrush" Color="{StaticResource BubbleCountBackgroundBrushColor}"/>
+    <SolidColorBrush x:Key="OverlayBlackTransparentBrush" Color="{StaticResource OverlayBlackTransparentColor}"/>
+    <SolidColorBrush x:Key="QuestCompleteOverlayBrush" Color="{StaticResource QuestCompleteOverlayColor}"/>
+    <SolidColorBrush x:Key="GoldButtonBackgroundBrush" Color="{StaticResource GoldButtonBackgroundColor}"/>
+    <SolidColorBrush x:Key="GridDarkPurpleBrush" Color="{StaticResource GridDarkPurpleColor}"/>
+    <SolidColorBrush x:Key="GridDeepPurpleBrush" Color="{StaticResource GridDeepPurpleColor}"/>
+    <SolidColorBrush x:Key="GridDarkBlueBrush" Color="{StaticResource GridDarkBlueColor}"/>
+    <SolidColorBrush x:Key="GridNavyBlueBrush" Color="{StaticResource GridNavyBlueColor}"/>
+    <SolidColorBrush x:Key="GridPurpleBrush" Color="{StaticResource GridPurpleColor}"/>
+    <SolidColorBrush x:Key="OfflineUserBlueBrush" Color="{StaticResource OfflineUserBlueColor}"/>
+    <SolidColorBrush x:Key="DiscordGreenBrush" Color="{StaticResource DiscordGreenColor}"/>
+    <SolidColorBrush x:Key="AnnouncementBackgroundBrush" Color="{StaticResource AnnouncementBackgroundColor}"/>
+    <SolidColorBrush x:Key="AttentionTargetBackgroundBrush" Color="{StaticResource AttentionTargetBackgroundColor}"/>
+    <SolidColorBrush x:Key="WarningRedBackgroundBrush" Color="{StaticResource WarningRedBackgroundColor}"/>
+    <SolidColorBrush x:Key="SuccessGreenBackgroundBrush" Color="{StaticResource SuccessGreenBackgroundColor}"/>
+    <SolidColorBrush x:Key="GridDeepPanelBrush" Color="{StaticResource GridDeepPanelColor}"/>
+    <SolidColorBrush x:Key="GridMutedBlueBrush" Color="{StaticResource GridMutedBlueColor}"/>
+    <SolidColorBrush x:Key="GridDarkestBgBrush" Color="{StaticResource GridDarkestBgColor}"/>
+    <SolidColorBrush x:Key="GridDeepPurpleBgBrush" Color="{StaticResource GridDeepPurpleBgColor}"/>
+    <SolidColorBrush x:Key="OfflineUserMutedBrush" Color="{StaticResource OfflineUserMutedColor}"/>
+    <SolidColorBrush x:Key="RoadmapOverlayBrush" Color="{StaticResource RoadmapOverlayColor}"/>
+    <SolidColorBrush x:Key="PrimaryActionGreenBrush" Color="{StaticResource PrimaryActionGreenColor}"/>
+    <SolidColorBrush x:Key="PrimaryActionBlueBrush" Color="{StaticResource PrimaryActionBlueColor}"/>
+    <SolidColorBrush x:Key="PrimaryActionOrangeBrush" Color="{StaticResource PrimaryActionOrangeColor}"/>
+    <SolidColorBrush x:Key="PrimaryActionPurpleBrush" Color="{StaticResource PrimaryActionPurpleColor}"/>
+    <SolidColorBrush x:Key="PrimaryActionDarkGreenBrush" Color="{StaticResource PrimaryActionDarkGreenColor}"/>
+    <SolidColorBrush x:Key="GridBorderMutedBrush" Color="{StaticResource GridBorderMutedColor}"/>
+    <SolidColorBrush x:Key="GoldBorderBrush" Color="{StaticResource GoldBorderColor}"/>
+    <SolidColorBrush x:Key="TransparentPinkBorderBrush" Color="{StaticResource TransparentPinkBorderColor}"/>
+    <SolidColorBrush x:Key="TransparentLavenderBorderBrush" Color="{StaticResource TransparentLavenderBorderColor}"/>
+    <SolidColorBrush x:Key="SemiTransparentGrayBorderBrush" Color="{StaticResource SemiTransparentGrayBorderColor}"/>
+    <SolidColorBrush x:Key="GridHeaderBorderBrush" Color="{StaticResource GridHeaderBorderColor}"/>
+    <SolidColorBrush x:Key="GridAccentBorderBrush" Color="{StaticResource GridAccentBorderColor}"/>
+    <SolidColorBrush x:Key="AvatarTubePurpleBrush" Color="{StaticResource AvatarTubePurpleColor}"/>
+    <SolidColorBrush x:Key="LockCardOverlayBrush" Color="{StaticResource LockCardOverlayColor}"/>
+    <SolidColorBrush x:Key="OrchidBrush" Color="{StaticResource OrchidColor}"/>
+    <SolidColorBrush x:Key="AnnouncementMutedPinkBrush" Color="{StaticResource AnnouncementMutedPinkColor}"/>
+    <SolidColorBrush x:Key="AnnouncementDeepPinkBrush" Color="{StaticResource AnnouncementDeepPinkColor}"/>
+    <SolidColorBrush x:Key="CompanionMutedBlueBrush" Color="{StaticResource CompanionMutedBlueColor}"/>
+    <SolidColorBrush x:Key="CompanionAccentGreenBrush" Color="{StaticResource CompanionAccentGreenColor}"/>
+    <SolidColorBrush x:Key="HapticsSuccessGreenBrush" Color="{StaticResource HapticsSuccessGreenColor}"/>
+    <SolidColorBrush x:Key="MutedTextSilverBrush" Color="{StaticResource MutedTextSilverColor}"/>
+    <SolidColorBrush x:Key="GridMutedPurpleBrush" Color="{StaticResource GridMutedPurpleColor}"/>
+    <SolidColorBrush x:Key="GridMutedLavenderBrush" Color="{StaticResource GridMutedLavenderColor}"/>
+    <SolidColorBrush x:Key="GridMutedDarkGrayBrush" Color="{StaticResource GridMutedDarkGrayColor}"/>
+    <SolidColorBrush x:Key="GridDeepBlueBgBrush" Color="{StaticResource GridDeepBlueBgColor}"/>
+    <SolidColorBrush x:Key="GridDarkPurpleBgBrush" Color="{StaticResource GridDarkPurpleBgColor}"/>
+    <SolidColorBrush x:Key="GridMutedNavyBrush" Color="{StaticResource GridMutedNavyColor}"/>
+    <SolidColorBrush x:Key="GridSkyBlueBrush" Color="{StaticResource GridSkyBlueColor}"/>
+    <SolidColorBrush x:Key="GridMutedGoldBrush" Color="{StaticResource GridMutedGoldColor}"/>
+    <SolidColorBrush x:Key="GridMutedBlueBgBrush" Color="{StaticResource GridMutedBlueBgColor}"/>
+    <SolidColorBrush x:Key="GridDeepPurpleAccentBrush" Color="{StaticResource GridDeepPurpleAccentColor}"/>
+    <SolidColorBrush x:Key="GridMutedDarkBlueBrush" Color="{StaticResource GridMutedDarkBlueColor}"/>
+    <SolidColorBrush x:Key="GridMutedSlateBrush" Color="{StaticResource GridMutedSlateColor}"/>
+    <SolidColorBrush x:Key="GridGoldAccentBrush" Color="{StaticResource GridGoldAccentColor}"/>
+    <SolidColorBrush x:Key="GridGoldHoverBrush" Color="{StaticResource GridGoldHoverColor}"/>
+    <SolidColorBrush x:Key="GridPinkTransparentBrush" Color="{StaticResource GridPinkTransparentColor}"/>
+    <SolidColorBrush x:Key="GridPinkMutedBrush" Color="{StaticResource GridPinkMutedColor}"/>
+    <SolidColorBrush x:Key="GridPinkHoverBrush" Color="{StaticResource GridPinkHoverColor}"/>
+    <SolidColorBrush x:Key="GridDeepPinkBrush" Color="{StaticResource GridDeepPinkColor}"/>
+    <SolidColorBrush x:Key="GridDarkPinkBrush" Color="{StaticResource GridDarkPinkColor}"/>
+    <SolidColorBrush x:Key="GridLightPinkAccentBrush" Color="{StaticResource GridLightPinkAccentColor}"/>
+    <SolidColorBrush x:Key="GridDeepPinkAccentBrush" Color="{StaticResource GridDeepPinkAccentColor}"/>
+    <SolidColorBrush x:Key="GridMutedBlueAccentBrush" Color="{StaticResource GridMutedBlueAccentColor}"/>
+    <SolidColorBrush x:Key="GridMutedPinkAccentBrush" Color="{StaticResource GridMutedPinkAccentColor}"/>
+    <SolidColorBrush x:Key="GridDeepVioletBrush" Color="{StaticResource GridDeepVioletColor}"/>
+    <SolidColorBrush x:Key="WarningOrangeBrush" Color="{StaticResource WarningOrangeColor}"/>
+    <SolidColorBrush x:Key="WarningCrimsonBrush" Color="{StaticResource WarningCrimsonColor}"/>
+    <SolidColorBrush x:Key="MutedPurpleHexBrush" Color="{StaticResource MutedPurpleHexColor}"/>
+    <SolidColorBrush x:Key="DiscordGreenMutedBrush" Color="{StaticResource DiscordGreenMutedColor}"/>
+    <SolidColorBrush x:Key="SuccessGreenMutedBrush" Color="{StaticResource SuccessGreenMutedColor}"/>
+    <SolidColorBrush x:Key="LavenderMutedBrush" Color="{StaticResource LavenderMutedColor}"/>
+    <SolidColorBrush x:Key="PaleGoldBrush" Color="{StaticResource PaleGoldColor}"/>
+    <SolidColorBrush x:Key="MutedPurplePinkBrush" Color="{StaticResource MutedPurplePinkColor}"/>
+    <SolidColorBrush x:Key="MutedVioletBrush" Color="{StaticResource MutedVioletColor}"/>
+    <SolidColorBrush x:Key="DarkRedBrush" Color="{StaticResource DarkRedColor}"/>
+    <SolidColorBrush x:Key="TransparentPinkHexBrush" Color="{StaticResource TransparentPinkHexColor}"/>
     
 </ResourceDictionary>

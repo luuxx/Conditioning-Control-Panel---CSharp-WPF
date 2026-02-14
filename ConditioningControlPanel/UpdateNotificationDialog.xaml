@@ -42,7 +42,7 @@
                     <TextBlock Text="What's New" Foreground="{StaticResource PinkBrush}" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8"/>
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="280">
                         <TextBlock x:Name="TxtReleaseNotes"
-                                   Foreground="#C0C0C0" FontSize="13" TextWrapping="Wrap"
+                                   Foreground="{StaticResource LightGrayBrush}" FontSize="13" TextWrapping="Wrap"
                                    Text="No release notes available."/>
                     </ScrollViewer>
                 </Grid>
@@ -74,7 +74,7 @@
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter Property="Background" Value="#303050"/>
+                                                <Setter Property="Background" Value="{StaticResource GridMutedBlueBrush}"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -103,7 +103,7 @@
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter Property="Background" Value="#FF8DC7"/>
+                                                <Setter Property="Background" Value="{StaticResource GridMutedPinkAccentBrush}"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>

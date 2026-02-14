@@ -50,7 +50,7 @@
                     <Border.Background>
                         <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                             <GradientStop Color="{StaticResource PinkColor}" Offset="0"/>
-                            <GradientStop Color="#DA70D6" Offset="1"/>
+                            <GradientStop Color="{StaticResource OrchidColor}" Offset="1"/>
                         </LinearGradientBrush>
                     </Border.Background>
                     <Border.CornerRadius>

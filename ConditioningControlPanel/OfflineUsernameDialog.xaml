@@ -12,7 +12,7 @@
     <Window.Resources>
         <SolidColorBrush x:Key="PinkBrush" Color="{StaticResource PinkColor}"/>
         <SolidColorBrush x:Key="DarkPinkBrush" Color="{StaticResource DarkPinkColor}"/>
-        <SolidColorBrush x:Key="InfoBrush" Color="#88AAFF"/>
+        <SolidColorBrush x:Key="InfoBrush" Color="{StaticResource OfflineUserBlueColor}"/>
     </Window.Resources>
 
     <Border BorderBrush="{StaticResource PinkBrush}" BorderThickness="1" CornerRadius="0">
@@ -64,7 +64,7 @@
             <!-- Buttons -->
             <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,15,0,0">
                 <Button Content="Cancel" Width="90" Padding="10,10" Margin="0,0,10,0"
-                        Background="#555577" Foreground="White" BorderThickness="0"
+                        Background="{StaticResource OfflineUserMutedBrush}" Foreground="White" BorderThickness="0"
                         Click="BtnCancel_Click" Cursor="Hand" FontSize="13" FontWeight="SemiBold"/>
                 <Button x:Name="BtnConfirm" Content="Confirm" Width="90" Padding="10,10"
                         Background="{StaticResource PinkBrush}" Foreground="White"

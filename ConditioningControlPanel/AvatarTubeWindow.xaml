@@ -14,7 +14,7 @@
     <Window.Resources>
         <!-- Purplish gradient background for speech bubble -->
         <LinearGradientBrush x:Key="BubbleGradient" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#3D2066" Offset="0"/>
+            <GradientStop Color="{StaticResource AvatarTubePurpleColor}" Offset="0"/>
             <GradientStop Color="{StaticResource DarkerBgColor}" Offset="1"/>
         </LinearGradientBrush>
 
@@ -212,7 +212,7 @@
                                             </Grid>
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property="IsHighlighted" Value="True">
-                                                    <Setter TargetName="Border" Property="Background" Value="#3D3D60"/>
+                                                    <Setter TargetName="Border" Property="Background" Value="{StaticResource GridBorderMutedBrush}"/>
                                                 </Trigger>
                                                 <Trigger Property="HasItems" Value="True">
                                                     <Setter TargetName="Arrow" Property="Visibility" Value="Visible"/>
@@ -285,7 +285,7 @@
                                                 </Border>
                                                 <ControlTemplate.Triggers>
                                                     <Trigger Property="IsHighlighted" Value="True">
-                                                        <Setter TargetName="Border" Property="Background" Value="#3D3D60"/>
+                                                        <Setter TargetName="Border" Property="Background" Value="{StaticResource GridBorderMutedBrush}"/>
                                                     </Trigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>

@@ -21,7 +21,7 @@
                    FontSize="18" FontWeight="Bold" Margin="0,0,0,15"/>
 
         <!-- Preview Section -->
-        <Border Grid.Row="1" Background="#101020" CornerRadius="8" Padding="20" Margin="0,0,0,15">
+        <Border Grid.Row="1" Background="{StaticResource AttentionTargetBackgroundBrush}" CornerRadius="8" Padding="20" Margin="0,0,0,15">
             <StackPanel>
                 <TextBlock Text="Preview" Foreground="{StaticResource TextMutedBrush}" FontSize="11" Margin="0,0,0,10"/>
                 <Border x:Name="PreviewBorder" HorizontalAlignment="Center"

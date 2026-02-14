@@ -32,7 +32,7 @@
                 <TextBlock x:Name="TxtDifficulty"
                            Text=" (Medium)"
                            FontSize="22"
-                           Foreground="#FFB6C1"
+                           Foreground="{StaticResource LightPinkBrush}"
                            VerticalAlignment="Center"
                            Margin="10,0,0,0"/>
             </StackPanel>

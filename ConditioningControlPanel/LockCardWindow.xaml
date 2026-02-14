@@ -18,7 +18,7 @@
     <!-- Semi-transparent background -->
     <Grid x:Name="MainGrid">
         <Grid.Background>
-            <SolidColorBrush x:Name="BackgroundBrush" Color="#E6000000"/>
+            <SolidColorBrush x:Name="BackgroundBrush" Color="{StaticResource LockCardOverlayColor}"/>
         </Grid.Background>
 
         <!-- Centered card -->
@@ -127,6 +127,6 @@
                    VerticalAlignment="Bottom"
                    Margin="0,0,0,30"
                    FontSize="11"
-                   Foreground="#444444"/>
+                   Foreground="{StaticResource DarkGrayBrush}"/>
     </Grid>
 </Window>

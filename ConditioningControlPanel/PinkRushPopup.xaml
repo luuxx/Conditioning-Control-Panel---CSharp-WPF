@@ -11,7 +11,7 @@
         WindowStartupLocation="Manual"
         MouseLeftButtonDown="Window_MouseLeftButtonDown">
 
-    <Border Background="#E0151530" CornerRadius="12" BorderBrush="{StaticResource DarkPinkBrush}" BorderThickness="2"
+    <Border Background="{StaticResource AchievementBackgroundTransparentBrush}" CornerRadius="12" BorderBrush="{StaticResource DarkPinkBrush}" BorderThickness="2"
             Margin="10">
         <Border.Effect>
             <DropShadowEffect Color="{StaticResource DarkPinkColor}" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
@@ -32,7 +32,7 @@
             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                 <TextBlock Text="⚡ PINK RUSH!" Foreground="{StaticResource DarkPinkBrush}"
                            FontWeight="Bold" FontSize="18" Margin="0,0,0,4"/>
-                <TextBlock Text="3x XP for 60 seconds!" Foreground="#FFB6C1"
+                <TextBlock Text="3x XP for 60 seconds!" Foreground="{StaticResource LightPinkBrush}"
                            FontSize="13" Margin="0,0,0,6"/>
                 <TextBlock x:Name="TxtCountdown" Text="60s remaining" Foreground="{StaticResource TextSilverBrush}"
                            FontSize="12"/>

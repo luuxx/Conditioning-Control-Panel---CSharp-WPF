@@ -11,7 +11,7 @@
         WindowStartupLocation="CenterScreen"
         MouseLeftButtonDown="Window_MouseLeftButtonDown">
 
-    <Border Background="#F0151530" CornerRadius="12" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2"
+    <Border Background="{StaticResource AnnouncementBackgroundBrush}" CornerRadius="12" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2"
             Margin="10">
         <Border.Effect>
             <DropShadowEffect Color="{StaticResource PinkColor}" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
@@ -78,10 +78,10 @@
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="border" Property="Background" Value="#FF85C1"/>
+                                                <Setter TargetName="border" Property="Background" Value="{StaticResource AnnouncementMutedPinkBrush}"/>
                                             </Trigger>
                                             <Trigger Property="IsPressed" Value="True">
-                                                <Setter TargetName="border" Property="Background" Value="#E0559A"/>
+                                                <Setter TargetName="border" Property="Background" Value="{StaticResource AnnouncementDeepPinkBrush}"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>

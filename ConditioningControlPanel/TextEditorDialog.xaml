@@ -75,7 +75,7 @@
                                             <Style TargetType="TextBlock">
                                                 <Style.Triggers>
                                                     <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter Property="Foreground" Value="#FF4757"/>
+                                                        <Setter Property="Foreground" Value="{StaticResource WarningCrimsonBrush}"/>
                                                     </Trigger>
                                                 </Style.Triggers>
                                             </Style>
@@ -85,7 +85,7 @@
                             </Border>
                             <DataTemplate.Triggers>
                                 <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                    <Setter TargetName="ItemBorder" Property="Background" Value="#3A2A5A"/>
+                                    <Setter TargetName="ItemBorder" Property="Background" Value="{StaticResource GridDeepVioletBrush}"/>
                                     <Setter TargetName="ItemBorder" Property="BorderBrush" Value="{StaticResource PinkBrush}"/>
                                     <Setter TargetName="ItemBorder" Property="BorderThickness" Value="1"/>
                                 </DataTrigger>

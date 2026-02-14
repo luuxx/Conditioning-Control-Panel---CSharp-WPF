@@ -57,7 +57,7 @@
                 </Grid.ColumnDefinitions>
 
                 <Button x:Name="BtnDelete" Content="Delete" Click="BtnDelete_Click"
-                        Background="#F44336" Foreground="White" Padding="15,8"
+                        Background="{StaticResource WarningRedBackgroundBrush}" Foreground="White" Padding="15,8"
                         Cursor="Hand">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">

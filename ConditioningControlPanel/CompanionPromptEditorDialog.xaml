@@ -54,7 +54,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="#505080"/>
+                                <Setter Property="Background" Value="{StaticResource CompanionMutedBlueBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -263,7 +263,7 @@
                     <Expander.Header>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="Global Knowledge Base Links" Style="{StaticResource SectionHeader}"/>
-                            <TextBlock Text="(All Personalities)" Foreground="#50C878" FontSize="11"
+                            <TextBlock Text="(All Personalities)" Foreground="{StaticResource CompanionAccentGreenBrush}" FontSize="11"
                                        VerticalAlignment="Center" Margin="8,0,0,0"/>
                         </StackPanel>
                     </Expander.Header>

@@ -137,7 +137,7 @@
                                         <Canvas x:Name="CanvasTimeline" ClipToBounds="True" MinHeight="40" Background="Transparent">
                                             <!-- Timeline events will be added here dynamically -->
                                             <TextBlock Text="Drag features here to add them to the timeline"
-                                                   Foreground="#555" FontSize="10" FontStyle="Italic"
+                                                   Foreground="{StaticResource DarkGrayBrush}" FontSize="10" FontStyle="Italic"
                                                    Canvas.Left="8" Canvas.Top="12"
                                                    x:Name="TxtTimelineHint"/>
                                         </Canvas>
@@ -233,7 +233,7 @@
                                 <TextBox x:Name="TxtDescription" Grid.Row="1"
                                          Height="55" TextWrapping="Wrap" AcceptsReturn="True"
                                          Background="{StaticResource PanelBgBrush}" Foreground="{StaticResource TextLightBrush}"
-                                         BorderBrush="#353555" BorderThickness="1"
+                                         BorderBrush="{StaticResource SessionButtonBackgroundBrush}" BorderThickness="1"
                                          Padding="8" FontSize="11" VerticalScrollBarVisibility="Auto"
                                          ToolTip="Enter a description for your session"/>
                             </Grid>
@@ -254,7 +254,7 @@
         </Popup>
 
         <!-- Tutorial Overlay -->
-        <Border x:Name="TutorialOverlay" Visibility="Collapsed" Background="#E0000000" CornerRadius="12">
+        <Border x:Name="TutorialOverlay" Visibility="Collapsed" Background="{StaticResource OverlayBlackTransparentBrush}" CornerRadius="12">
             <Grid>
                 <!-- Close on background click -->
                 <Border Background="Transparent" MouseLeftButtonDown="TutorialOverlay_Close"/>
@@ -290,7 +290,7 @@
                                 <Border Background="{StaticResource PanelBgBrush}" CornerRadius="8" Padding="15" Margin="0,0,0,12">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                            <Border Background="#4CAF50" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
+                                            <Border Background="{StaticResource PrimaryActionGreenBrush}" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
                                                 <TextBlock Text="1" Foreground="White" FontWeight="Bold"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
@@ -306,7 +306,7 @@
                                 <Border Background="{StaticResource PanelBgBrush}" CornerRadius="8" Padding="15" Margin="0,0,0,12">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                            <Border Background="#2196F3" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
+                                            <Border Background="{StaticResource PrimaryActionBlueBrush}" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
                                                 <TextBlock Text="2" Foreground="White" FontWeight="Bold"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
@@ -322,7 +322,7 @@
                                 <Border Background="{StaticResource PanelBgBrush}" CornerRadius="8" Padding="15" Margin="0,0,0,12">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                            <Border Background="#FF9800" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
+                                            <Border Background="{StaticResource PrimaryActionOrangeBrush}" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
                                                 <TextBlock Text="3" Foreground="White" FontWeight="Bold"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
@@ -338,7 +338,7 @@
                                 <Border Background="{StaticResource PanelBgBrush}" CornerRadius="8" Padding="15" Margin="0,0,0,12">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                            <Border Background="#9C27B0" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
+                                            <Border Background="{StaticResource PrimaryActionPurpleBrush}" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
                                                 <TextBlock Text="4" Foreground="White" FontWeight="Bold"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
@@ -351,18 +351,18 @@
                                 </Border>
 
                                 <!-- Tip -->
-                                <Border Background="#203A20" CornerRadius="8" Padding="15" BorderBrush="#4CAF50" BorderThickness="1">
+                                <Border Background="{StaticResource PrimaryActionDarkGreenBrush}" CornerRadius="8" Padding="15" BorderBrush="{StaticResource PrimaryActionGreenBrush}" BorderThickness="1">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                            <Border Background="#4CAF50" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
+                                            <Border Background="{StaticResource PrimaryActionGreenBrush}" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
                                                 <TextBlock Text="*" Foreground="White" FontWeight="Bold" FontSize="14"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
-                                            <TextBlock Text="Full Session Coverage" Foreground="#4CAF50" FontSize="14" FontWeight="SemiBold"
+                                            <TextBlock Text="Full Session Coverage" Foreground="{StaticResource PrimaryActionGreenBrush}" FontSize="14" FontWeight="SemiBold"
                                                        VerticalAlignment="Center"/>
                                         </StackPanel>
                                         <TextBlock Text="To make an effect last the entire session, simply drag its right edge all the way to the end of the timeline."
-                                                   Foreground="#A5D6A7" FontSize="13" TextWrapping="Wrap" Margin="34,0,0,0"/>
+                                                   Foreground="{StaticResource SuccessGreenMutedBrush}" FontSize="13" TextWrapping="Wrap" Margin="34,0,0,0"/>
                                     </StackPanel>
                                 </Border>
                             </StackPanel>

@@ -21,7 +21,7 @@
 
             <!-- Card Image -->
             <Border Grid.Row="0" CornerRadius="12" Margin="0,0,0,15" HorizontalAlignment="Center"
-                    Background="#252540" Padding="5">
+                    Background="{StaticResource CornerGifOptionPanelBackgroundBrush}" Padding="5">
                 <Image x:Name="ImgCard" Width="200" Height="140" Stretch="UniformToFill"
                        RenderOptions.BitmapScalingMode="HighQuality">
                     <Image.Clip>
@@ -41,7 +41,7 @@
             </StackPanel>
             
             <!-- Stats -->
-            <Border Grid.Row="2" Background="#252540" CornerRadius="12" Padding="20" Margin="0,20">
+            <Border Grid.Row="2" Background="{StaticResource CornerGifOptionPanelBackgroundBrush}" CornerRadius="12" Padding="20" Margin="0,20">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>

@@ -48,7 +48,7 @@
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsChecked" Value="True">
                                                 <Setter TargetName="check" Property="Visibility" Value="Visible"/>
-                                                <Setter TargetName="border" Property="Background" Value="#3A2040"/>
+                                                <Setter TargetName="border" Property="Background" Value="{StaticResource GridDeepVioletBrush}"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -87,7 +87,7 @@
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter Property="Background" Value="#303050"/>
+                                                <Setter Property="Background" Value="{StaticResource GridMutedBlueBrush}"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -101,7 +101,7 @@
                         Click="BtnConfirm_Click" IsEnabled="False">
                     <Button.Style>
                         <Style TargetType="Button">
-                            <Setter Property="Background" Value="#FF4757"/>
+                            <Setter Property="Background" Value="{StaticResource WarningCrimsonBrush}"/>
                             <Setter Property="Foreground" Value="White"/>
                             <Setter Property="FontWeight" Value="Bold"/>
                             <Setter Property="FontSize" Value="15"/>
@@ -116,7 +116,7 @@
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter Property="Background" Value="#FF6B81"/>
+                                                <Setter Property="Background" Value="{StaticResource WarningOrangeBrush}"/>
                                             </Trigger>
                                             <Trigger Property="IsEnabled" Value="False">
                                                 <Setter TargetName="border" Property="Opacity" Value="0.4"/>

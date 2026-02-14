@@ -40,7 +40,7 @@
                                    FontSize="16" HorizontalAlignment="Center" Margin="0,0,0,30"/>
 
                         <Button x:Name="BtnSelectLovense" Width="280" Height="80"
-                                Background="#2D2D4A" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2"
+                                Background="{StaticResource HapticsGridBrush}" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2"
                                 Cursor="Hand" Click="BtnSelectLovense_Click" Margin="0,10">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="Lovense" Foreground="{StaticResource PinkBrush}" FontSize="20"
@@ -51,7 +51,7 @@
                         </Button>
 
                         <Button x:Name="BtnSelectButtplug" Width="280" Height="80"
-                                Background="#2D2D4A" BorderBrush="{StaticResource PatreonPurpleBrush}" BorderThickness="2"
+                                Background="{StaticResource HapticsGridBrush}" BorderBrush="{StaticResource PatreonPurpleBrush}" BorderThickness="2"
                                 Cursor="Hand" Click="BtnSelectButtplug_Click" Margin="0,10">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="Buttplug.io" Foreground="{StaticResource PatreonPurpleBrush}" FontSize="20"
@@ -86,7 +86,7 @@
                                 <Run>3. Find and tap </Run>
                                 <Run Foreground="{StaticResource PinkBrush}" FontWeight="Bold">Game Mode</Run>
                             </TextBlock>
-                            <Border Background="#2D2D4A" CornerRadius="8" Padding="10" MaxHeight="400">
+                            <Border Background="{StaticResource HapticsGridBrush}" CornerRadius="8" Padding="10" MaxHeight="400">
                                 <Image x:Name="ImgLovenseStep1" Stretch="Uniform"
                                        Source="Resources/haptics_guide/lovense_step1.png"/>
                             </Border>
@@ -115,7 +115,7 @@
                                 <Run Foreground="{StaticResource PinkBrush}" FontWeight="Bold">Port</Run>
                                 <Run> number (usually 20010)</Run>
                             </TextBlock>
-                            <Border Background="#2D2D4A" CornerRadius="8" Padding="10" MaxHeight="400">
+                            <Border Background="{StaticResource HapticsGridBrush}" CornerRadius="8" Padding="10" MaxHeight="400">
                                 <Image x:Name="ImgLovenseStep2" Stretch="Uniform"
                                        Source="Resources/haptics_guide/lovense_step2.png"/>
                             </Border>
@@ -132,7 +132,7 @@
                             <TextBlock Text="Enter Connection URL" Foreground="White"
                                        FontSize="16" FontWeight="Bold" Margin="0,0,0,15"/>
 
-                            <Border Background="#2D2D4A" CornerRadius="8" Padding="20" Margin="0,0,0,20">
+                            <Border Background="{StaticResource HapticsGridBrush}" CornerRadius="8" Padding="20" Margin="0,0,0,20">
                                 <StackPanel>
                                     <TextBlock Text="In the Conditioning Control Panel:" Foreground="White"
                                                FontSize="14" Margin="0,0,0,15"/>
@@ -152,7 +152,7 @@
 
                                     <TextBlock Text="Example:" Foreground="{StaticResource TextMutedBrush}" FontSize="12" Margin="0,5,0,5"/>
                                     <Border Background="{StaticResource DarkerBgBrush}" CornerRadius="4" Padding="10">
-                                        <TextBlock Text="http://192.168.1.104:20010" Foreground="#00FF00"
+                                        <TextBlock Text="http://192.168.1.104:20010" Foreground="{StaticResource HapticsSuccessGreenBrush}"
                                                    FontSize="14" FontFamily="Consolas"
                                                    HorizontalAlignment="Center"/>
                                     </Border>
@@ -192,7 +192,7 @@
                                 <Run Foreground="{StaticResource PatreonPurpleBrush}" FontWeight="Bold">Start Scanning</Run>
                                 <Run> to find devices</Run>
                             </TextBlock>
-                            <Border Background="#2D2D4A" CornerRadius="8" Padding="10" MaxHeight="400">
+                            <Border Background="{StaticResource HapticsGridBrush}" CornerRadius="8" Padding="10" MaxHeight="400">
                                 <Image x:Name="ImgButtplugStep1" Stretch="Uniform"
                                        Source="Resources/haptics_guide/buttplug_step1.png"/>
                             </Border>
@@ -217,9 +217,9 @@
                                 <Run> list</Run>
                                 <LineBreak/>
                                 <Run>3. The device should show as </Run>
-                                <Run Foreground="#00FF00">connected</Run>
+                                <Run Foreground="{StaticResource HapticsSuccessGreenBrush}">connected</Run>
                             </TextBlock>
-                            <Border Background="#2D2D4A" CornerRadius="8" Padding="10" MaxHeight="400">
+                            <Border Background="{StaticResource HapticsGridBrush}" CornerRadius="8" Padding="10" MaxHeight="400">
                                 <Image x:Name="ImgButtplugStep2" Stretch="Uniform"
                                        Source="Resources/haptics_guide/buttplug_step2.png"/>
                             </Border>
@@ -236,7 +236,7 @@
                             <TextBlock Text="Enter Connection URL" Foreground="White"
                                        FontSize="16" FontWeight="Bold" Margin="0,0,0,15"/>
 
-                            <Border Background="#2D2D4A" CornerRadius="8" Padding="20" Margin="0,0,0,20">
+                            <Border Background="{StaticResource HapticsGridBrush}" CornerRadius="8" Padding="20" Margin="0,0,0,20">
                                 <StackPanel>
                                     <TextBlock Text="In the Conditioning Control Panel:" Foreground="White"
                                                FontSize="14" Margin="0,0,0,15"/>
@@ -283,7 +283,7 @@
 
                 <Button x:Name="BtnPrevious" Content="Previous"
                         Grid.Column="0" HorizontalAlignment="Left"
-                        Background="#353555" Foreground="White"
+                        Background="{StaticResource SessionButtonBackgroundBrush}" Foreground="White"
                         BorderThickness="0" Padding="20,10" Margin="15,10"
                         FontSize="13" Cursor="Hand" Visibility="Collapsed"
                         Click="BtnPrevious_Click"/>
@@ -305,7 +305,7 @@
 
                 <Button x:Name="BtnDone" Content="Done"
                         Grid.Column="2" HorizontalAlignment="Right"
-                        Background="#00AA00" Foreground="White"
+                        Background="{StaticResource SuccessGreenBackgroundBrush}" Foreground="White"
                         BorderThickness="0" Padding="20,10" Margin="15,10"
                         FontSize="13" Cursor="Hand" Visibility="Collapsed"
                         Click="BtnClose_Click"/>

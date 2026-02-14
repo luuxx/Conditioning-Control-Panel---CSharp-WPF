@@ -15,11 +15,11 @@
 
     <Grid x:Name="RootGrid" MouseLeftButtonDown="RootGrid_MouseLeftButtonDown">
         <!-- Click blocker - nearly transparent to block clicks through AllowsTransparency window -->
-        <Rectangle Fill="#01000000" IsHitTestVisible="True"/>
+        <Rectangle Fill="{StaticResource TutorialOverlayBackgroundBrush}" IsHitTestVisible="True"/>
         <Canvas x:Name="SpotlightCanvas" Background="Transparent" IsHitTestVisible="False"/>
 
         <Border x:Name="TextPanel"
-                Background="#F0252542"
+                Background="{StaticResource HelpTooltipBackgroundBrush}"
                 CornerRadius="12"
                 BorderBrush="{StaticResource PinkBrush}"
                 BorderThickness="2"
@@ -61,7 +61,7 @@
                 <TextBlock x:Name="TxtDescription"
                            Grid.Row="2"
                            Text="Description text goes here..."
-                           Foreground="#C0C0C0"
+                           Foreground="{StaticResource LightGrayBrush}"
                            FontSize="13"
                            TextWrapping="Wrap"
                            LineHeight="20"
@@ -128,7 +128,7 @@
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter Property="Foreground" Value="#A0A0B0"/>
+                                        <Setter Property="Foreground" Value="{StaticResource MutedPurpleHexBrush}"/>
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
@@ -163,7 +163,7 @@
                                             </Border>
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#20FF69B4"/>
+                                                    <Setter TargetName="border" Property="Background" Value="{StaticResource HelpButtonHoverBackgroundBrush}"/>
                                                 </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>

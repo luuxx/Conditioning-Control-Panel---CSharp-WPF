@@ -144,7 +144,7 @@
                         <Style TargetType="Button">
                             <Style.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="#505080"/>
+                                    <Setter Property="Background" Value="{StaticResource CompanionMutedBlueBrush}"/>
                                 </Trigger>
                             </Style.Triggers>
                         </Style>
