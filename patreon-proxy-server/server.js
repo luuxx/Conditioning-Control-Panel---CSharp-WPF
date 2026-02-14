@@ -2514,6 +2514,29 @@ app.post('/user/heartbeat', async (req, res) => {
             console.log(`Heartbeat created new profile for ${tierInfo.patron_name} (${userId})`);
         }
 
+        // Also update unified profile if one exists (for migrated users on older clients)
+        try {
+            const unifiedId = await redis.get(`${PATREON_USER_INDEX}${userId}`);
+            if (unifiedId) {
+                const unifiedData = await redis.get(`${UNIFIED_USER_PREFIX}${unifiedId}`);
+                if (unifiedData) {
+                    const unifiedUser = typeof unifiedData === 'string' ? JSON.parse(unifiedData) : unifiedData;
+                    unifiedUser.last_seen = new Date().toISOString();
+                    unifiedUser.updated_at = unifiedUser.last_seen;
+                    unifiedUser.last_heartbeat = {
+                        at: unifiedUser.last_seen,
+                        is_active: true,
+                        in_session: null,
+                        app_version: null
+                    };
+                    await redis.set(`${UNIFIED_USER_PREFIX}${unifiedId}`, JSON.stringify(unifiedUser));
+                }
+            }
+        } catch (e) {
+            // Non-critical — don't fail the heartbeat
+            console.error('Legacy heartbeat unified cross-update error:', e.message);
+        }
+
         res.json({ success: true });
     } catch (error) {
         console.error('Heartbeat error:', error.message);
@@ -3603,8 +3626,15 @@ app.get('/user/lookup', async (req, res) => {
         // Check allow_discord_dm from all profile sources
         const allowDiscordDm = profile.allow_discord_dm || patreonProfile?.allow_discord_dm || discordProfile?.allow_discord_dm;
 
+        // Privacy: never expose patron_name as display_name
+        let safeName = profile.display_name || null;
+        if (safeName && profile.patron_name && !profile.display_name_set_at &&
+            safeName.toLowerCase().trim() === profile.patron_name.toLowerCase().trim()) {
+            safeName = null;
+        }
+
         res.json({
-            display_name: profile.display_name,
+            display_name: safeName,
             level: profile.level || 1,
             xp: profile.xp || 0,
             total_bubbles_popped: profile.stats?.total_bubbles_popped || 0,
@@ -6431,11 +6461,18 @@ app.get('/v2/user/profile', async (req, res) => {
 
         const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
 
+        // Privacy: never expose patron_name as display_name
+        let safeName = user.display_name || null;
+        if (safeName && user.patron_name && !user.display_name_set_at &&
+            safeName.toLowerCase().trim() === user.patron_name.toLowerCase().trim()) {
+            safeName = null;
+        }
+
         res.json({
             success: true,
             user: {
                 unified_id: user.unified_id,
-                display_name: user.display_name,
+                display_name: safeName,
                 discord_id: user.discord_id,
                 patreon_id: user.patreon_id,
                 level: user.level,
@@ -11023,9 +11060,16 @@ app.post('/v2/remote/start', async (req, res) => {
         const now = new Date().toISOString();
         const expiresAt = new Date(Date.now() + REMOTE_SESSION_TTL * 1000).toISOString();
 
+        // Privacy: if display_name matches patron_name and wasn't explicitly set, don't expose it
+        let safeName = user.display_name || null;
+        if (safeName && user.patron_name && !user.display_name_set_at &&
+            safeName.toLowerCase().trim() === user.patron_name.toLowerCase().trim()) {
+            safeName = null;
+        }
+
         const session = {
             unified_id,
-            display_name: user.display_name || 'Anonymous',
+            display_name: safeName || 'Anonymous',
             tier,
             created_at: now,
             controller_connected: false,
