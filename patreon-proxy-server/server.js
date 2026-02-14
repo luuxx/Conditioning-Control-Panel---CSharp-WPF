@@ -5942,9 +5942,10 @@ app.post('/v2/auth/patreon', async (req, res) => {
                 // Link the Patreon ID to the existing account
                 const user = emailLookup.user;
                 user.patreon_id = patreonId;
-                user.patreon_tier = tierInfo.tier;
+                const autoLinkWhitelisted = isWhitelisted(patronEmail, patronName, user.display_name);
+                user.patreon_tier = autoLinkWhitelisted ? Math.max(tierInfo.tier, 2) : tierInfo.tier;
                 user.patreon_is_active = tierInfo.is_active;
-                user.patreon_is_whitelisted = isWhitelisted(patronEmail, patronName, user.display_name);
+                user.patreon_is_whitelisted = autoLinkWhitelisted;
                 user.updated_at = new Date().toISOString();
                 await redis.set(`user:${existingUnifiedId}`, JSON.stringify(user));
                 await redis.set(indexKey, existingUnifiedId);
@@ -5959,9 +5960,10 @@ app.post('/v2/auth/patreon', async (req, res) => {
                 const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
 
                 // Update Patreon status + auto-fix missing fields from V1 migration
-                user.patreon_tier = tierInfo.tier;
+                const existingWhitelisted = isWhitelisted(patronEmail, patronName, user.display_name);
+                user.patreon_tier = existingWhitelisted ? Math.max(tierInfo.tier, 2) : tierInfo.tier;
                 user.patreon_is_active = tierInfo.is_active;
-                user.patreon_is_whitelisted = isWhitelisted(patronEmail, patronName, user.display_name);
+                user.patreon_is_whitelisted = existingWhitelisted;
                 user.last_seen = new Date().toISOString();
                 user.updated_at = new Date().toISOString();
                 const currentSeason = getCurrentSeason();
