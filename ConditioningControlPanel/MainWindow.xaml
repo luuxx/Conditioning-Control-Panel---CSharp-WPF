@@ -1124,7 +1124,7 @@
                 
                 <!-- Icon and Title -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
-                    <TextBlock Text="??" FontSize="16" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="💗" FontSize="16" Margin="0,0,8,0" VerticalAlignment="Center"/>
                     <TextBlock x:Name="TxtTitleBarVersion" Text="Conditioning Control Panel" Foreground="White" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
                 </StackPanel>
                 
@@ -1352,7 +1352,7 @@
                             </Style>
                         </ComboBox.ItemContainerStyle>
                     </ComboBox>
-                    <Button x:Name="BtnUpdateAvailable" Content="?? v5.5.11 IS OUT! ??"
+                    <Button x:Name="BtnUpdateAvailable" Content="💖 v5.5.11 IS OUT! 💖"
                             Click="BtnUpdateAvailable_Click" ToolTip="v5.5.11 - Temp File Cleanup"
                             FontSize="11" FontWeight="Bold" Cursor="Hand">
                         <Button.Style>
@@ -1654,7 +1654,7 @@
                         </Border.Effect>
                         <StackPanel>
                             <Grid Margin="0,0,0,2">
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="? Flash Images" Margin="0"/>
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="⚡ Flash Images" Margin="0"/>
                                 <Button x:Name="HelpBtnFlash" Style="{StaticResource HelpButtonStyle}" HorizontalAlignment="Right" Tag="FlashImages"/>
                             </Grid>
                             
@@ -1724,7 +1724,7 @@
                         </Border.Effect>
                         <StackPanel>
                             <Grid Margin="0,0,0,2">
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="?? Visuals" Margin="0"/>
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="👁 Visuals" Margin="0"/>
                                 <Button x:Name="HelpBtnVisuals" Style="{StaticResource HelpButtonStyle}" HorizontalAlignment="Right" Tag="Visuals"/>
                             </Grid>
                             
@@ -1767,9 +1767,9 @@
                                     ToolTip="When enabled, flash duration matches audio length.&#x0a;Disable to use manual duration slider.&#x0a;Audio disabled automatically above 60 flashes/hour.">
                                 <Grid>
                                     <CheckBox x:Name="ChkFlashAudio" IsChecked="True" Checked="ChkFlashAudio_Changed" Unchecked="ChkFlashAudio_Changed">
-                                        <TextBlock Text="?? Link to Audio Trigger" FontSize="12" FontWeight="SemiBold"/>
+                                        <TextBlock Text="📊 Link to Audio Trigger" FontSize="12" FontWeight="SemiBold"/>
                                     </CheckBox>
-                                    <TextBlock x:Name="TxtAudioWarning" Text="? Max 30/h" Foreground="{StaticResource OrangeAccentBrush}" FontSize="10" 
+                                    <TextBlock x:Name="TxtAudioWarning" Text="⚠ Max 30/h" Foreground="{StaticResource OrangeAccentBrush}" FontSize="10" 
                                                HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
                                 </Grid>
                             </Border>
@@ -1806,7 +1806,7 @@
                                 <TextBlock Style="{StaticResource SectionHeader}" Text="🎬 Mandatory Video"/>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button x:Name="HelpBtnVideo" Style="{StaticResource HelpButtonStyle}" Tag="Video" Margin="0,0,8,0"/>
-                                    <Button x:Name="BtnTestVideo" Content="🧪 Test" Style="{StaticResource OutlineButton}"
+                                    <Button x:Name="BtnTestVideo" Content="▶ Test" Style="{StaticResource OutlineButton}"
                                             Padding="10,4" Click="BtnTestVideo_Click"
                                             ToolTip="Play a random video now to test"/>
                                 </StackPanel>
@@ -1901,7 +1901,7 @@
                                 <TextBlock Style="{StaticResource SectionHeader}" Text="💭 Subliminals"/>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button x:Name="HelpBtnSubliminals" Style="{StaticResource HelpButtonStyle}" Tag="Subliminals" Margin="0,0,8,0"/>
-                                    <Button Content="💬" Style="{StaticResource OutlineButton}" Padding="6,3" Click="BtnManageMessages_Click" Margin="0,0,4,0"
+                                    <Button Content="📝" Style="{StaticResource OutlineButton}" Padding="6,3" Click="BtnManageMessages_Click" Margin="0,0,4,0"
                                             ToolTip="Edit subliminal messages"/>
                                     <Button Content="⚙" Style="{StaticResource OutlineButton}" Padding="6,3" Click="BtnSubliminalSettings_Click" Margin="0,0,8,0"
                                             ToolTip="Advanced subliminal visual settings"/>
@@ -1962,7 +1962,7 @@
                                     <Button Content="📂" Style="{StaticResource OutlineButton}"
                                             Padding="6,3" Click="BtnPickAssetsFolder_Click" Margin="0,0,4,0"
                                             ToolTip="Set custom assets folder"/>
-                                    <Button Content="📁 Assets" Style="{StaticResource OutlineButton}"
+                                    <Button Content="📚 Assets" Style="{StaticResource OutlineButton}"
                                             Padding="8,3" Click="BtnOpenAssetsFolder_Click"
                                             ToolTip="Open assets folder (images, videos, sounds)"/>
                                 </StackPanel>
@@ -2011,7 +2011,7 @@
                                 <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,3"
                                             ToolTip="? DANGER: Completely disables panic key!&#x0a;You won't be able to emergency stop.&#x0a;Use with extreme caution.">
                                     <CheckBox x:Name="ChkNoPanic" Style="{StaticResource ToggleStyle}" Checked="ChkNoPanic_Checked" Unchecked="ChkNoPanic_Unchecked"/>
-                                    <TextBlock Style="{StaticResource SettingLabel}" Text="? No Panic" Margin="6,0,0,0" Foreground="{StaticResource WarningBrush}"/>
+                                    <TextBlock Style="{StaticResource SettingLabel}" Text="⚠ No Panic" Margin="6,0,0,0" Foreground="{StaticResource WarningBrush}"/>
                                 </StackPanel>
 
                                 <StackPanel Grid.Row="3" Grid.Column="0" Orientation="Horizontal" Margin="0,3"
@@ -2028,19 +2028,19 @@
                                 <TextBlock Text="Startup Video:" Foreground="{StaticResource TextMutedBrush}" FontSize="10" VerticalAlignment="Center" Width="75"/>
                                 <TextBlock x:Name="TxtStartupVideo" Text="(Random)" Foreground="{StaticResource TextLightBrush}" FontSize="10"
                                            VerticalAlignment="Center" Width="90" TextTrimming="CharacterEllipsis"/>
-                                <Button Content="??" Background="{StaticResource TransparentWhiteBrush}" Foreground="White" BorderThickness="0"
+                                <Button Content="📁" Background="{StaticResource TransparentWhiteBrush}" Foreground="White" BorderThickness="0"
                                         Padding="5,1" Margin="4,0,0,0" Cursor="Hand" Click="BtnSelectStartupVideo_Click"
                                         ToolTip="Browse for startup video"/>
-                                <Button Content="?" Background="{StaticResource DangerBrush}" Foreground="White" BorderThickness="0"
+                                <Button Content="✕" Background="{StaticResource DangerBrush}" Foreground="White" BorderThickness="0"
                                         Padding="5,1" Margin="4,0,0,0" Cursor="Hand" Click="BtnClearStartupVideo_Click"
                                         ToolTip="Clear selection (use random)"/>
                             </StackPanel>
 
                             <!-- Gaming Tip -->
                             <Grid Margin="0,5,0,0">
-                                <TextBlock Text="?? Use Borderless Windowed for overlays" Foreground="{StaticResource HelpButtonForegroundBrush}" FontSize="10" VerticalAlignment="Center"
+                                <TextBlock Text="💡 Use Borderless Windowed for overlays" Foreground="{StaticResource HelpButtonForegroundBrush}" FontSize="10" VerticalAlignment="Center"
                                            ToolTip="Exclusive fullscreen games block overlays.&#x0a;Use Borderless Windowed mode instead."/>
-                                <Button x:Name="BtnPanicKey" Content="?? Escape" Style="{StaticResource OutlineButton}"
+                                <Button x:Name="BtnPanicKey" Content="🔑 Escape" Style="{StaticResource OutlineButton}"
                                         HorizontalAlignment="Right" Padding="10,4" Click="BtnPanicKey_Click" ToolTip="Click to change panic key"/>
                             </Grid>
                         </StackPanel>
@@ -2228,7 +2228,7 @@
                                 <Grid x:Name="BrowserContainer" Grid.Row="1">
                                     <!-- WebView2 will be added here programmatically -->
                                     <TextBlock x:Name="BrowserLoadingText"
-                                               Text="?? Connecting to Bambi Cloud..."
+                                               Text="🌐 Connecting to Bambi Cloud..."
                                                Foreground="{StaticResource TextMutedBrush}" FontSize="12"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Grid>
@@ -2254,7 +2254,7 @@
                         </Border.Effect>
                         <StackPanel>
                             <Grid>
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="?? Audio" FontSize="12"/>
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="📊 Audio" FontSize="12"/>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                     <Button x:Name="HelpBtnAudio" Style="{StaticResource HelpButtonStyle}" Tag="Audio" Margin="0,0,8,0"/>
                                     <TextBlock Text="Duck" Foreground="{StaticResource TextMutedBrush}" FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0"/>
@@ -2330,12 +2330,12 @@
                         </Border.Effect>
                         <StackPanel>
                             <Grid Margin="0,0,0,6">
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="?? Quick Links" FontSize="12" Margin="0"/>
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="🔗 Quick Links" FontSize="12" Margin="0"/>
                                 <Button x:Name="HelpBtnQuickLinks" Style="{StaticResource HelpButtonStyle}" HorizontalAlignment="Right" Tag="QuickLinks"/>
                             </Grid>
 
                             <!-- Unified Login Button -->
-                            <Button x:Name="BtnUnifiedLogin" Content="?? Login"
+                            <Button x:Name="BtnUnifiedLogin" Content="🔐 Login"
                                     Click="BtnUnifiedLogin_Click"
                                     Padding="8,12" Margin="0,0,0,6"
                                     ToolTip="Login with Discord or Patreon">
@@ -2409,7 +2409,7 @@
                                                         <Border x:Name="border" Background="{StaticResource DiscordBrush}" CornerRadius="5"
                                                                 Padding="0,4" HorizontalAlignment="Stretch">
                                                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                                                <TextBlock Text="??" FontSize="11" VerticalAlignment="Center"/>
+                                                                <TextBlock Text="💬" FontSize="11" VerticalAlignment="Center"/>
                                                                 <TextBlock Text="Join Discord" Foreground="White" FontSize="10" FontWeight="Bold"
                                                                            VerticalAlignment="Center" Margin="5,0,0,0"/>
                                                             </StackPanel>
@@ -2464,7 +2464,7 @@
                 </Border.Effect>
                 <Canvas x:Name="MarqueeCanvas" ClipToBounds="True">
                     <TextBlock x:Name="MarqueeText"
-                               Text="v5.2.1 IS OUT - THANKS TO ALL THE 100+ PATREONS AND TO ALL THE SUPPORTERS/TESTERS ????"
+                               Text="v5.2.1 IS OUT - THANKS TO ALL THE 100+ PATREONS AND TO ALL THE SUPPORTERS/TESTERS 💖🔒"
                                FontFamily="Impact" FontSize="28" FontWeight="Bold"
                                Foreground="{StaticResource PinkBrush}" Canvas.Top="8">
                         <TextBlock.Effect>
@@ -7688,7 +7688,7 @@
                             Height="50" FontSize="18" Click="BtnStart_Click"
                             ToolTip="Start/Stop the conditioning engine">
                         <StackPanel x:Name="StartButtonContent" Orientation="Horizontal" Height="24" VerticalAlignment="Center">
-                            <TextBlock x:Name="TxtStartIcon" Text="?" FontSize="16" Width="20" Margin="0,0,10,0" VerticalAlignment="Center" TextAlignment="Center"/>
+                            <TextBlock x:Name="TxtStartIcon" Text="▶" FontSize="16" Width="20" Margin="0,0,10,0" VerticalAlignment="Center" TextAlignment="Center"/>
                             <TextBlock x:Name="TxtStartLabel" Text="START" FontSize="18" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
@@ -7724,10 +7724,10 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0" Content="?? Save" Style="{StaticResource PinkButton}" 
+                    <Button Grid.Column="0" Content="💾 Save" Style="{StaticResource PinkButton}" 
                             Height="50" FontSize="16" Margin="0,0,5,0" Click="BtnSave_Click"
                             ToolTip="Save all settings to disk"/>
-                    <Button Grid.Column="1" Content="?? Exit" Height="50" FontSize="16" Margin="5,0,0,0" Click="BtnExit_Click"
+                    <Button Grid.Column="1" Content="🚪 Exit" Height="50" FontSize="16" Margin="5,0,0,0" Click="BtnExit_Click"
                             ToolTip="Exit the application completely">
                         <Button.Style>
                             <Style TargetType="Button">

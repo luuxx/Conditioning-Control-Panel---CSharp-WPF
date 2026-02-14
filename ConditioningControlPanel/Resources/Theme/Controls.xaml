@@ -78,7 +78,7 @@
                 <ControlTemplate TargetType="CheckBox">
                     <Grid>
                         <Border x:Name="track" Width="44" Height="22" CornerRadius="11" 
-                                    Background="{StaticResource ControlBackgroundBrush}" Cursor="Hand"/>
+                                    Background="{StaticResource CheckBoxBackgroundBrush}" Cursor="Hand"/>
                         <Border x:Name="thumb" Width="18" Height="18" CornerRadius="9" 
                                     Background="White" HorizontalAlignment="Left" Margin="2,0,0,0"/>
                     </Grid>

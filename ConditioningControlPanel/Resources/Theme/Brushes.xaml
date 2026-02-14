@@ -12,7 +12,8 @@
     <SolidColorBrush x:Key="PanelAccentBrush" Color="{StaticResource PanelAccentColor}"/>
     <SolidColorBrush x:Key="PanelAccentHoverBrush" Color="{StaticResource PanelAccentHoverColor}"/>
     <SolidColorBrush x:Key="PreviewBgBrush" Color="{StaticResource PreviewBgColor}"/>
-
+    
+    <SolidColorBrush x:Key="TransparentDangerBrush" Color="{StaticResource Danger2Color}"/>
     <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}"/>
     <SolidColorBrush x:Key="TransparentPinkBrush" Color="{StaticResource TransparentPinkColor}"/>
     <SolidColorBrush x:Key="PinkButtonHoveredBrush" Color="{StaticResource PinkButtonHoveredColor}"/>
@@ -79,6 +80,7 @@
     <SolidColorBrush x:Key="UpdateButtonBorderBrush" Color="{StaticResource UpdateButtonBorderColor}"/>
     <SolidColorBrush x:Key="UpdateButtonHoverBorderBrush" Color="{StaticResource UpdateButtonHoverBorderColor}"/>
     <SolidColorBrush x:Key="ContentModeToggleBackgroundBrush" Color="{StaticResource ContentModeToggleBackgroundColor}"/>
+    <SolidColorBrush x:Key="ContentModeToggleBorderBrush" Color="{StaticResource ContentModeToggleBorderColor}"/>
     <LinearGradientBrush x:Key="VideoSectionBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
         <GradientStop Color="{StaticResource DeepBlueColor}" Offset="0"/>
         <GradientStop Color="{StaticResource NavyBlueColor}" Offset="1"/>
@@ -159,7 +161,8 @@
     <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="{StaticResource OverlayBlackColor}"/>
     <SolidColorBrush x:Key="BlackOverlayBrush" Color="{StaticResource BlackOverlayColor}"/>
     <SolidColorBrush x:Key="TutorialOverlayBackgroundBrush" Color="{StaticResource TutorialOverlayBackgroundColor}"/>
-
+    <SolidColorBrush x:Key="CheckBoxBackgroundBrush" Color="{StaticResource CheckBoxBackgroundColor}"/>
+    
     <!-- Unique Component Brushes -->
     <!-- MainWindow -->
     <SolidColorBrush x:Key="LoggedInStatusPanelBackgroundBrush" Color="{StaticResource PanelBgColor}"/>

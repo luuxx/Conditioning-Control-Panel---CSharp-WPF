@@ -13,12 +13,12 @@
     <Color x:Key="PanelAccentColor">#FF404060</Color>
     <Color x:Key="PanelAccentHoverColor">#FF505080</Color>
     <Color x:Key="PreviewBgColor">#FF101020</Color>
-    <Color x:Key="MiniGameBackgroundColor">#FF101020</Color>
+    <Color x:Key="MiniGameBackgroundColor">#1E1E3A</Color>
 
     <Color x:Key="DangerColor">#FFE53935</Color>
     <Color x:Key="DangerHoverColor">#FFD32F2F</Color>
     <Color x:Key="TransparentPinkColor">#30FF69B4</Color>
-
+    <Color x:Key="Danger2Color">#40FF6B6B</Color>
     <Color x:Key="PinkButtonHoveredColor">#FFFF8FAF</Color>
 
     <!-- Patreon palette -->
@@ -54,6 +54,7 @@
     <Color x:Key="MainTutorialOverlayBackgroundColor">#E8000000</Color>
     <Color x:Key="GlobalDropOverlayBackgroundColor">#D0000000</Color>
 
+    <Color x:Key="CheckBoxBackgroundColor">#404060</Color>
     <Color x:Key="GoldColor">#FFD700</Color>
     <Color x:Key="GoldTransparentColor">#30FFD700</Color>
     <Color x:Key="GoldBorderTransparentColor">#AAFFD700</Color>
@@ -91,6 +92,7 @@
     <Color x:Key="UpdateButtonBorderColor">#FF3D3D60</Color>
     <Color x:Key="UpdateButtonHoverBorderColor">#FF5D5D80</Color>
     <Color x:Key="ContentModeToggleBackgroundColor">#FF252545</Color>
+    <Color x:Key="ContentModeToggleBorderColor">#252545</Color>
     <Color x:Key="SessionButtonBackgroundColor">#FF353555</Color>
     <Color x:Key="SessionButtonForegroundColor">#FF909090</Color>
     <Color x:Key="SessionDeleteButtonHoverColor">#FFE81123</Color>
