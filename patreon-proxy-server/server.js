@@ -2282,7 +2282,9 @@ app.get('/user/profile', async (req, res) => {
                         stats: unifiedUser.stats || {},
                         updated_at: unifiedUser.updated_at,
                         reset_weekly_quest: unifiedUser.reset_weekly_quest || false,
-                        reset_daily_quest: unifiedUser.reset_daily_quest || false
+                        reset_daily_quest: unifiedUser.reset_daily_quest || false,
+                        skill_points: unifiedUser.skill_points || 0,
+                        unlocked_skills: unifiedUser.unlocked_skills || []
                     }
                 });
             }
@@ -2896,7 +2898,9 @@ app.get('/user/profile-discord', async (req, res) => {
                         level: unifiedUser.level || 1,
                         achievements: unifiedUser.achievements || [],
                         stats: unifiedUser.stats || {},
-                        updated_at: unifiedUser.updated_at
+                        updated_at: unifiedUser.updated_at,
+                        skill_points: unifiedUser.skill_points || 0,
+                        unlocked_skills: unifiedUser.unlocked_skills || []
                     }
                 });
             }
@@ -8084,8 +8088,9 @@ app.post('/v2/user/sync', async (req, res) => {
             is_season0_og: user.is_season0_og || false,
             // Include oopsie insurance season usage
             oopsie_used_season: user.oopsie_used_season || null,
-            // Always include skill_points so client stays in sync
+            // Always include skill_points and unlocked_skills so client stays in sync
             skill_points: user.skill_points || 0,
+            unlocked_skills: user.unlocked_skills || [],
             // Include force_skills_reset flag
             force_skills_reset: pendingForceSkillsReset,
             // Level reset flag — tells client to accept server level/xp
@@ -10931,7 +10936,6 @@ const REMOTE_TIER_ACTIONS = {
         'show_spiral', 'stop_spiral',
         'set_pink_opacity', 'set_spiral_opacity',
         'start_bubbles', 'stop_bubbles',
-        'start_engine', 'stop_engine',
         'trigger_panic'
     ],
     standard: [
@@ -10940,11 +10944,9 @@ const REMOTE_TIER_ACTIONS = {
         'show_spiral', 'stop_spiral',
         'set_pink_opacity', 'set_spiral_opacity',
         'start_bubbles', 'stop_bubbles',
-        'start_engine', 'stop_engine',
         'trigger_panic',
         'trigger_video', 'trigger_haptic',
-        'duck_audio', 'unduck_audio',
-        'enable_videos', 'disable_videos'
+        'duck_audio', 'unduck_audio'
     ],
     full: [
         'trigger_flash', 'trigger_subliminal',
@@ -10952,11 +10954,9 @@ const REMOTE_TIER_ACTIONS = {
         'show_spiral', 'stop_spiral',
         'set_pink_opacity', 'set_spiral_opacity',
         'start_bubbles', 'stop_bubbles',
-        'start_engine', 'stop_engine',
         'trigger_panic',
         'trigger_video', 'trigger_haptic',
         'duck_audio', 'unduck_audio',
-        'enable_videos', 'disable_videos',
         'start_autonomy', 'stop_autonomy',
         'trigger_bubble_count',
         'enable_strict_lock', 'disable_strict_lock',
