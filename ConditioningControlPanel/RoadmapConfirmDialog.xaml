@@ -9,7 +9,7 @@
         AllowsTransparency="True"
         Background="Transparent">
 
-    <Border Background="#1A1A2E" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2" CornerRadius="12">
+    <Border Background="{StaticResource DarkerBgBrush}" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2" CornerRadius="12">
         <Grid Margin="25">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
@@ -26,12 +26,12 @@
 
             <!-- Message Content -->
             <StackPanel Grid.Row="1">
-                <TextBlock Text="Does this photo show you completing:" Foreground="#E0E0E0" FontSize="14"
+                <TextBlock Text="Does this photo show you completing:" Foreground="{StaticResource TextLightBrush}" FontSize="14"
                            Margin="0,0,0,10"/>
                 <TextBlock x:Name="TxtStepTitle" Foreground="{StaticResource PinkBrush}" FontSize="16"
                            FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,15"/>
-                <Border Background="#252542" CornerRadius="8" Padding="12">
-                    <TextBlock x:Name="TxtRequirement" Foreground="#AAAAAA" FontSize="13"
+                <Border Background="{StaticResource PanelBgBrush}" CornerRadius="8" Padding="12">
+                    <TextBlock x:Name="TxtRequirement" Foreground="{StaticResource TextSilverBrush}" FontSize="13"
                                TextWrapping="Wrap"/>
                 </Border>
             </StackPanel>
@@ -41,7 +41,7 @@
                 <Button Content="No, Choose Another" Click="BtnNo_Click" Cursor="Hand" Margin="0,0,10,0">
                     <Button.Style>
                         <Style TargetType="Button">
-                            <Setter Property="Background" Value="#404060"/>
+                            <Setter Property="Background" Value="{StaticResource PanelAccentBrush}"/>
                             <Setter Property="Foreground" Value="White"/>
                             <Setter Property="FontWeight" Value="Bold"/>
                             <Setter Property="FontSize" Value="13"/>

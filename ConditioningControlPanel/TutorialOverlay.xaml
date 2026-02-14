@@ -28,7 +28,7 @@
                 HorizontalAlignment="Left"
                 VerticalAlignment="Top">
             <Border.Effect>
-                <DropShadowEffect Color="#FF69B4" BlurRadius="20" ShadowDepth="0" Opacity="0.4"/>
+                <DropShadowEffect Color="{StaticResource PinkColor}" BlurRadius="20" ShadowDepth="0" Opacity="0.4"/>
             </Border.Effect>
 
             <Grid>
@@ -43,12 +43,12 @@
                 <TextBlock x:Name="TxtStepCounter"
                            Grid.Row="0"
                            Text="Step 1 of 6"
-                           Foreground="#808090"
+                           Foreground="{StaticResource TextMutedBrush}"
                            FontSize="11"
                            Margin="0,0,0,8"/>
 
                 <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,12">
-                    <TextBlock x:Name="TxtIcon" Text="~" FontSize="24" Foreground="#FF69B4" FontWeight="Bold" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TxtIcon" Text="~" FontSize="24" Foreground="{StaticResource PinkBrush}" FontWeight="Bold" Margin="0,0,10,0" VerticalAlignment="Center"/>
                     <TextBlock x:Name="TxtTitle"
                                Text="Welcome!"
                                Foreground="{StaticResource PinkBrush}"
@@ -116,7 +116,7 @@
                             Content="Skip Tutorial"
                             Click="BtnSkip_Click"
                             Background="Transparent"
-                            Foreground="#808090"
+                            Foreground="{StaticResource TextMutedBrush}"
                             BorderThickness="0"
                             FontSize="12"
                             Cursor="Hand"

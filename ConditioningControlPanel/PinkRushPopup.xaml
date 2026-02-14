@@ -11,10 +11,10 @@
         WindowStartupLocation="Manual"
         MouseLeftButtonDown="Window_MouseLeftButtonDown">
 
-    <Border Background="#E0151530" CornerRadius="12" BorderBrush="#FF1493" BorderThickness="2"
+    <Border Background="#E0151530" CornerRadius="12" BorderBrush="{StaticResource DarkPinkBrush}" BorderThickness="2"
             Margin="10">
         <Border.Effect>
-            <DropShadowEffect Color="#FF1493" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
+            <DropShadowEffect Color="{StaticResource DarkPinkColor}" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
         </Border.Effect>
 
         <Grid Margin="15">
@@ -24,17 +24,17 @@
             </Grid.ColumnDefinitions>
 
             <!-- Skill Image -->
-            <Border Grid.Column="0" Width="80" Height="80" Background="#1A1A2E" CornerRadius="8" Margin="0,0,15,0">
+            <Border Grid.Column="0" Width="80" Height="80" Background="{StaticResource DarkerBgBrush}" CornerRadius="8" Margin="0,0,15,0">
                 <Image Source="pack://application:,,,/Resources/skills/pink_rush.png" Stretch="Uniform" Margin="5"/>
             </Border>
 
             <!-- Text Content -->
             <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                <TextBlock Text="⚡ PINK RUSH!" Foreground="#FF1493"
+                <TextBlock Text="⚡ PINK RUSH!" Foreground="{StaticResource DarkPinkBrush}"
                            FontWeight="Bold" FontSize="18" Margin="0,0,0,4"/>
                 <TextBlock Text="3x XP for 60 seconds!" Foreground="#FFB6C1"
                            FontSize="13" Margin="0,0,0,6"/>
-                <TextBlock x:Name="TxtCountdown" Text="60s remaining" Foreground="#AAAAAA"
+                <TextBlock x:Name="TxtCountdown" Text="60s remaining" Foreground="{StaticResource TextSilverBrush}"
                            FontSize="12"/>
             </StackPanel>
 
@@ -42,7 +42,7 @@
             <Button Grid.Column="1" Content="✕"
                     HorizontalAlignment="Right" VerticalAlignment="Top"
                     Width="24" Height="24" Margin="0,-5,-5,0"
-                    Background="Transparent" Foreground="#888888"
+                    Background="Transparent" Foreground="{StaticResource TextSecondaryBrush}"
                     BorderThickness="0" Cursor="Hand"
                     Click="BtnClose_Click">
                 <Button.Style>

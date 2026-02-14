@@ -45,6 +45,10 @@
     <Color x:Key="XPBarBackgroundColor">#FF404060</Color>
     <Color x:Key="SuccessColor">#FF00FF88</Color>
     <Color x:Key="XPBarOverlayColor">#CC1A1A2E</Color>
+    <Color x:Key="RadioButtonHoverColor">#FF353565</Color>
+    <Color x:Key="RadioButtonCheckedHoverColor">#FF85C1</Color>
+    <Color x:Key="ButtonPressedColor">#FFE05A9E</Color>
+    <Color x:Key="TextSilverColor">#FFAAAAAA</Color>
     <Color x:Key="LightPurpleColor">#FF9370DB</Color>
     <Color x:Key="MediumPurpleColor">#FF7B68EE</Color>
     <Color x:Key="AudioPanelBackgroundColor">#FF3D2D4D</Color>
@@ -52,4 +56,32 @@
     <Color x:Key="MainTutorialOverlayBackgroundColor">#E8000000</Color>
     <Color x:Key="GlobalDropOverlayBackgroundColor">#D0000000</Color>
 
+    <Color x:Key="GoldColor">#FFD700</Color>
+    <Color x:Key="GoldTransparentColor">#30FFD700</Color>
+    <Color x:Key="GoldBorderTransparentColor">#AAFFD700</Color>
+    <Color x:Key="GrayColor">#808080</Color>
+    <Color x:Key="LightGrayColor">#B0B0B0</Color>
+    <Color x:Key="MutedGrayColor">#888888</Color>
+    <Color x:Key="DarkGrayColor">#666666</Color>
+    <Color x:Key="WhiteColor">#FFFFFF</Color>
+    <Color x:Key="SuccessGreenColor">#00E676</Color>
+    <Color x:Key="SuccessDarkGreenColor">#00AA00</Color>
+    <Color x:Key="SuccessLightGreenColor">#90EE90</Color>
+    <Color x:Key="SuccessMutedGreenColor">#4CAF50</Color>
+    <Color x:Key="WarningRedColor">#FF6B6B</Color>
+    <Color x:Key="WarningDarkRedColor">#F44336</Color>
+    <Color x:Key="WarningPinkColor">#FF1493</Color>
+    <Color x:Key="DiscordBlurpleColor">#5865F2</Color>
+    <Color x:Key="PanelBlueColor">#252542</Color>
+    <Color x:Key="OverlayBlackColor">#80000000</Color>
+    <Color x:Key="OverlayDarkBlackColor">#E0000000</Color>
+    <Color x:Key="OverlayFullBlackColor">#E8000000</Color>
+    <Color x:Key="OverlayTransparentBlackColor">#D0000000</Color>
+    <Color x:Key="DarkPurpleColor">#352545</Color>
+    <Color x:Key="MutedPurpleColor">#9B59B6</Color>
+    <Color x:Key="LavenderColor">#9370DB</Color>
+    <Color x:Key="TransparentPinkExtendedColor">#33FF69B4</Color>
+    <Color x:Key="TransparentLavenderColor">#339370DB</Color>
+    <Color x:Key="MutedBlueColor">#353555</Color>
+    <Color x:Key="MutedBorderColor">#505050</Color>
 </ResourceDictionary>

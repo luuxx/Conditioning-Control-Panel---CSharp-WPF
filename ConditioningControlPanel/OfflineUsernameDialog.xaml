@@ -4,14 +4,14 @@
         Title="Choose Your Offline Username"
         Height="300" Width="450"
         WindowStartupLocation="CenterOwner"
-        Background="#1A1A2E"
+        Background="{StaticResource DarkerBgBrush}"
         ResizeMode="NoResize"
         WindowStyle="None"
         AllowsTransparency="False">
 
     <Window.Resources>
-        <SolidColorBrush x:Key="PinkBrush" Color="#FF69B4"/>
-        <SolidColorBrush x:Key="DarkPinkBrush" Color="#FF1493"/>
+        <SolidColorBrush x:Key="PinkBrush" Color="{StaticResource PinkColor}"/>
+        <SolidColorBrush x:Key="DarkPinkBrush" Color="{StaticResource DarkPinkColor}"/>
         <SolidColorBrush x:Key="InfoBrush" Color="#88AAFF"/>
     </Window.Resources>
 
@@ -33,13 +33,13 @@
                        HorizontalAlignment="Center"/>
 
             <!-- Info Box -->
-            <Border Grid.Row="1" Background="#2A2A3E" CornerRadius="4" Padding="12,8" Margin="0,0,0,15">
+            <Border Grid.Row="1" Background="{StaticResource PillBackgroundBrush}" CornerRadius="4" Padding="12,8" Margin="0,0,0,15">
                 <StackPanel>
                     <TextBlock Text="Offline progress is stored locally only and cannot be synced to the leaderboard."
                                Foreground="{StaticResource InfoBrush}"
                                FontSize="12" TextWrapping="Wrap" TextAlignment="Center"/>
                     <TextBlock Text="You can change this name later in Settings."
-                               Foreground="#888888"
+                               Foreground="{StaticResource TextSecondaryBrush}"
                                FontSize="11" Margin="0,5,0,0" TextAlignment="Center"/>
                 </StackPanel>
             </Border>
@@ -50,7 +50,7 @@
 
             <!-- Input -->
             <TextBox x:Name="TxtUsername" Grid.Row="3"
-                     Background="#252542" Foreground="White"
+                     Background="{StaticResource PanelBgBrush}" Foreground="White"
                      BorderBrush="{StaticResource PinkBrush}"
                      Padding="12,10" FontSize="15"
                      MaxLength="30"
@@ -58,7 +58,7 @@
 
             <!-- Character count -->
             <TextBlock x:Name="TxtCharCount" Grid.Row="4" Text="0/30 characters"
-                       Foreground="#888" FontSize="11" Margin="0,5,0,0"
+                       Foreground="{StaticResource TextSecondaryBrush}" FontSize="11" Margin="0,5,0,0"
                        HorizontalAlignment="Right" VerticalAlignment="Top"/>
 
             <!-- Buttons -->

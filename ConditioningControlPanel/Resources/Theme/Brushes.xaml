@@ -43,7 +43,7 @@
     <!-- ComboBox brushes -->
     <SolidColorBrush x:Key="ComboBoxBackgroundBrush" Color="{StaticResource DeepBlueColor}"/>
     <SolidColorBrush x:Key="ComboBoxDropDownArrowBrush" Color="{StaticResource TextLightColor}"/>
-    <SolidColorBrush x:Key="ComboBoxWatermarkBrush" Color="{StaticResource HelpButtonForegroundBrush}"/>
+    <SolidColorBrush x:Key="ComboBoxWatermarkBrush" Color="{StaticResource HelpButtonForegroundColor}"/>
     <LinearGradientBrush x:Key="AnimatedGradientBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
         <GradientStop Color="{StaticResource DeepBlueColor}" Offset="0"/>
         <GradientStop Color="{StaticResource DeepPurpleColor}" Offset="0.5"/>
@@ -106,6 +106,17 @@
     <SolidColorBrush x:Key="SuccessBrush" Color="{StaticResource SuccessColor}"/>
     <SolidColorBrush x:Key="GoldBrush" Color="{StaticResource GoldColor}"/>
     <SolidColorBrush x:Key="XPBarOverlayBrush" Color="{StaticResource XPBarOverlayColor}"/>
+    <SolidColorBrush x:Key="RadioButtonHoverBrush" Color="{StaticResource RadioButtonHoverColor}"/>
+    <SolidColorBrush x:Key="RadioButtonCheckedHoverBrush" Color="{StaticResource RadioButtonCheckedHoverColor}"/>
+    <SolidColorBrush x:Key="ButtonPressedBrush" Color="{StaticResource ButtonPressedColor}"/>
+    <SolidColorBrush x:Key="TextSilverBrush" Color="{StaticResource TextSilverColor}"/>
+
+    <!-- Browser Brushes -->
+    <SolidColorBrush x:Key="BrowserPopOutButtonBackgroundBrush" Color="{StaticResource PinkColor}"/>
+    <SolidColorBrush x:Key="BrowserPopOutButtonHoverBrush" Color="{StaticResource RadioButtonCheckedHoverColor}"/>
+    <SolidColorBrush x:Key="BrowserPopOutButtonPressedBrush" Color="{StaticResource ButtonPressedColor}"/>
+    <SolidColorBrush x:Key="BrowserBackgroundBrush" Color="{StaticResource DeepBlueColor}"/>
+    <SolidColorBrush x:Key="BrowserAudioSyncPanelBackgroundBrush" Color="{StaticResource PanelBgColor}"/>
     <SolidColorBrush x:Key="AudioPanelBackgroundBrush" Color="{StaticResource AudioPanelBackgroundColor}"/>
     <SolidColorBrush x:Key="TransparentBlackBrush" Color="{StaticResource TransparentBlackColor}"/>
     <SolidColorBrush x:Key="MainTutorialOverlayBackgroundBrush" Color="{StaticResource MainTutorialOverlayBackgroundColor}"/>
@@ -121,4 +132,46 @@
         <GradientStop Color="{StaticResource MediumPurpleColor}" Offset="1"/>
     </LinearGradientBrush>
 
+    <!-- Generic / Root Brushes -->
+    <SolidColorBrush x:Key="WhiteBrush" Color="{StaticResource WhiteColor}"/>
+    <SolidColorBrush x:Key="GrayBrush" Color="{StaticResource GrayColor}"/>
+    <SolidColorBrush x:Key="LightGrayBrush" Color="{StaticResource LightGrayColor}"/>
+    <SolidColorBrush x:Key="DarkGrayBrush" Color="{StaticResource DarkGrayColor}"/>
+    <SolidColorBrush x:Key="WarningBrush" Color="{StaticResource WarningRedColor}"/>
+
+    <!-- Component Group Brushes -->
+    <SolidColorBrush x:Key="PrimaryButtonBackgroundBrush" Color="{StaticResource PinkColor}"/>
+    <SolidColorBrush x:Key="SecondaryButtonBackgroundBrush" Color="{StaticResource PanelAccentColor}"/>
+    <SolidColorBrush x:Key="DangerButtonBackgroundBrush" Color="{StaticResource DangerColor}"/>
+    <SolidColorBrush x:Key="ControlBackgroundBrush" Color="{StaticResource PanelBgColor}"/>
+    <SolidColorBrush x:Key="ControlBorderBrush" Color="{StaticResource PanelAccentColor}"/>
+    <SolidColorBrush x:Key="InputBackgroundBrush" Color="{StaticResource DarkerBgColor}"/>
+    <SolidColorBrush x:Key="InputBorderBrush" Color="{StaticResource PinkColor}"/>
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource TextLightColor}"/>
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextMutedColor}"/>
+    <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="{StaticResource OverlayBlackColor}"/>
+
+    <!-- Unique Component Brushes -->
+    <!-- MainWindow -->
+    <SolidColorBrush x:Key="LoggedInStatusPanelBackgroundBrush" Color="{StaticResource PanelBgColor}"/>
+    <SolidColorBrush x:Key="BtnQuickLogoutBackgroundBrush" Color="{StaticResource DarkPurpleColor}"/>
+    <SolidColorBrush x:Key="MarqueeBannerBackgroundBrush" Color="#FF1A0A1A"/>
+    <SolidColorBrush x:Key="SessionDropZoneBackgroundBrush" Color="{StaticResource DeepBlueColor}"/>
+    <SolidColorBrush x:Key="BtnCreateSessionBackgroundBrush" Color="{StaticResource PinkColor}"/>
+    <SolidColorBrush x:Key="BtnExportSessionBackgroundBrush" Color="{StaticResource PillBackgroundColor}"/>
+    <SolidColorBrush x:Key="DifficultyBadgeBackgroundBrush" Color="{StaticResource PillBackgroundColor}"/>
+    <SolidColorBrush x:Key="CornerGifOptionPanelBackgroundBrush" Color="#FF252540"/>
+    <SolidColorBrush x:Key="CmbBubbleCountDifficultyBackgroundBrush" Color="{StaticResource DeepBlueColor}"/>
+    <SolidColorBrush x:Key="DailyProgressFillBackgroundBrush" Color="{StaticResource GoldColor}"/>
+    <SolidColorBrush x:Key="WeeklyProgressFillBackgroundBrush" Color="{StaticResource LightPurpleColor}"/>
+    <SolidColorBrush x:Key="QuestCompleteBannerBackgroundBrush" Color="#FF2D4A2D"/>
+    
+    <!-- LoginDialog -->
+    <SolidColorBrush x:Key="BtnLoginDiscordBackgroundBrush" Color="{StaticResource DiscordColor}"/>
+    <SolidColorBrush x:Key="BtnLoginPatreonBackgroundBrush" Color="{StaticResource PatreonBrandColor}"/>
+    
+    <!-- AvatarTubeWindow -->
+    <SolidColorBrush x:Key="InputPanelBackgroundBrush" Color="{StaticResource PanelBgColor}"/>
+    <SolidColorBrush x:Key="TxtUserInputBackgroundBrush" Color="{StaticResource DarkerBgColor}"/>
+    
 </ResourceDictionary>

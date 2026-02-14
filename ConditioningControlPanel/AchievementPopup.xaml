@@ -14,7 +14,7 @@
     <Border Background="#E0151530" CornerRadius="12" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2"
             Margin="10">
         <Border.Effect>
-            <DropShadowEffect Color="#FF69B4" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
+            <DropShadowEffect Color="{StaticResource PinkColor}" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
         </Border.Effect>
         
         <Grid Margin="15">
@@ -24,7 +24,7 @@
             </Grid.ColumnDefinitions>
             
             <!-- Achievement Image -->
-            <Border Grid.Column="0" Width="120" Height="120" Background="#1A1A2E" Margin="0,0,15,0">
+            <Border Grid.Column="0" Width="120" Height="120" Background="{StaticResource DarkerBgBrush}" Margin="0,0,15,0">
                 <Image x:Name="AchievementImage" Stretch="Uniform" Margin="5"/>
             </Border>
             
@@ -33,7 +33,7 @@
                 <!-- Trophy Icon + "Achievement Unlocked" -->
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                     <TextBlock x:Name="TxtHeaderIcon" Text="🏆" FontSize="20" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <TextBlock x:Name="TxtHeaderText" Text="ACHIEVEMENT UNLOCKED!" Foreground="#FFD700"
+                    <TextBlock x:Name="TxtHeaderText" Text="ACHIEVEMENT UNLOCKED!" Foreground="{StaticResource GoldBrush}"
                                FontWeight="Bold" FontSize="12" VerticalAlignment="Center"/>
                 </StackPanel>
                 
@@ -45,7 +45,7 @@
                 
                 <!-- Flavor Text -->
                 <TextBlock x:Name="TxtFlavor" Text="Flavor text goes here..." 
-                           Foreground="#AAAAAA" FontSize="12" 
+                           Foreground="{StaticResource TextSilverBrush}" FontSize="12" 
                            TextWrapping="Wrap" FontStyle="Italic"/>
             </StackPanel>
             
@@ -53,7 +53,7 @@
             <Button Grid.Column="1" Content="✕" 
                     HorizontalAlignment="Right" VerticalAlignment="Top"
                     Width="24" Height="24" Margin="0,-5,-5,0"
-                    Background="Transparent" Foreground="#888888"
+                    Background="Transparent" Foreground="{StaticResource TextSecondaryBrush}"
                     BorderThickness="0" Cursor="Hand"
                     Click="BtnClose_Click">
                 <Button.Style>

@@ -24,7 +24,7 @@
                 MinWidth="500"
                 MaxWidth="600">
             <Border.Effect>
-                <DropShadowEffect Color="#FF69B4" BlurRadius="30" ShadowDepth="0" Opacity="0.5"/>
+                <DropShadowEffect Color="{StaticResource PinkColor}" BlurRadius="30" ShadowDepth="0" Opacity="0.5"/>
             </Border.Effect>
             
             <StackPanel>
@@ -32,11 +32,11 @@
                 <TextBlock Text="🫧 How Many Bubbles? 🫧"
                            FontSize="40"
                            FontWeight="Bold"
-                           Foreground="#FF69B4"
+                           Foreground="{StaticResource PinkBrush}"
                            HorizontalAlignment="Center"
                            Margin="0,0,0,20">
                     <TextBlock.Effect>
-                        <DropShadowEffect Color="#FF69B4" BlurRadius="12" ShadowDepth="0" Opacity="0.6"/>
+                        <DropShadowEffect Color="{StaticResource PinkBrushColor}" BlurRadius="12" ShadowDepth="0" Opacity="0.6"/>
                     </TextBlock.Effect>
                 </TextBlock>
                 
@@ -53,7 +53,7 @@
                          FontWeight="Bold"
                          Foreground="White"
                          Background="#40FFFFFF"
-                         BorderBrush="#FF69B4"
+                         BorderBrush="{StaticResource PinkBrush}"
                          BorderThickness="3"
                          Padding="20,10"
                          HorizontalAlignment="Center"
@@ -65,7 +65,7 @@
                 <TextBlock x:Name="TxtAttempts"
                            Text="Attempts remaining: 3"
                            FontSize="16"
-                           Foreground="#888888"
+                           Foreground="{StaticResource TextSecondaryBrush}"
                            HorizontalAlignment="Center"
                            Margin="0,20,0,0"/>
                 
@@ -84,7 +84,7 @@
                         FontSize="24"
                         FontWeight="Bold"
                         Foreground="White"
-                        Background="#FF69B4"
+                        Background="{StaticResource PinkBrush}"
                         BorderThickness="0"
                         Padding="40,15"
                         Margin="0,30,0,0"
@@ -112,7 +112,7 @@
                 <TextBlock x:Name="TxtStrict"
                            Text="🔒 STRICT MODE - Must answer correctly"
                            FontSize="14"
-                           Foreground="#FF6B6B"
+                           Foreground="{StaticResource WarningBrush}"
                            HorizontalAlignment="Center"
                            Margin="0,20,0,0"
                            Visibility="Collapsed"/>
@@ -121,7 +121,7 @@
                 <TextBlock x:Name="TxtEscHint"
                            Text="Press ESC to skip (won't earn XP)"
                            FontSize="12"
-                           Foreground="#666666"
+                           Foreground="{StaticResource DarkGrayBrush}"
                            HorizontalAlignment="Center"
                            Margin="0,15,0,0"/>
             </StackPanel>

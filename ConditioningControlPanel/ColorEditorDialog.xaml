@@ -4,7 +4,7 @@
         Title="Subliminal Colors" 
         Height="480" Width="450"
         WindowStartupLocation="CenterOwner"
-        Background="#1A1A2E"
+        Background="{StaticResource DarkerBgBrush}"
         ResizeMode="NoResize">
 
     <Window.Resources>
@@ -40,7 +40,7 @@
                 <Button x:Name="BtnBgColor" Grid.Column="1" Style="{StaticResource ColorButtonLarge}"
                         Click="BtnBgColor_Click" ToolTip="Click to change"/>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="15,0,0,0" VerticalAlignment="Center">
-                    <TextBlock Text="Transparent" Foreground="#808080" FontSize="11" 
+                    <TextBlock Text="Transparent" Foreground="{StaticResource TextMutedBrush}" FontSize="11" 
                                VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <CheckBox x:Name="ChkBgTransparent" Style="{StaticResource ToggleStyle}"/>
                 </StackPanel>
@@ -59,7 +59,7 @@
                         Click="BtnTextColor_Click" ToolTip="Click to change"/>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="15,0,0,0" VerticalAlignment="Center"
                             Visibility="Collapsed">
-                    <TextBlock Text="Transparent" Foreground="#808080" FontSize="11" 
+                    <TextBlock Text="Transparent" Foreground="{StaticResource TextMutedBrush}" FontSize="11" 
                                VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <CheckBox x:Name="ChkTextTransparent" Style="{StaticResource ToggleStyle}"/>
                 </StackPanel>
@@ -87,7 +87,7 @@
                     <TextBlock Text="Steal Keyboard Focus" Foreground="{StaticResource TextLightBrush}"
                                FontSize="14"/>
                     <TextBlock Text="Forces attention by stealing keyboard focus when shown"
-                               Foreground="#808080" FontSize="10" Margin="0,2,0,0"/>
+                               Foreground="{StaticResource TextMutedBrush}" FontSize="10" Margin="0,2,0,0"/>
                 </StackPanel>
                 <CheckBox x:Name="ChkStealsFocus" Grid.Column="1" Style="{StaticResource ToggleStyle}"
                           VerticalAlignment="Center"/>

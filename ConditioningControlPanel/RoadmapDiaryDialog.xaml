@@ -10,7 +10,7 @@
         ResizeMode="NoResize"
         Topmost="True">
 
-    <Border Background="#1A1A2E" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2" CornerRadius="15">
+    <Border Background="{StaticResource DarkerBgBrush}" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2" CornerRadius="15">
         <Grid Margin="25">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>  <!-- Header -->
@@ -25,12 +25,12 @@
             <Grid Grid.Row="0" Margin="0,0,0,15">
                 <StackPanel>
                     <TextBlock x:Name="TxtStepNumber" Text="Step 1"
-                               Foreground="#888888" FontSize="12"/>
+                               Foreground="{StaticResource TextSecondaryBrush}" FontSize="12"/>
                     <TextBlock x:Name="TxtStepTitle" Text="The Blank Slate"
                                Foreground="{StaticResource PinkBrush}" FontSize="20" FontWeight="Bold"/>
                 </StackPanel>
                 <Button Content="X" HorizontalAlignment="Right" VerticalAlignment="Top"
-                        Background="Transparent" Foreground="#888888"
+                        Background="Transparent" Foreground="{StaticResource TextSecondaryBrush}"
                         BorderThickness="0" FontSize="16" FontWeight="Bold"
                         Cursor="Hand" Padding="5"
                         Click="BtnClose_Click">
@@ -47,30 +47,30 @@
             </Grid>
 
             <!-- Full Resolution Photo -->
-            <Border Grid.Row="1" CornerRadius="12" Background="#252542"
+            <Border Grid.Row="1" CornerRadius="12" Background="{StaticResource PanelBgBrush}"
                     Margin="0,0,0,15" Height="280" ClipToBounds="True">
                 <Grid>
                     <Image x:Name="ImgFullPhoto" Stretch="Uniform"
                            RenderOptions.BitmapScalingMode="HighQuality"/>
                     <TextBlock x:Name="TxtNoPhoto" Text="No photo available"
-                               Foreground="#666666" FontSize="14"
+                               Foreground="{StaticResource DarkGrayBrush}" FontSize="14"
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                Visibility="Collapsed"/>
                 </Grid>
             </Border>
 
             <!-- Objective/Requirement -->
-            <Border Grid.Row="2" Background="#252542" CornerRadius="10"
+            <Border Grid.Row="2" Background="{StaticResource PanelBgBrush}" CornerRadius="10"
                     Padding="15" Margin="0,0,0,15">
                 <StackPanel>
-                    <TextBlock Text="Objective" Foreground="#888888" FontSize="11" Margin="0,0,0,4"/>
+                    <TextBlock Text="Objective" Foreground="{StaticResource TextSecondaryBrush}" FontSize="11" Margin="0,0,0,4"/>
                     <TextBlock x:Name="TxtObjective" Text="" Foreground="White"
                                FontSize="13" TextWrapping="Wrap"/>
                 </StackPanel>
             </Border>
 
             <!-- Completion Stats -->
-            <Border Grid.Row="3" Background="#252542" CornerRadius="10"
+            <Border Grid.Row="3" Background="{StaticResource PanelBgBrush}" CornerRadius="10"
                     Padding="15" Margin="0,0,0,15">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -79,18 +79,18 @@
                     </Grid.ColumnDefinitions>
 
                     <StackPanel Grid.Column="0" HorizontalAlignment="Center">
-                        <TextBlock Text="Completed" Foreground="#888888"
+                        <TextBlock Text="Completed" Foreground="{StaticResource TextSecondaryBrush}"
                                    FontSize="11" HorizontalAlignment="Center"/>
                         <TextBlock x:Name="TxtCompletedDate" Text="Jan 15, 2024"
                                    Foreground="White" FontSize="14" FontWeight="Bold"
                                    HorizontalAlignment="Center" Margin="0,4,0,0"/>
                         <TextBlock x:Name="TxtCompletedTime" Text="3:45 PM"
-                                   Foreground="#888888" FontSize="11"
+                                   Foreground="{StaticResource TextSecondaryBrush}" FontSize="11"
                                    HorizontalAlignment="Center"/>
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" HorizontalAlignment="Center">
-                        <TextBlock Text="Time Taken" Foreground="#888888"
+                        <TextBlock Text="Time Taken" Foreground="{StaticResource TextSecondaryBrush}"
                                    FontSize="11" HorizontalAlignment="Center"/>
                         <TextBlock x:Name="TxtTimeTaken" Text="45 minutes"
                                    Foreground="White" FontSize="14" FontWeight="Bold"
@@ -100,14 +100,14 @@
             </Border>
 
             <!-- User Note -->
-            <Border Grid.Row="4" Background="#252542" CornerRadius="10" Padding="15">
+            <Border Grid.Row="4" Background="{StaticResource PanelBgBrush}" CornerRadius="10" Padding="15">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="Personal Note" Foreground="#888888"
+                    <TextBlock Grid.Row="0" Text="Personal Note" Foreground="{StaticResource TextSecondaryBrush}"
                                FontSize="11" Margin="0,0,0,8"/>
                     <TextBox x:Name="TxtUserNote" Grid.Row="1"
                              Background="Transparent" Foreground="White"
@@ -130,13 +130,13 @@
                         <Style TargetType="Button">
                             <Style.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="#FF1493"/>
+                                    <Setter Property="Background" Value="{StaticResource DarkPinkBrush}"/>
                                 </Trigger>
                             </Style.Triggers>
                         </Style>
                     </Button.Style>
                 </Button>
-                <Button Content="Close" Background="#404060"
+                <Button Content="Close" Background="{StaticResource PanelAccentBrush}"
                         Foreground="White" Padding="20,10"
                         BorderThickness="0" Cursor="Hand"
                         Click="BtnClose_Click">

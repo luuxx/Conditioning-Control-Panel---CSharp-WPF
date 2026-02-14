@@ -5,7 +5,7 @@
         Title="Customize AI Companion"
         Width="700" Height="750"
         WindowStartupLocation="CenterOwner"
-        Background="#1A1A2E"
+        Background="{StaticResource DarkerBgBrush}"
         ResizeMode="CanResizeWithGrip">
 
     <Window.Resources>
@@ -20,16 +20,16 @@
         </Style>
 
         <Style x:Key="SectionDescription" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#808080"/>
+            <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}"/>
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,0,0,8"/>
         </Style>
 
         <Style x:Key="PromptTextBox" TargetType="TextBox">
-            <Setter Property="Background" Value="#252542"/>
-            <Setter Property="Foreground" Value="#E0E0E0"/>
-            <Setter Property="BorderBrush" Value="#404060"/>
+            <Setter Property="Background" Value="{StaticResource PanelBgBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextLightBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource PanelAccentBrush}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="8"/>
             <Setter Property="FontFamily" Value="Consolas"/>
@@ -40,7 +40,7 @@
         </Style>
 
         <Style x:Key="ResetButton" TargetType="Button">
-            <Setter Property="Background" Value="#404060"/>
+            <Setter Property="Background" Value="{StaticResource PanelAccentBrush}"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="8,4"/>
@@ -71,36 +71,36 @@
         </Grid.RowDefinitions>
 
         <!-- Header -->
-        <Border Grid.Row="0" Background="#252542" Padding="20,15">
+        <Border Grid.Row="0" Background="{StaticResource PanelBgBrush}" Padding="20,15">
             <StackPanel>
                 <Grid>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="Customize Your AI Companion"
                                    Foreground="{StaticResource PinkBrush}"
                                    FontSize="20" FontWeight="Bold"/>
-                        <Border Background="#FF6B6B" CornerRadius="3" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center">
+                        <Border Background="{StaticResource WarningBrush}" CornerRadius="3" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center">
                             <TextBlock Text="BETA" Foreground="White" FontSize="10" FontWeight="Bold"/>
                         </Border>
                     </StackPanel>
                     <!-- Active Prompt Badge -->
                     <Border x:Name="ActivePromptBadge" HorizontalAlignment="Right" VerticalAlignment="Center"
-                            Background="#1A1A2E" CornerRadius="12" Padding="12,6">
+                            Background="{StaticResource DarkerBgBrush}" CornerRadius="12" Padding="12,6">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="Active:" Foreground="#707070" FontSize="11" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="TxtActivePromptName" Text="Default" Foreground="#9370DB"
+                            <TextBlock Text="Active:" Foreground="{StaticResource DarkGrayBrush}" FontSize="11" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="TxtActivePromptName" Text="Default" Foreground="{StaticResource LightPurpleBrush}"
                                        FontSize="11" FontWeight="SemiBold" Margin="5,0,0,0" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Border>
                 </Grid>
                 <TextBlock Text="Edit the prompts that control how your companion thinks and responds. Changes are saved automatically when you close this window."
-                           Foreground="#808080" FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"/>
+                           Foreground="{StaticResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"/>
 
                 <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                     <CheckBox x:Name="ChkUseCustom" Content="Enable Custom Prompts"
                               Foreground="White" VerticalContentAlignment="Center"
                               Checked="ChkUseCustom_Changed" Unchecked="ChkUseCustom_Changed"/>
                     <TextBlock Text="(Uncheck to use default prompts)"
-                               Foreground="#606060" FontSize="11"
+                               Foreground="{StaticResource DarkGrayBrush}" FontSize="11"
                                VerticalAlignment="Center" Margin="10,0,0,0"/>
                 </StackPanel>
             </StackPanel>
@@ -163,7 +163,7 @@
                     <Expander.Header>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="Slut Mode Personality" Style="{StaticResource SectionHeader}"/>
-                            <TextBlock Text="(Patreon)" Foreground="#9B59B6" FontSize="11"
+                            <TextBlock Text="(Patreon)" Foreground="{StaticResource PatreonPurpleBrush}" FontSize="11"
                                        VerticalAlignment="Center" Margin="8,0,0,0"/>
                         </StackPanel>
                     </Expander.Header>
@@ -274,7 +274,7 @@
                         </TextBlock>
 
                         <!-- Links List -->
-                        <Border Background="#252542" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+                        <Border Background="{StaticResource PanelBgBrush}" CornerRadius="4" Padding="8" Margin="0,0,0,8">
                             <ListBox x:Name="LstKnowledgeLinks" Height="120"
                                      Background="Transparent" BorderThickness="0"
                                      Foreground="White" FontSize="11"
@@ -282,9 +282,9 @@
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
                                         <StackPanel Margin="0,2">
-                                            <TextBlock Text="{Binding Title}" Foreground="#FF69B4" FontWeight="SemiBold"/>
-                                            <TextBlock Text="{Binding Url}" Foreground="#707070" FontSize="10"/>
-                                            <TextBlock Text="{Binding Description}" Foreground="#A0A0A0" FontSize="10"
+                                            <TextBlock Text="{Binding Title}" Foreground="{StaticResource PinkBrush}" FontWeight="SemiBold"/>
+                                            <TextBlock Text="{Binding Url}" Foreground="{StaticResource DarkGrayBrush}" FontSize="10"/>
+                                            <TextBlock Text="{Binding Description}" Foreground="{StaticResource TextSilverBrush}" FontSize="10"
                                                        TextWrapping="Wrap" Visibility="{Binding Description, Converter={StaticResource NullToCollapsedConverter}}"/>
                                         </StackPanel>
                                     </DataTemplate>
@@ -306,7 +306,7 @@
         </ScrollViewer>
 
         <!-- Footer -->
-        <Border Grid.Row="2" Background="#252542" Padding="20,15">
+        <Border Grid.Row="2" Background="{StaticResource PanelBgBrush}" Padding="20,15">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>

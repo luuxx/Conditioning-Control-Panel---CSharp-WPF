@@ -11,10 +11,10 @@
         WindowStartupLocation="Manual"
         MouseLeftButtonDown="Window_MouseLeftButtonDown">
 
-    <Border Background="#E0151530" CornerRadius="12" BorderBrush="#00E676" BorderThickness="2"
+    <Border Background="#E0151530" CornerRadius="12" BorderBrush="{StaticResource SuccessBrush}" BorderThickness="2"
             Margin="10">
         <Border.Effect>
-            <DropShadowEffect Color="#00E676" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
+            <DropShadowEffect Color="{StaticResource SuccessColor}" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
         </Border.Effect>
 
         <Grid Margin="15">
@@ -25,26 +25,26 @@
 
             <!-- Checkmark Icon -->
             <Border Grid.Column="0" Width="60" Height="60" Background="#2D4A2D" CornerRadius="30" Margin="0,0,15,0">
-                <TextBlock Text="✓" Foreground="#00E676" FontSize="32" FontWeight="Bold"
+                <TextBlock Text="✓" Foreground="{StaticResource SuccessBrush}" FontSize="32" FontWeight="Bold"
                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
 
             <!-- Text Content -->
             <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                <TextBlock Text="QUEST COMPLETE!" Foreground="#00E676"
+                <TextBlock Text="QUEST COMPLETE!" Foreground="{StaticResource SuccessBrush}"
                            FontWeight="Bold" FontSize="16" Margin="0,0,0,4"/>
                 <TextBlock x:Name="TxtQuestName" Text="Quest Name"
                            Foreground="White" FontSize="14" FontWeight="SemiBold"
                            TextWrapping="Wrap" Margin="0,0,0,4"/>
                 <TextBlock x:Name="TxtXPAwarded" Text="+0 XP"
-                           Foreground="#FFD700" FontSize="13" FontWeight="Bold"/>
+                           Foreground="{StaticResource GoldBrush}" FontSize="13" FontWeight="Bold"/>
             </StackPanel>
 
             <!-- Close Button -->
             <Button Grid.Column="1" Content="✕"
                     HorizontalAlignment="Right" VerticalAlignment="Top"
                     Width="24" Height="24" Margin="0,-5,-5,0"
-                    Background="Transparent" Foreground="#888888"
+                    Background="Transparent" Foreground="{StaticResource TextSecondaryBrush}"
                     BorderThickness="0" Cursor="Hand"
                     Click="BtnClose_Click">
                 <Button.Style>

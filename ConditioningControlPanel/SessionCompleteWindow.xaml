@@ -10,7 +10,7 @@
         Topmost="True"
         ShowInTaskbar="False">
 
-    <Border Background="#1A1A2E" BorderBrush="#FF69B4" BorderThickness="3" CornerRadius="20" Padding="30">
+    <Border Background="{StaticResource DarkerBgBrush}" BorderBrush="{StaticResource PinkBrush}" BorderThickness="3" CornerRadius="20" Padding="30">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
@@ -33,10 +33,10 @@
             <!-- Main Message -->
             <StackPanel Grid.Row="1" HorizontalAlignment="Center">
                 <TextBlock x:Name="TxtMainMessage" Text="Good Girl!" 
-                           Foreground="#FF69B4" FontSize="36" FontWeight="Bold" 
+                           Foreground="{StaticResource PinkBrush}" FontSize="36" FontWeight="Bold" 
                            HorizontalAlignment="Center"/>
                 <TextBlock x:Name="TxtSubMessage" Text="Session Complete" 
-                           Foreground="#808090" FontSize="16" 
+                           Foreground="{StaticResource TextMutedBrush}" FontSize="16" 
                            HorizontalAlignment="Center" Margin="0,5,0,0"/>
             </StackPanel>
             
@@ -51,7 +51,7 @@
                     
                     <!-- Session Name -->
                     <StackPanel Grid.Column="0" HorizontalAlignment="Center">
-                        <TextBlock Text="Session" Foreground="#808090" FontSize="12" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Session" Foreground="{StaticResource TextMutedBrush}" FontSize="12" HorizontalAlignment="Center"/>
                         <TextBlock x:Name="TxtSessionName" Text="Morning Drift" 
                                    Foreground="White" FontSize="14" FontWeight="Bold" 
                                    HorizontalAlignment="Center" Margin="0,4,0,0"/>
@@ -59,7 +59,7 @@
                     
                     <!-- Duration -->
                     <StackPanel Grid.Column="1" HorizontalAlignment="Center">
-                        <TextBlock Text="Duration" Foreground="#808090" FontSize="12" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Duration" Foreground="{StaticResource TextMutedBrush}" FontSize="12" HorizontalAlignment="Center"/>
                         <TextBlock x:Name="TxtDuration" Text="30:00" 
                                    Foreground="White" FontSize="14" FontWeight="Bold" 
                                    HorizontalAlignment="Center" Margin="0,4,0,0"/>
@@ -67,9 +67,9 @@
                     
                     <!-- XP Earned -->
                     <StackPanel Grid.Column="2" HorizontalAlignment="Center">
-                        <TextBlock Text="XP Earned" Foreground="#808090" FontSize="12" HorizontalAlignment="Center"/>
+                        <TextBlock Text="XP Earned" Foreground="{StaticResource TextMutedBrush}" FontSize="12" HorizontalAlignment="Center"/>
                         <TextBlock x:Name="TxtXP" Text="+50" 
-                                   Foreground="#90EE90" FontSize="18" FontWeight="Bold" 
+                                   Foreground="{StaticResource SuccessBrush}" FontSize="18" FontWeight="Bold" 
                                    HorizontalAlignment="Center" Margin="0,4,0,0"/>
                     </StackPanel>
                 </Grid>
@@ -77,7 +77,7 @@
             
             <!-- Close Button -->
             <Button Grid.Row="3" x:Name="BtnClose" Content="💗 Continue" 
-                    Background="#FF69B4" Foreground="White" 
+                    Background="{StaticResource PinkBrush}" Foreground="White" 
                     BorderThickness="0" Padding="30,12" FontSize="16" FontWeight="Bold"
                     Cursor="Hand" Click="BtnClose_Click"
                     HorizontalAlignment="Center">

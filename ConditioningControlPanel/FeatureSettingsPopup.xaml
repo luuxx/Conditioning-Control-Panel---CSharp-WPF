@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Width="320" Background="Transparent">
 
-    <Border Background="#1E1E3A" CornerRadius="10" BorderBrush="#FF69B4" BorderThickness="2"
+    <Border Background="{StaticResource DeepBlueBrush}" CornerRadius="10" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2"
             Padding="15">
         <Grid>
             <Grid.RowDefinitions>
@@ -18,9 +18,9 @@
                 <TextBlock x:Name="TxtIcon" Text="⚡" FontSize="24" VerticalAlignment="Center" Margin="0,0,10,0"/>
                 <StackPanel>
                     <TextBlock x:Name="TxtFeatureName" Text="Feature Name"
-                               Foreground="#FF69B4" FontSize="16" FontWeight="SemiBold"/>
+                               Foreground="{StaticResource PinkBrush}" FontSize="16" FontWeight="SemiBold"/>
                     <TextBlock x:Name="TxtEventType" Text="Start Event"
-                               Foreground="#888" FontSize="11"/>
+                               Foreground="{StaticResource TextSecondaryBrush}" FontSize="11"/>
                 </StackPanel>
             </StackPanel>
 
@@ -32,12 +32,12 @@
                     <ColumnDefinition Width="50"/>
                 </Grid.ColumnDefinitions>
 
-                <TextBlock Text="Minute" Foreground="#B0B0B0" FontSize="12" VerticalAlignment="Center"/>
+                <TextBlock Text="Minute" Foreground="{StaticResource TextSilverBrush}" FontSize="12" VerticalAlignment="Center"/>
                 <Slider x:Name="SliderMinute" Grid.Column="1"
                         Minimum="0" Maximum="120" Value="0"
                         ValueChanged="SliderMinute_ValueChanged"/>
                 <TextBlock x:Name="TxtMinuteValue" Grid.Column="2" Text="0"
-                           Foreground="#E0E0E0" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{StaticResource TextLightBrush}" FontSize="12" FontWeight="SemiBold"
                            VerticalAlignment="Center" HorizontalAlignment="Right"/>
             </Grid>
 
@@ -75,7 +75,7 @@
                 </Button>
 
                 <Button Grid.Column="2" x:Name="BtnDone" Content="Done" Click="BtnDone_Click"
-                        Background="#FF69B4" Foreground="White" Padding="20,8"
+                        Background="{StaticResource PinkBrush}" Foreground="White" Padding="20,8"
                         FontWeight="SemiBold" Cursor="Hand">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">

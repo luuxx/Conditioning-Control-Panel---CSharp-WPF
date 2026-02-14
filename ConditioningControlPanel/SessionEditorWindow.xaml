@@ -24,7 +24,7 @@
     </Window.Resources>
 
     <Grid>
-        <Border Background="#1A1A2E" CornerRadius="12" BorderBrush="#FF69B4" BorderThickness="2">
+        <Border Background="{StaticResource DarkerBgBrush}" CornerRadius="12" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>  <!-- Title bar -->
@@ -32,18 +32,18 @@
                 </Grid.RowDefinitions>
 
                 <!-- Title Bar -->
-                <Grid Grid.Row="0" Background="#252542" Margin="2,2,2,0">
+                <Grid Grid.Row="0" Background="{StaticResource PanelBgBrush}" Margin="2,2,2,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <TextBlock Text="Session Editor" Foreground="#E0E0E0" FontSize="12"
+                    <TextBlock Text="Session Editor" Foreground="{StaticResource TextLightBrush}" FontSize="12"
                                VerticalAlignment="Center" Margin="12,8"/>
 
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,4,8,4">
                         <Button x:Name="BtnHelp" Content="?" Click="BtnHelp_Click" Width="24" Height="24"
-                                Background="#FF69B4" Foreground="White" FontSize="12" FontWeight="Bold"
+                                Background="{StaticResource PinkBrush}" Foreground="White" FontSize="12" FontWeight="Bold"
                                 BorderThickness="0" Cursor="Hand" ToolTip="How to use the Session Editor">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
@@ -54,10 +54,10 @@
                             </Button.Template>
                         </Button>
                         <Button Content="−" Click="BtnMinimize_Click" Width="24" Height="24"
-                                Background="Transparent" Foreground="#888" FontSize="14"
+                                Background="Transparent" Foreground="{StaticResource TextSecondaryBrush}" FontSize="14"
                                 BorderThickness="0" Cursor="Hand" Margin="4,0,0,0"/>
                         <Button Content="✕" Click="BtnClose_Click" Width="24" Height="24"
-                                Background="Transparent" Foreground="#888" FontSize="12"
+                                Background="Transparent" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12"
                                 BorderThickness="0" Cursor="Hand"/>
                     </StackPanel>
                 </Grid>
@@ -77,20 +77,20 @@
                         <StackPanel Grid.Row="0" Margin="20,12,20,8">
                             <!-- Session Name (editable) -->
                             <TextBox x:Name="TxtSessionName" Text="My New Session"
-                                     FontSize="22" FontWeight="Bold" Foreground="#FF69B4"
+                                     FontSize="22" FontWeight="Bold" Foreground="{StaticResource PinkBrush}"
                                      Background="Transparent" BorderThickness="0"
                                      HorizontalAlignment="Center" TextAlignment="Center"
-                                     CaretBrush="#FF69B4" SelectionBrush="#FF69B4"
+                                     CaretBrush="{StaticResource PinkBrush}" SelectionBrush="{StaticResource PinkBrush}"
                                      ToolTip="Click to edit session name"/>
 
                             <!-- Auto-calculated stats -->
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,0">
                                 <TextBlock x:Name="TxtDifficulty" Text="⭐ Easy"
-                                           Foreground="#90EE90" FontSize="11" FontWeight="SemiBold" Margin="0,0,15,0"/>
+                                           Foreground="{StaticResource SuccessBrush}" FontSize="11" FontWeight="SemiBold" Margin="0,0,15,0"/>
                                 <TextBlock x:Name="TxtXP" Text="+300 XP"
-                                           Foreground="#FFD700" FontSize="11" FontWeight="SemiBold" Margin="0,0,15,0"/>
+                                           Foreground="{StaticResource GoldBrush}" FontSize="11" FontWeight="SemiBold" Margin="0,0,15,0"/>
                                 <TextBlock x:Name="TxtDuration" Text="30 min"
-                                           Foreground="#E0E0E0" FontSize="11" Margin="0,0,0,0"/>
+                                           Foreground="{StaticResource TextLightBrush}" FontSize="11" Margin="0,0,0,0"/>
                             </StackPanel>
                         </StackPanel>
 
@@ -102,7 +102,7 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock Text="Duration" Foreground="#B0B0B0" FontSize="11"
+                            <TextBlock Text="Duration" Foreground="{StaticResource TextSilverBrush}" FontSize="11"
                                        VerticalAlignment="Center" Margin="0,0,10,0"/>
 
                             <Slider x:Name="SliderDuration" Grid.Column="1"
@@ -111,12 +111,12 @@
                                     ValueChanged="SliderDuration_ValueChanged"/>
 
                             <TextBlock x:Name="TxtDurationValue" Grid.Column="2" Text="30 min"
-                                       Foreground="#E0E0E0" FontSize="11" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextLightBrush}" FontSize="11" FontWeight="SemiBold"
                                        VerticalAlignment="Center" Margin="10,0,0,0" Width="45"/>
                         </Grid>
 
                         <!-- Timeline -->
-                        <Border Grid.Row="2" Background="#1E1E3A" CornerRadius="6" Margin="20,6,20,6" Padding="10" MinHeight="100" MaxHeight="180">
+                        <Border Grid.Row="2" Background="{StaticResource DeepBlueBrush}" CornerRadius="6" Margin="20,6,20,6" Padding="10" MinHeight="100" MaxHeight="180">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>  <!-- Minute markers -->
@@ -128,7 +128,7 @@
 
                                 <!-- Timeline Track (drop zone) -->
                                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,15,0">
-                                    <Border Background="#252542" CornerRadius="4"
+                                    <Border Background="{StaticResource PanelBgBrush}" CornerRadius="4"
                                         AllowDrop="True"
                                         DragEnter="Timeline_DragEnter"
                                         DragOver="Timeline_DragOver"
@@ -159,35 +159,35 @@
 
                                 <!-- AUDIO Category -->
                                 <StackPanel Grid.Column="0" Margin="3,0">
-                                    <TextBlock Text="AUDIO" Foreground="#FF69B4" FontSize="9" FontWeight="SemiBold"
+                                    <TextBlock Text="AUDIO" Foreground="{StaticResource PinkBrush}" FontSize="9" FontWeight="SemiBold"
                                                HorizontalAlignment="Center" Margin="0,3,0,5"/>
                                     <StackPanel x:Name="AudioFeatures" HorizontalAlignment="Center"/>
                                 </StackPanel>
 
                                 <!-- VIDEO Category -->
                                 <StackPanel Grid.Column="1" Margin="3,0">
-                                    <TextBlock Text="VIDEO" Foreground="#FF69B4" FontSize="9" FontWeight="SemiBold"
+                                    <TextBlock Text="VIDEO" Foreground="{StaticResource PinkBrush}" FontSize="9" FontWeight="SemiBold"
                                                HorizontalAlignment="Center" Margin="0,3,0,5"/>
                                     <StackPanel x:Name="VideoFeatures" HorizontalAlignment="Center"/>
                                 </StackPanel>
 
                                 <!-- OVERLAYS Category -->
                                 <StackPanel Grid.Column="2" Margin="3,0">
-                                    <TextBlock Text="OVERLAYS" Foreground="#FF69B4" FontSize="9" FontWeight="SemiBold"
+                                    <TextBlock Text="OVERLAYS" Foreground="{StaticResource PinkBrush}" FontSize="9" FontWeight="SemiBold"
                                                HorizontalAlignment="Center" Margin="0,3,0,5"/>
                                     <StackPanel x:Name="OverlayFeatures" HorizontalAlignment="Center"/>
                                 </StackPanel>
 
                                 <!-- INTERACTIVE Category -->
                                 <StackPanel Grid.Column="3" Margin="3,0">
-                                    <TextBlock Text="INTERACTIVE" Foreground="#FF69B4" FontSize="9" FontWeight="SemiBold"
+                                    <TextBlock Text="INTERACTIVE" Foreground="{StaticResource PinkBrush}" FontSize="9" FontWeight="SemiBold"
                                                HorizontalAlignment="Center" Margin="0,3,0,5"/>
                                     <StackPanel x:Name="InteractiveFeatures" HorizontalAlignment="Center"/>
                                 </StackPanel>
 
                                 <!-- EXTRAS Category -->
                                 <StackPanel Grid.Column="4" Margin="3,0">
-                                    <TextBlock Text="EXTRAS" Foreground="#FF69B4" FontSize="9" FontWeight="SemiBold"
+                                    <TextBlock Text="EXTRAS" Foreground="{StaticResource PinkBrush}" FontSize="9" FontWeight="SemiBold"
                                                HorizontalAlignment="Center" Margin="0,3,0,5"/>
                                     <StackPanel x:Name="ExtrasFeatures" HorizontalAlignment="Center"/>
                                 </StackPanel>
@@ -229,10 +229,10 @@
                                     <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
 
-                                <TextBlock Text="Vibe Description" Foreground="#888" FontSize="10" Margin="0,0,0,4"/>
+                                <TextBlock Text="Vibe Description" Foreground="{StaticResource TextSecondaryBrush}" FontSize="10" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtDescription" Grid.Row="1"
                                          Height="55" TextWrapping="Wrap" AcceptsReturn="True"
-                                         Background="#252542" Foreground="#E0E0E0"
+                                         Background="{StaticResource PanelBgBrush}" Foreground="{StaticResource TextLightBrush}"
                                          BorderBrush="#353555" BorderThickness="1"
                                          Padding="8" FontSize="11" VerticalScrollBarVisibility="Auto"
                                          ToolTip="Enter a description for your session"/>
@@ -260,7 +260,7 @@
                 <Border Background="Transparent" MouseLeftButtonDown="TutorialOverlay_Close"/>
 
                 <!-- Tutorial Content -->
-                <Border Background="#1E1E3A" CornerRadius="12" BorderBrush="#FF69B4" BorderThickness="2"
+                <Border Background="{StaticResource DeepBlueBrush}" CornerRadius="12" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2"
                         MaxWidth="600" MaxHeight="550" VerticalAlignment="Center" HorizontalAlignment="Center"
                         Margin="50" MouseLeftButtonDown="TutorialContent_MouseDown">
                     <Grid>
@@ -271,14 +271,14 @@
                         </Grid.RowDefinitions>
 
                         <!-- Header -->
-                        <Border Grid.Row="0" Background="#252542" CornerRadius="10,10,0,0" Padding="20,15">
+                        <Border Grid.Row="0" Background="{StaticResource PanelBgBrush}" CornerRadius="10,10,0,0" Padding="20,15">
                             <Grid>
                                 <TextBlock Text="📖 How to Use the Session Editor"
-                                           Foreground="#FF69B4" FontSize="18" FontWeight="Bold"
+                                           Foreground="{StaticResource PinkBrush}" FontSize="18" FontWeight="Bold"
                                            HorizontalAlignment="Center"/>
                                 <Button Content="✕" Click="TutorialOverlay_Close"
                                         HorizontalAlignment="Right" VerticalAlignment="Top"
-                                        Background="Transparent" Foreground="#888" FontSize="14"
+                                        Background="Transparent" Foreground="{StaticResource TextSecondaryBrush}" FontSize="14"
                                         BorderThickness="0" Cursor="Hand" Margin="0,-5,-5,0"/>
                             </Grid>
                         </Border>
@@ -287,66 +287,66 @@
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="25,20">
                             <StackPanel>
                                 <!-- Step 1 -->
-                                <Border Background="#252542" CornerRadius="8" Padding="15" Margin="0,0,0,12">
+                                <Border Background="{StaticResource PanelBgBrush}" CornerRadius="8" Padding="15" Margin="0,0,0,12">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                             <Border Background="#4CAF50" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
                                                 <TextBlock Text="1" Foreground="White" FontWeight="Bold"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
-                                            <TextBlock Text="Hover to See Description" Foreground="#E0E0E0" FontSize="14" FontWeight="SemiBold"
+                                            <TextBlock Text="Hover to See Description" Foreground="{StaticResource TextLightBrush}" FontSize="14" FontWeight="SemiBold"
                                                        VerticalAlignment="Center"/>
                                         </StackPanel>
                                         <TextBlock Text="Hover over any feature icon to see its name and a brief description of what it does."
-                                                   Foreground="#B0B0B0" FontSize="13" TextWrapping="Wrap" Margin="34,0,0,0"/>
+                                                   Foreground="{StaticResource TextSilverBrush}" FontSize="13" TextWrapping="Wrap" Margin="34,0,0,0"/>
                                     </StackPanel>
                                 </Border>
 
                                 <!-- Step 2 -->
-                                <Border Background="#252542" CornerRadius="8" Padding="15" Margin="0,0,0,12">
+                                <Border Background="{StaticResource PanelBgBrush}" CornerRadius="8" Padding="15" Margin="0,0,0,12">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                             <Border Background="#2196F3" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
                                                 <TextBlock Text="2" Foreground="White" FontWeight="Bold"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
-                                            <TextBlock Text="Drag to Create Segments" Foreground="#E0E0E0" FontSize="14" FontWeight="SemiBold"
+                                            <TextBlock Text="Drag to Create Segments" Foreground="{StaticResource TextLightBrush}" FontSize="14" FontWeight="SemiBold"
                                                        VerticalAlignment="Center"/>
                                         </StackPanel>
                                         <TextBlock Text="Drag a feature icon onto the timeline to create a colored segment. Each segment shows when the effect starts and ends."
-                                                   Foreground="#B0B0B0" FontSize="13" TextWrapping="Wrap" Margin="34,0,0,0"/>
+                                                   Foreground="{StaticResource TextSilverBrush}" FontSize="13" TextWrapping="Wrap" Margin="34,0,0,0"/>
                                     </StackPanel>
                                 </Border>
 
                                 <!-- Step 3 -->
-                                <Border Background="#252542" CornerRadius="8" Padding="15" Margin="0,0,0,12">
+                                <Border Background="{StaticResource PanelBgBrush}" CornerRadius="8" Padding="15" Margin="0,0,0,12">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                             <Border Background="#FF9800" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
                                                 <TextBlock Text="3" Foreground="White" FontWeight="Bold"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
-                                            <TextBlock Text="Resize &amp; Move Segments" Foreground="#E0E0E0" FontSize="14" FontWeight="SemiBold"
+                                            <TextBlock Text="Resize &amp; Move Segments" Foreground="{StaticResource TextLightBrush}" FontSize="14" FontWeight="SemiBold"
                                                        VerticalAlignment="Center"/>
                                         </StackPanel>
                                         <TextBlock Text="Drag the left or right edge handles to resize the segment. Drag the colored bar itself to move the entire segment."
-                                                   Foreground="#B0B0B0" FontSize="13" TextWrapping="Wrap" Margin="34,0,0,0"/>
+                                                   Foreground="{StaticResource TextSilverBrush}" FontSize="13" TextWrapping="Wrap" Margin="34,0,0,0"/>
                                     </StackPanel>
                                 </Border>
 
                                 <!-- Step 4 -->
-                                <Border Background="#252542" CornerRadius="8" Padding="15" Margin="0,0,0,12">
+                                <Border Background="{StaticResource PanelBgBrush}" CornerRadius="8" Padding="15" Margin="0,0,0,12">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                                             <Border Background="#9C27B0" CornerRadius="12" Width="24" Height="24" Margin="0,0,10,0">
                                                 <TextBlock Text="4" Foreground="White" FontWeight="Bold"
                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
-                                            <TextBlock Text="Right-Click to Edit Settings" Foreground="#E0E0E0" FontSize="14" FontWeight="SemiBold"
+                                            <TextBlock Text="Right-Click to Edit Settings" Foreground="{StaticResource TextLightBrush}" FontSize="14" FontWeight="SemiBold"
                                                        VerticalAlignment="Center"/>
                                         </StackPanel>
                                         <TextBlock Text="Right-click any segment on the timeline to open its settings popup. Adjust parameters like intensity, frequency, and more."
-                                                   Foreground="#B0B0B0" FontSize="13" TextWrapping="Wrap" Margin="34,0,0,0"/>
+                                                   Foreground="{StaticResource TextSilverBrush}" FontSize="13" TextWrapping="Wrap" Margin="34,0,0,0"/>
                                     </StackPanel>
                                 </Border>
 
@@ -369,7 +369,7 @@
                         </ScrollViewer>
 
                         <!-- Footer -->
-                        <Border Grid.Row="2" Background="#252542" CornerRadius="0,0,10,10" Padding="20,15">
+                        <Border Grid.Row="2" Background="{StaticResource PanelBgBrush}" CornerRadius="0,0,10,10" Padding="20,15">
                             <Button Content="Got it!" Style="{StaticResource PinkButton}"
                                     HorizontalAlignment="Center" Click="TutorialOverlay_Close"
                                     Padding="40,10"/>

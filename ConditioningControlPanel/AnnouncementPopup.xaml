@@ -11,10 +11,10 @@
         WindowStartupLocation="CenterScreen"
         MouseLeftButtonDown="Window_MouseLeftButtonDown">
 
-    <Border Background="#F0151530" CornerRadius="12" BorderBrush="#FF69B4" BorderThickness="2"
+    <Border Background="#F0151530" CornerRadius="12" BorderBrush="{StaticResource PinkBrush}" BorderThickness="2"
             Margin="10">
         <Border.Effect>
-            <DropShadowEffect Color="#FF69B4" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
+            <DropShadowEffect Color="{StaticResource PinkColor}" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
         </Border.Effect>
 
         <Grid>
@@ -22,7 +22,7 @@
             <Button Content="✕"
                     HorizontalAlignment="Right" VerticalAlignment="Top"
                     Width="28" Height="28" Margin="0,8,12,0"
-                    Background="Transparent" Foreground="#888888"
+                    Background="Transparent" Foreground="{StaticResource TextSecondaryBrush}"
                     BorderThickness="0" Cursor="Hand"
                     Panel.ZIndex="1"
                     Click="BtnClose_Click">
@@ -47,7 +47,7 @@
 
                 <!-- Title -->
                 <TextBlock x:Name="TxtTitle"
-                           Foreground="#FF69B4" FontWeight="Bold" FontSize="20"
+                           Foreground="{StaticResource PinkBrush}" FontWeight="Bold" FontSize="20"
                            TextWrapping="Wrap" TextAlignment="Center"
                            Margin="0,0,0,10"/>
 
@@ -66,7 +66,7 @@
                         FontSize="14" FontWeight="SemiBold">
                     <Button.Style>
                         <Style TargetType="Button">
-                            <Setter Property="Background" Value="#FF69B4"/>
+                            <Setter Property="Background" Value="{StaticResource PinkBrush}"/>
                             <Setter Property="Foreground" Value="White"/>
                             <Setter Property="BorderThickness" Value="0"/>
                             <Setter Property="Template">
