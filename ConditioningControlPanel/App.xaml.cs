@@ -479,7 +479,7 @@ namespace ConditioningControlPanel
             if (Directory.Exists(themePath)) return themePath;
             
             themePath = Path.Combine(resourcesPath, "theme", "default");
-            return !Directory.Exists(themePath) ? Path.Combine(resourcesPath, "theme") : themePath;
+            return themePath;
         }
 
         private void ParseThemeFilesAndAddToMemory(string file, HashSet<string> loadedBaseThemes)
