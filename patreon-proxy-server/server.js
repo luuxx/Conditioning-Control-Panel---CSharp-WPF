@@ -67,183 +67,6 @@ function getTodayKey() {
 }
 
 /**
- * Get current month key (UTC) for bandwidth tracking
- */
-function getMonthKey() {
-    const now = new Date();
-    return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-}
-
-/**
- * Check bandwidth limit for a user
- * Returns { allowed: boolean, usedBytes: number, limitBytes: number, remainingBytes: number }
- */
-async function checkBandwidthLimit(userId, isPatreon, packSizeBytes) {
-    const limitBytes = isPatreon ? BANDWIDTH_LIMIT.PATREON_USER_BYTES : BANDWIDTH_LIMIT.FREE_USER_BYTES;
-
-    if (!redis) {
-        // No Redis = no tracking, allow download
-        return { allowed: true, usedBytes: 0, limitBytes, remainingBytes: limitBytes };
-    }
-
-    const monthKey = getMonthKey();
-    const key = `${BANDWIDTH_LIMIT.KEY_PREFIX}${userId}:${monthKey}`;
-
-    try {
-        const usedBytes = parseInt(await redis.get(key) || '0', 10);
-        const remainingBytes = Math.max(0, limitBytes - usedBytes);
-
-        // Check if this download would exceed the limit
-        if (usedBytes + packSizeBytes > limitBytes) {
-            return {
-                allowed: false,
-                usedBytes,
-                limitBytes,
-                remainingBytes,
-                resetTime: getNextMonthReset()
-            };
-        }
-
-        return { allowed: true, usedBytes, limitBytes, remainingBytes };
-    } catch (error) {
-        console.error('Bandwidth check error:', error);
-        return { allowed: true, usedBytes: 0, limitBytes, remainingBytes: limitBytes };
-    }
-}
-
-/**
- * Record bandwidth usage after a download
- */
-async function recordBandwidthUsage(userId, bytes) {
-    if (!redis) return;
-
-    const monthKey = getMonthKey();
-    const key = `${BANDWIDTH_LIMIT.KEY_PREFIX}${userId}:${monthKey}`;
-
-    try {
-        await redis.incrby(key, bytes);
-        // Expire after 35 days (to cover the full month plus buffer)
-        await redis.expire(key, 35 * 24 * 60 * 60);
-    } catch (error) {
-        console.error('Bandwidth recording error:', error);
-    }
-}
-
-/**
- * Create a pending download entry (bandwidth reserved but not charged yet)
- * Returns the download ID for later confirmation
- */
-async function createPendingDownload(userId, packId, bytes) {
-    if (!redis) return null;
-
-    const downloadId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const key = `${PENDING_DOWNLOAD.KEY_PREFIX}${downloadId}`;
-
-    try {
-        const pendingData = {
-            userId,
-            packId,
-            bytes,
-            createdAt: new Date().toISOString(),
-            status: 'pending'
-        };
-        await redis.set(key, JSON.stringify(pendingData));
-        // Auto-expire after grace period (will auto-finalize on next check)
-        await redis.expire(key, PENDING_DOWNLOAD.GRACE_PERIOD_MINUTES * 60);
-
-        console.log(`Created pending download: ${downloadId} for user=${userId}, pack=${packId}, bytes=${formatBytes(bytes)}`);
-        return downloadId;
-    } catch (error) {
-        console.error('Pending download creation error:', error);
-        return null;
-    }
-}
-
-/**
- * Finalize a pending download (charge bandwidth)
- * Called when download completes successfully
- */
-async function finalizePendingDownload(downloadId) {
-    if (!redis) return { success: false, error: 'Redis not available' };
-
-    const key = `${PENDING_DOWNLOAD.KEY_PREFIX}${downloadId}`;
-
-    try {
-        const pendingData = await redis.get(key);
-        if (!pendingData) {
-            return { success: false, error: 'Download not found or already processed' };
-        }
-
-        const pending = typeof pendingData === 'string' ? JSON.parse(pendingData) : pendingData;
-        if (pending.status !== 'pending') {
-            return { success: false, error: `Download already ${pending.status}` };
-        }
-
-        // Charge bandwidth
-        await recordBandwidthUsage(pending.userId, pending.bytes);
-
-        // Mark as finalized and delete
-        await redis.del(key);
-
-        console.log(`Finalized download: ${downloadId} for user=${pending.userId}, charged ${formatBytes(pending.bytes)}`);
-        return { success: true, userId: pending.userId, bytes: pending.bytes };
-    } catch (error) {
-        console.error('Finalize download error:', error);
-        return { success: false, error: error.message };
-    }
-}
-
-/**
- * Cancel/refund a pending download (don't charge bandwidth)
- * Called when download fails or is cancelled
- */
-async function cancelPendingDownload(downloadId) {
-    if (!redis) return { success: false, error: 'Redis not available' };
-
-    const key = `${PENDING_DOWNLOAD.KEY_PREFIX}${downloadId}`;
-
-    try {
-        const pendingData = await redis.get(key);
-        if (!pendingData) {
-            return { success: false, error: 'Download not found or already processed' };
-        }
-
-        const pending = typeof pendingData === 'string' ? JSON.parse(pendingData) : pendingData;
-        if (pending.status !== 'pending') {
-            return { success: false, error: `Download already ${pending.status}` };
-        }
-
-        // Don't charge bandwidth - just delete the pending entry
-        await redis.del(key);
-
-        console.log(`Cancelled download: ${downloadId} for user=${pending.userId}, refunded ${formatBytes(pending.bytes)}`);
-        return { success: true, userId: pending.userId, bytes: pending.bytes, refunded: true };
-    } catch (error) {
-        console.error('Cancel download error:', error);
-        return { success: false, error: error.message };
-    }
-}
-
-/**
- * Get the reset time (first of next month UTC)
- */
-function getNextMonthReset() {
-    const now = new Date();
-    const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0));
-    return nextMonth.toISOString();
-}
-
-/**
- * Format bytes to human readable string
- */
-function formatBytes(bytes) {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-/**
  * Check and increment rate limit for a user
  * Returns { allowed: boolean, remaining: number, used: number }
  */
@@ -4008,73 +3831,6 @@ app.get('/admin/user-info', async (req, res) => {
     } catch (error) {
         console.error('Admin user-info error:', error.message);
         res.status(500).json({ error: 'Failed to get user info' });
-    }
-});
-
-/**
- * POST /admin/reset-bandwidth
- * Reset bandwidth usage for a user (admin only)
- * Body: { display_name: string, admin_token: string, bytes_to_subtract?: number }
- * If bytes_to_subtract not provided, resets to 0
- */
-app.post('/admin/reset-bandwidth', async (req, res) => {
-    try {
-        const { display_name, admin_token, bytes_to_subtract } = req.body;
-
-        // Admin token check
-        const expectedToken = process.env.ADMIN_TOKEN;
-        if (!expectedToken || admin_token !== expectedToken) {
-            return res.status(403).json({ error: 'Unauthorized' });
-        }
-
-        if (!display_name || typeof display_name !== 'string') {
-            return res.status(400).json({ error: 'display_name is required' });
-        }
-
-        if (!redis) {
-            return res.status(503).json({ error: 'Redis not available' });
-        }
-
-        // Find user by display_name index
-        const indexKey = `display_name_index:${display_name.toLowerCase()}`;
-        const userId = await redis.get(indexKey);
-
-        if (!userId) {
-            return res.status(404).json({ error: `User with display_name "${display_name}" not found` });
-        }
-
-        const monthKey = getMonthKey();
-        const bandwidthKey = `${BANDWIDTH_LIMIT.KEY_PREFIX}${userId}:${monthKey}`;
-
-        // Get current bandwidth
-        const currentBytes = parseInt(await redis.get(bandwidthKey) || '0', 10);
-
-        let newBytes;
-        if (bytes_to_subtract && typeof bytes_to_subtract === 'number') {
-            // Subtract specific amount
-            newBytes = Math.max(0, currentBytes - bytes_to_subtract);
-            await redis.set(bandwidthKey, newBytes);
-        } else {
-            // Reset to 0
-            newBytes = 0;
-            await redis.del(bandwidthKey);
-        }
-
-        console.log(`[ADMIN] Reset bandwidth for "${display_name}" (${userId}): ${formatBytes(currentBytes)} -> ${formatBytes(newBytes)}`);
-
-        res.json({
-            success: true,
-            display_name: display_name,
-            user_id: userId,
-            old_bytes: currentBytes,
-            new_bytes: newBytes,
-            old_display: formatBytes(currentBytes),
-            new_display: formatBytes(newBytes),
-            message: `Bandwidth reset from ${formatBytes(currentBytes)} to ${formatBytes(newBytes)}`
-        });
-    } catch (error) {
-        console.error('Admin reset-bandwidth error:', error.message);
-        res.status(500).json({ error: 'Failed to reset bandwidth' });
     }
 });
 
@@ -8723,18 +8479,6 @@ const PACK_RATE_LIMIT = {
     KEY_PREFIX: 'packdownload:'
 };
 
-// Monthly bandwidth limits (in bytes)
-const BANDWIDTH_LIMIT = {
-    FREE_USER_BYTES: 10 * 1024 * 1024 * 1024,      // 10 GB per month for free users
-    PATREON_USER_BYTES: 100 * 1024 * 1024 * 1024,  // 100 GB per month for Patreon users
-    KEY_PREFIX: 'bandwidth:'
-};
-
-// Pending download tracking - bandwidth is only finalized after download completes
-const PENDING_DOWNLOAD = {
-    KEY_PREFIX: 'pending_download:',
-    GRACE_PERIOD_MINUTES: 30  // Auto-finalize pending downloads after this time
-};
 
 // Available packs
 // =============================================================================
@@ -8798,7 +8542,7 @@ const AVAILABLE_PACKS = {
         version: '1.0.0',
         imageCount: 106,
         videoCount: 0,
-        path: '/bimbo-aesthetic.zip',
+        externalUrl: 'https://mega.nz/file/dvZ2BYJJ#O5UoUqy3AQPubbM1RJbtmueWbtZZsJwZtqHTgYv0bMo',
         sizeBytes: 540674867,
         previewImageUrl: 'https://ccp-packs.b-cdn.net/previews/bimbo-aesthetic.png',
         previewUrls: [
@@ -8819,7 +8563,7 @@ const AVAILABLE_PACKS = {
         version: '1.0.0',
         imageCount: 89,
         videoCount: 0,
-        path: '/cock-drop.zip',
+        externalUrl: 'https://mega.nz/file/xjRxiKKJ#PLGJfsLf0mkgkxQvJlRB32HxKTpAvlAnzkQ34UZc8ik',
         sizeBytes: 421955994,
         previewImageUrl: 'https://ccp-packs.b-cdn.net/previews/cock-drop.png',
         previewUrls: [
@@ -8861,7 +8605,7 @@ const AVAILABLE_PACKS = {
         version: '1.0.0',
         imageCount: 77,
         videoCount: 0,
-        path: '/good-girl.zip',
+        externalUrl: 'https://mega.nz/file/AjQnxQgL#7ye5gQ9zEkHq0FW5kncb44Dl2Tsn9hiVE5mCeLI_rfo',
         sizeBytes: 382876098,
         previewImageUrl: 'https://ccp-packs.b-cdn.net/previews/good-girl.png',
         previewUrls: [
@@ -8882,7 +8626,7 @@ const AVAILABLE_PACKS = {
         version: '1.0.0',
         imageCount: 68,
         videoCount: 0,
-        path: '/pretty-girl.zip',
+        externalUrl: 'https://mega.nz/file/03wwGbgB#kKlcyq4N7NOUAqCHapibU4Bfr6oN0_SAyGbLNNPXzC0',
         sizeBytes: 489951068,
         previewImageUrl: 'https://ccp-packs.b-cdn.net/previews/pretty-girl.png',
         previewUrls: [
@@ -8903,7 +8647,7 @@ const AVAILABLE_PACKS = {
         version: '1.0.0',
         imageCount: 140,
         videoCount: 0,
-        path: '/bimbo-moo.zip',
+        externalUrl: 'https://mega.nz/file/B6plRJpK#zoI5ISVo05JQ6C0Tfu8xRTVxaldR8eJX0Q8_mzr6_D8',
         sizeBytes: 670223564,
         previewImageUrl: 'https://ccp-packs.b-cdn.net/previews/bimbo-moo.png',
         previewUrls: [
@@ -8924,7 +8668,7 @@ const AVAILABLE_PACKS = {
         version: '1.0.0',
         imageCount: 61,
         videoCount: 0,
-        path: '/toon-bimbos.zip',
+        externalUrl: 'https://mega.nz/file/IvQVnCqI#D_B5avzh0E_55sseNOTbyvy1A4fNvCZ81J0lUceYUdA',
         sizeBytes: 365567795,
         previewImageUrl: 'https://ccp-packs.b-cdn.net/previews/toon-bimbos.png',
         previewUrls: [
@@ -9119,38 +8863,6 @@ app.post('/pack/download-url', async (req, res) => {
 
         const pack = AVAILABLE_PACKS[packId];
 
-        // Fetch display_name for whitelist check
-        let displayName = null;
-        try {
-            const profileKey = `${PROFILE_KEY_PREFIX}${userId}`;
-            const profileData = await redis.get(profileKey);
-            if (profileData) {
-                const profile = typeof profileData === 'string' ? JSON.parse(profileData) : profileData;
-                displayName = profile.display_name || null;
-            }
-        } catch (e) { /* ignore */ }
-
-        // Check if user is an active Patreon supporter or whitelisted
-        const tierInfo = determineTier(identity);
-        const whitelisted = isWhitelisted(tierInfo.patron_email, tierInfo.patron_name, displayName);
-        // Any active patron gets the higher bandwidth limit (not just tier > 0)
-        const isPatreon = tierInfo.is_active || whitelisted;
-
-        // Check bandwidth limit
-        const bandwidthCheck = await checkBandwidthLimit(userId, isPatreon, pack.sizeBytes);
-        if (!bandwidthCheck.allowed) {
-            const limitDisplay = formatBytes(bandwidthCheck.limitBytes);
-            const usedDisplay = formatBytes(bandwidthCheck.usedBytes);
-            return res.status(429).json({
-                error: 'Bandwidth limit exceeded',
-                message: `You've used ${usedDisplay} of your ${limitDisplay} monthly bandwidth limit.${!isPatreon ? ' Upgrade to Patreon for 100 GB/month!' : ''}`,
-                resetTime: bandwidthCheck.resetTime,
-                usedBytes: bandwidthCheck.usedBytes,
-                limitBytes: bandwidthCheck.limitBytes,
-                isPatreon: isPatreon
-            });
-        }
-
         // Check rate limit
         const rateLimit = await checkPackDownloadLimit(userId, packId);
         if (!rateLimit.allowed) {
@@ -9162,43 +8874,27 @@ app.post('/pack/download-url', async (req, res) => {
             });
         }
 
-        // Generate signed URL
-        const downloadUrl = generateDownloadUrl(pack.path);
+        // Generate download URL (Bunny CDN for path-based packs, external URL for Mega-hosted)
+        const downloadUrl = pack.externalUrl || generateDownloadUrl(pack.path);
 
-        // Record the download rate limit (still immediate - prevents abuse)
+        // Record the download rate limit
         await incrementPackDownload(userId, packId);
-
-        // Create pending download - bandwidth is NOT charged until download completes
-        // This prevents users from losing bandwidth on failed/cancelled downloads
-        const downloadId = await createPendingDownload(userId, packId, pack.sizeBytes);
 
         // Get updated rate limit status
         const newRateLimit = await checkPackDownloadLimit(userId, packId);
 
-        // Get current bandwidth status (doesn't include pending)
-        const currentBandwidth = await checkBandwidthLimit(userId, isPatreon, 0);
-
-        console.log(`Pack download URL generated: user=${userId}, pack=${packId}, downloadId=${downloadId}, patreon=${isPatreon}, remaining=${newRateLimit.remaining}, bandwidth=${formatBytes(currentBandwidth.usedBytes)}/${formatBytes(currentBandwidth.limitBytes)} (pending: ${formatBytes(pack.sizeBytes)})`);
+        console.log(`Pack download URL generated: user=${userId}, pack=${packId}, remaining=${newRateLimit.remaining}`);
 
         res.json({
             success: true,
             downloadUrl: downloadUrl,
-            downloadId: downloadId,  // Client should use this to confirm/cancel
             packId: packId,
             packName: pack.name,
             sizeBytes: pack.sizeBytes,
-            expiresIn: BUNNY_CONFIG.URL_EXPIRY_SECONDS,
             rateLimit: {
                 remaining: newRateLimit.remaining,
                 limit: PACK_RATE_LIMIT.DOWNLOADS_PER_DAY,
                 resetTime: newRateLimit.resetTime
-            },
-            bandwidth: {
-                usedBytes: currentBandwidth.usedBytes,
-                limitBytes: currentBandwidth.limitBytes,
-                remainingBytes: currentBandwidth.remainingBytes,
-                pendingBytes: pack.sizeBytes,  // Show what will be charged on completion
-                isPatreon: isPatreon
             }
         });
 
@@ -9207,77 +8903,6 @@ app.post('/pack/download-url', async (req, res) => {
         res.status(500).json({
             error: 'Server error',
             message: 'Failed to generate download URL. Please try again.'
-        });
-    }
-});
-
-/**
- * POST /pack/download-complete
- * Report download completion status (success or failure)
- * This finalizes or refunds the pending bandwidth
- * Body: { downloadId: string, success: boolean }
- * Requires: Authorization: Bearer <patreon_access_token>
- */
-app.post('/pack/download-complete', async (req, res) => {
-    try {
-        const authHeader = req.headers.authorization;
-        if (!authHeader?.startsWith('Bearer ')) {
-            return res.status(401).json({ error: 'Authorization required' });
-        }
-
-        const { downloadId, success } = req.body;
-
-        if (!downloadId) {
-            return res.status(400).json({ error: 'downloadId is required' });
-        }
-
-        if (typeof success !== 'boolean') {
-            return res.status(400).json({ error: 'success (boolean) is required' });
-        }
-
-        let result;
-        if (success) {
-            // Download succeeded - charge bandwidth
-            result = await finalizePendingDownload(downloadId);
-            if (result.success) {
-                console.log(`Download ${downloadId} completed successfully, charged ${formatBytes(result.bytes)}`);
-                res.json({
-                    success: true,
-                    message: 'Download confirmed, bandwidth charged',
-                    bytesCharged: result.bytes
-                });
-            } else {
-                // Already processed or not found - not an error, just log it
-                console.log(`Download ${downloadId} confirmation: ${result.error}`);
-                res.json({
-                    success: true,
-                    message: result.error || 'Download already processed'
-                });
-            }
-        } else {
-            // Download failed - refund bandwidth
-            result = await cancelPendingDownload(downloadId);
-            if (result.success) {
-                console.log(`Download ${downloadId} cancelled/failed, refunded ${formatBytes(result.bytes)}`);
-                res.json({
-                    success: true,
-                    message: 'Download cancelled, bandwidth refunded',
-                    bytesRefunded: result.bytes
-                });
-            } else {
-                // Already processed or not found - not an error
-                console.log(`Download ${downloadId} cancellation: ${result.error}`);
-                res.json({
-                    success: true,
-                    message: result.error || 'Download already processed'
-                });
-            }
-        }
-    } catch (error) {
-        console.error('Download complete error:', error.message);
-        res.status(500).json({
-            error: 'Server error',
-            message: 'Failed to process download status'
         });
     }
 });
@@ -9308,26 +8933,6 @@ app.get('/pack/status', async (req, res) => {
             return res.status(401).json({ error: 'Invalid user' });
         }
 
-        // Fetch display_name for whitelist check
-        let displayName = null;
-        try {
-            const profileKey = `${PROFILE_KEY_PREFIX}${userId}`;
-            const profileData = await redis.get(profileKey);
-            if (profileData) {
-                const profile = typeof profileData === 'string' ? JSON.parse(profileData) : profileData;
-                displayName = profile.display_name || null;
-            }
-        } catch (e) { /* ignore */ }
-
-        // Check if user is Patreon or whitelisted
-        const tierInfo = determineTier(identity);
-        const whitelisted = isWhitelisted(tierInfo.patron_email, tierInfo.patron_name, displayName);
-        // Any active patron gets the higher bandwidth limit (not just tier > 0)
-        const isPatreon = tierInfo.is_active || whitelisted;
-
-        // Get bandwidth status
-        const bandwidthStatus = await checkBandwidthLimit(userId, isPatreon, 0);
-
         // Get rate limit status for all packs
         const packStatus = {};
         for (const [packId, pack] of Object.entries(AVAILABLE_PACKS)) {
@@ -9345,15 +8950,7 @@ app.get('/pack/status', async (req, res) => {
         res.json({
             userId: userId,
             packs: packStatus,
-            dailyLimit: PACK_RATE_LIMIT.DOWNLOADS_PER_DAY,
-            bandwidth: {
-                usedBytes: bandwidthStatus.usedBytes,
-                limitBytes: bandwidthStatus.limitBytes,
-                remainingBytes: bandwidthStatus.remainingBytes,
-                usedGB: (bandwidthStatus.usedBytes / (1024 * 1024 * 1024)).toFixed(2),
-                limitGB: bandwidthStatus.limitBytes / (1024 * 1024 * 1024),
-                isPatreon: isPatreon
-            }
+            dailyLimit: PACK_RATE_LIMIT.DOWNLOADS_PER_DAY
         });
 
     } catch (error) {
@@ -9391,66 +8988,10 @@ app.get('/discord/pack/status', async (req, res) => {
 
         const discordUserId = `discord_${discordUser.id}`;
 
-        // Get the Discord user's profile to find their display name
-        let displayName = null;
-        let linkedUserId = discordUserId; // Default to Discord user ID for bandwidth tracking
-        let isPatreon = false;
-
-        if (redis) {
-            try {
-                // First, get the Discord user's profile
-                const discordProfileKey = `${PROFILE_KEY_PREFIX}${discordUserId}`;
-                const discordProfileData = await redis.get(discordProfileKey);
-
-                if (discordProfileData) {
-                    const discordProfile = typeof discordProfileData === 'string'
-                        ? JSON.parse(discordProfileData)
-                        : discordProfileData;
-                    displayName = discordProfile.display_name || null;
-                }
-
-                // If user has a display name, check if it's linked to a Patreon account
-                if (displayName) {
-                    const indexKey = `display_name_index:${displayName.toLowerCase()}`;
-                    const originalUserId = await redis.get(indexKey);
-
-                    // If the display name belongs to a different (non-Discord) user, check their Patreon status
-                    if (originalUserId && !originalUserId.startsWith('discord_')) {
-                        const patreonProfileKey = `${PROFILE_KEY_PREFIX}${originalUserId}`;
-                        const patreonProfileData = await redis.get(patreonProfileKey);
-
-                        if (patreonProfileData) {
-                            const patreonProfile = typeof patreonProfileData === 'string'
-                                ? JSON.parse(patreonProfileData)
-                                : patreonProfileData;
-
-                            // Check if this Patreon user has active status
-                            if (patreonProfile.patreon_is_active || patreonProfile.patreon_is_whitelisted || patreonProfile.patreon_tier > 0) {
-                                isPatreon = true;
-                                linkedUserId = originalUserId; // Use Patreon user's ID for bandwidth tracking
-                                console.log(`Discord user ${discordUser.username} (${displayName}) linked to Patreon user ${originalUserId} - granting Patreon benefits`);
-                            }
-                        }
-                    }
-
-                    // Also check whitelist by display name
-                    if (!isPatreon && isWhitelisted(null, null, displayName)) {
-                        isPatreon = true;
-                        console.log(`Discord user ${discordUser.username} (${displayName}) is whitelisted - granting Patreon benefits`);
-                    }
-                }
-            } catch (e) {
-                console.error('Discord pack status profile lookup error:', e.message);
-            }
-        }
-
-        // Get bandwidth status using the appropriate user ID
-        const bandwidthStatus = await checkBandwidthLimit(linkedUserId, isPatreon, 0);
-
         // Get rate limit status for all packs
         const packStatus = {};
         for (const [packId, pack] of Object.entries(AVAILABLE_PACKS)) {
-            const rateLimit = await checkPackDownloadLimit(linkedUserId, packId);
+            const rateLimit = await checkPackDownloadLimit(discordUserId, packId);
             packStatus[packId] = {
                 name: pack.name,
                 sizeBytes: pack.sizeBytes,
@@ -9462,19 +9003,10 @@ app.get('/discord/pack/status', async (req, res) => {
         }
 
         res.json({
-            userId: linkedUserId,
+            userId: discordUserId,
             discordUserId: discordUserId,
-            displayName: displayName,
             packs: packStatus,
-            dailyLimit: PACK_RATE_LIMIT.DOWNLOADS_PER_DAY,
-            bandwidth: {
-                usedBytes: bandwidthStatus.usedBytes,
-                limitBytes: bandwidthStatus.limitBytes,
-                remainingBytes: bandwidthStatus.remainingBytes,
-                usedGB: (bandwidthStatus.usedBytes / (1024 * 1024 * 1024)).toFixed(2),
-                limitGB: bandwidthStatus.limitBytes / (1024 * 1024 * 1024),
-                isPatreon: isPatreon
-            }
+            dailyLimit: PACK_RATE_LIMIT.DOWNLOADS_PER_DAY
         });
 
     } catch (error) {
