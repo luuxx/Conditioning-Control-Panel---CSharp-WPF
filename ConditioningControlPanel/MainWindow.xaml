@@ -1434,8 +1434,8 @@
                             </Style>
                         </ComboBox.ItemContainerStyle>
                     </ComboBox>
-                    <Button x:Name="BtnUpdateAvailable" Content="💖 v5.5.15 IS OUT! 💖"
-                            Click="BtnUpdateAvailable_Click" ToolTip="v5.5.15 - Remote Control Improvements"
+                    <Button x:Name="BtnUpdateAvailable" Content="💖 v5.5.19 IS OUT! 💖"
+                            Click="BtnUpdateAvailable_Click" ToolTip="v5.5.17 - Video Stability Fix"
                             FontSize="11" FontWeight="Bold" Cursor="Hand">
                         <Button.Style>
                             <Style TargetType="Button">
@@ -7376,6 +7376,10 @@
                     <Button x:Name="BtnRefreshPacks" Content="🔄 Refresh"
                             Style="{StaticResource OutlineButton}" Margin="0,0,8,0" Padding="12,6"
                             Click="BtnRefreshPacks_Click" ToolTip="Refresh available packs"/>
+                    <Button x:Name="BtnDeleteDownloadedPacks" Content="🗑️ Delete Downloaded Packs"
+                            Style="{StaticResource OutlineButton}" Margin="0,0,8,0" Padding="12,6"
+                            Click="BtnDeleteDownloadedPacks_Click"
+                            ToolTip="Delete all downloaded content packs (your local files are not affected)"/>
                     <Button x:Name="BtnOpenAssetsFolder" Content="📂 Open Folder"
                             Style="{StaticResource OutlineButton}" Padding="12,6"
                             Click="BtnOpenAssetsFolder_Click" ToolTip="Open assets folder in Explorer"/>
@@ -7387,50 +7391,28 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <!-- Header with bandwidth bar -->
-                    <Grid Grid.Row="0" Margin="0,0,0,10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
+                    <!-- Header -->
+                    <Grid Grid.Row="0" Margin="0,0,0,6">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock Text="🎁 Community Content Packs"
                                        Style="{StaticResource SectionHeader}"/>
                             <Button x:Name="HelpBtnPacks" Style="{StaticResource HelpButtonStyle}" VerticalAlignment="Center" Margin="8,0,0,0" Tag="ContentPacks"/>
                         </StackPanel>
-
-                        <!-- Bandwidth usage bar -->
-                        <StackPanel x:Name="BandwidthPanel" Grid.Column="1" Orientation="Horizontal"
-                                    HorizontalAlignment="Right" VerticalAlignment="Center"
-                                    Visibility="Collapsed">
-                            <TextBlock x:Name="TxtBandwidthLabel" Text="Bandwidth:"
-                                       Foreground="{StaticResource TextSecondaryBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <Border Background="{StaticResource DarkerBgBrush}" CornerRadius="4" Width="150" Height="16" VerticalAlignment="Center">
-                                <Grid>
-                                    <ProgressBar x:Name="BandwidthProgressBar"
-                                                 Minimum="0" Maximum="100" Value="0"
-                                                 Foreground="{StaticResource PinkBrush}" Background="Transparent"
-                                                 BorderThickness="0"/>
-                                    <TextBlock x:Name="TxtBandwidthUsage" Text="0 / 10 GB"
-                                               Foreground="White" FontSize="10" FontWeight="SemiBold"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                </Grid>
-                            </Border>
-                        </StackPanel>
+                        <TextBlock Text="After downloading a pack, just drag and drop the ZIP file into this window!"
+                                   Foreground="#888" FontSize="11" FontStyle="Italic"
+                                   HorizontalAlignment="Right" VerticalAlignment="Center"/>
                     </Grid>
 
                     <!-- Horizontal scrolling pack cards -->
-                    <ScrollViewer x:Name="PacksScrollViewer" Grid.Row="2"
+                    <ScrollViewer x:Name="PacksScrollViewer" Grid.Row="1"
                                   HorizontalScrollBarVisibility="Auto"
                                   VerticalScrollBarVisibility="Disabled"
                                   PreviewMouseWheel="PacksScrollViewer_PreviewMouseWheel"
                                   Padding="0,0,0,8"
-                                  MaxHeight="340">
+                                  MaxHeight="280">
                         <ScrollViewer.Resources>
                             <!-- Force bigger scrollbar -->
                             <Style TargetType="ScrollBar">
@@ -7469,11 +7451,21 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Width="240" Height="300" Margin="0,0,12,0" CornerRadius="8"
-                                                Background="{StaticResource DeepPanelBrush}" BorderBrush="{StaticResource PanelAccentBrush}" BorderThickness="1">
+                                        <Border Width="192" Height="240" Margin="0,0,10,0" CornerRadius="8"
+                                                Background="{StaticResource DeepPanelBrush}" BorderThickness="1">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="BorderBrush" Value="{StaticResource PanelAccentBrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsExternal}" Value="True">
+                                                            <Setter Property="BorderBrush" Value="#FFA500"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
                                             <Grid>
                                                 <Grid.RowDefinitions>
-                                                    <RowDefinition Height="90"/>
+                                                    <RowDefinition Height="72"/>
                                                     <RowDefinition Height="*"/>
                                                 </Grid.RowDefinitions>
 
@@ -7503,11 +7495,17 @@
                                                                 Visibility="{Binding IsDownloaded, Converter={StaticResource BoolToVisibility}}">
                                                             <TextBlock Text="INSTALLED" FontSize="8" FontWeight="Bold" Foreground="White"/>
                                                         </Border>
+                                                        <!-- Manual download badge for external packs -->
+                                                        <Border Background="#FFA500" CornerRadius="4" Padding="6,2"
+                                                                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="6"
+                                                                Visibility="{Binding ShowExternalButtons, Converter={StaticResource BoolToVisibility}}">
+                                                            <TextBlock Text="MANUAL DOWNLOAD" FontSize="8" FontWeight="Bold" Foreground="White"/>
+                                                        </Border>
                                                     </Grid>
                                                 </Border>
 
                                                 <!-- Info section -->
-                                                <Grid Grid.Row="1" Margin="8,4,8,4">
+                                                <Grid Grid.Row="1" Margin="6,3,6,3">
                                                     <Grid.RowDefinitions>
                                                         <RowDefinition Height="Auto"/>
                                                         <RowDefinition Height="Auto"/>
@@ -7517,15 +7515,15 @@
                                                     </Grid.RowDefinitions>
 
                                                     <TextBlock Grid.Row="0" Text="{Binding Name}" FontWeight="Bold"
-                                                               Foreground="{StaticResource TextLightBrush}" FontSize="12"
-                                                               Margin="0,0,0,2"/>
+                                                               Foreground="{StaticResource TextLightBrush}" FontSize="11"
+                                                               Margin="0,0,0,1"/>
                                                     <TextBlock Grid.Row="1" Text="{Binding Description}"
-                                                               Foreground="{StaticResource TextMutedBrush}" FontSize="10"
+                                                               Foreground="{StaticResource TextMutedBrush}" FontSize="9"
                                                                TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
-                                                               MaxHeight="92"
+                                                               MaxHeight="60"
                                                                VerticalAlignment="Top"
                                                                ToolTip="{Binding Description}"/>
-                                                    <TextBlock Grid.Row="2" Foreground="{StaticResource PinkBrush}" FontSize="9" Margin="0,2,0,4" FontWeight="SemiBold">
+                                                    <TextBlock Grid.Row="2" Foreground="{StaticResource PinkBrush}" FontSize="8" Margin="0,1,0,3" FontWeight="SemiBold">
                                                         <TextBlock.Text>
                                                             <MultiBinding StringFormat="{}{0} images, {1} videos">
                                                                 <Binding Path="ImageCount"/>
@@ -7568,11 +7566,11 @@
                             </ItemsControl>
 
                             <!-- Creator Card: Join Discord -->
-                            <Border Width="220" Height="300" Margin="0,0,12,0" CornerRadius="8"
+                            <Border Width="176" Height="240" Margin="0,0,10,0" CornerRadius="8"
                                     Background="{StaticResource DeepPanelBrush}" BorderBrush="{StaticResource DiscordBrush}" BorderThickness="2">
                                 <Grid>
                                     <Grid.RowDefinitions>
-                                        <RowDefinition Height="90"/>
+                                        <RowDefinition Height="72"/>
                                         <RowDefinition Height="*"/>
                                     </Grid.RowDefinitions>
 

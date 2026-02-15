@@ -22,28 +22,19 @@ namespace ConditioningControlPanel.Services
         /// <summary>
         /// Current application version - UPDATE THIS WHEN BUMPING VERSION
         /// </summary>
-        public const string AppVersion = "5.5.15";
+        public const string AppVersion = "5.5.19";
 
         /// <summary>
         /// Patch notes for the current version - UPDATE THIS WHEN BUMPING VERSION
         /// These are shown in the update dialog and can be used when GitHub release notes are unavailable.
         /// </summary>
-        public const string CurrentPatchNotes = @"v5.5.15 - Remote Control Improvements
+        public const string CurrentPatchNotes = @"v5.5.19 - ZIP Pack Subfolders
 
-📡 REMOTE CONTROL
-• New full-screen overlay when a controller is connected
-• Command notifications show what the controller is doing
-• Panic button now properly stops all effects including bubble count
-• Pink filter and spiral commands now work reliably
-• All effects stop automatically when controller disconnects
-• Real name is hidden from controller page for privacy
-
-🫧 BUBBLE COUNT
-• Reduced bubble counts across all difficulties for better balance
-
-🔧 FIXES
-• Whitelisted users now get full Lab (Tier 2) access
-• V2 sync grants Lab access even without Patreon OAuth";
+📥 ASSET IMPORT
+• ZIP packs now extract into their own subfolder (e.g. images/my-pack/)
+• No more files mixed together — each pack stays organized
+• Handles ZIPs with images/videos folders inside without double nesting
+• Import summary now shows the pack name";
 
         private const string GitHubOwner = "CodeBambi";
         private const string GitHubRepo = "Conditioning-Control-Panel---CSharp-WPF";

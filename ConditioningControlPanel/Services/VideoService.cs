@@ -728,19 +728,19 @@ namespace ConditioningControlPanel.Services
 
             win.Content = videoView;
 
-            // Allow panic key to close (only if enabled and key matches)
+            // Local panic key handler for immediate response (CloseAll's _isCleaningUp guard prevents re-entrancy)
             win.KeyDown += (s, e) =>
             {
                 if (App.Settings.Current.PanicKeyEnabled &&
                     e.Key.ToString() == App.Settings.Current.PanicKey)
                 {
-                    _videoPlaying = false;
-                    CloseAll();
+                    ForceCleanup();
                 }
             };
 
             win.Show();
             if (withAudio) win.Activate();
+            DisableChildWindowInput(win);
 
             videoView.MediaPlayer = mediaPlayer;
 
@@ -1112,6 +1112,7 @@ namespace ConditioningControlPanel.Services
             win.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Render);
             win.WindowState = WindowState.Maximized;
             if (withAudio) win.Activate();
+            DisableChildWindowInput(win);
 
             // Attach media player to view and start playback
             videoView.MediaPlayer = mediaPlayer;
@@ -1396,18 +1397,13 @@ namespace ConditioningControlPanel.Services
             }
             else
             {
+                // Local panic key handler for immediate response (CloseAll's _isCleaningUp guard prevents re-entrancy)
                 win.KeyDown += (s, e) =>
                 {
-                    if (App.Settings.Current.PanicKeyEnabled && e.Key.ToString() == App.Settings.Current.PanicKey)
+                    if (App.Settings.Current.PanicKeyEnabled &&
+                        e.Key.ToString() == App.Settings.Current.PanicKey)
                     {
-                        try
-                        {
-                            Cleanup();
-                        }
-                        catch (Exception ex)
-                        {
-                            App.Logger?.Error(ex, "Error during video cleanup on escape");
-                        }
+                        ForceCleanup();
                     }
                 };
             }
@@ -1936,7 +1932,7 @@ namespace ConditioningControlPanel.Services
                 // Use message-pump-aware wait to prevent deadlock (LibVLC threads may need UI thread)
                 if (playersCopy.Count > 0)
                 {
-                    WaitWithMessagePump(100);
+                    WaitWithMessagePump(300);
                 }
 
                 // Now detach MediaPlayers from VideoViews (safe since players are stopped and we waited)
@@ -1968,7 +1964,7 @@ namespace ConditioningControlPanel.Services
                 // Use message-pump-aware wait to prevent deadlock with LibVLC
                 if (windowsCopy.Count > 0)
                 {
-                    WaitWithMessagePump(50);
+                    WaitWithMessagePump(100);
                 }
 
                 // Close video windows AFTER media players are stopped and detached
@@ -2023,7 +2019,7 @@ namespace ConditioningControlPanel.Services
                         Task.Run(async () =>
                         {
                             // Wait for any pending EndReached events to complete their Task.Run dispatch
-                            await Task.Delay(750);
+                            await Task.Delay(1000);
 
                             foreach (var player in playersCopy)
                             {
@@ -2304,6 +2300,58 @@ namespace ConditioningControlPanel.Services
             }
             _tempPackFiles.Clear();
         }
+
+        #region LibVLC Child Window Input Blocking
+
+        [DllImport("user32.dll")]
+        private static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        /// <summary>
+        /// Disables input on LibVLC's native child HWNDs to prevent mouse/keyboard events
+        /// from reaching the native renderer (WPF airspace limitation).
+        /// Scheduled with a short delay to allow VideoView to fully create its native window.
+        /// </summary>
+        private void DisableChildWindowInput(Window win)
+        {
+            Task.Delay(300).ContinueWith(_ =>
+            {
+                try
+                {
+                    if (Application.Current?.Dispatcher == null) return;
+                    Application.Current.Dispatcher.BeginInvoke(() =>
+                    {
+                        try
+                        {
+                            if (!win.IsLoaded) return;
+                            var hwndSource = PresentationSource.FromVisual(win) as HwndSource;
+                            if (hwndSource == null) return;
+
+                            var parentHwnd = hwndSource.Handle;
+                            EnumChildWindows(parentHwnd, (childHwnd, _) =>
+                            {
+                                EnableWindow(childHwnd, false);
+                                return true; // continue enumeration
+                            }, IntPtr.Zero);
+                        }
+                        catch (Exception ex)
+                        {
+                            App.Logger?.Debug("DisableChildWindowInput: Failed - {Error}", ex.Message);
+                        }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Debug("DisableChildWindowInput: Dispatch failed - {Error}", ex.Message);
+                }
+            });
+        }
+
+        #endregion
 
         public void Dispose()
         {

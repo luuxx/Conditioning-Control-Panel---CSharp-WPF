@@ -2910,9 +2910,6 @@ namespace ConditioningControlPanel
                         UpdateBannerWelcomeMessage();
                         UpdateAccountLinkingUI();
 
-                        // Update bandwidth display (Discord users can inherit Patreon benefits via linked display name)
-                        _ = UpdateBandwidthDisplayAsync();
-
                         // Show OG welcome popup if applicable
                         if (result.ShouldShowOgWelcome)
                         {
@@ -5746,13 +5743,13 @@ namespace ConditioningControlPanel
 
             if (isEnabled)
             {
-                // Must be logged in
-                if (!App.IsLoggedIn || string.IsNullOrEmpty(App.EffectiveUserId))
+                // Must have a cloud identity (unified ID from Patreon or Discord login)
+                if (string.IsNullOrEmpty(App.UnifiedUserId))
                 {
                     _isLoading = true;
                     ChkRemoteControlEnabled.IsChecked = false;
                     _isLoading = false;
-                    ShowStyledDialog("Login Required", "You must be logged in to use Remote Control.", "OK", "");
+                    ShowStyledDialog("Login Required", "You need to log in and sync your profile before using Remote Control.\n\nLog in via Patreon or Discord in the Settings tab.", "OK", "");
                     return;
                 }
 
@@ -5776,7 +5773,7 @@ namespace ConditioningControlPanel
                     ChkRemoteControlEnabled.IsChecked = false;
                     _isLoading = false;
                     RemoteControlPanel.Visibility = System.Windows.Visibility.Collapsed;
-                    ShowStyledDialog("Error", "Failed to start remote control session. Check your connection.", "OK", "");
+                    ShowStyledDialog("Connection Error", "Could not start remote control session. The server may be temporarily unavailable.\n\nPlease check your internet connection and try again.", "OK", "");
                     return;
                 }
 
@@ -9919,9 +9916,6 @@ namespace ConditioningControlPanel
 
                 var result = await Task.Run(() => _assetImportService.ImportAsync(paths, progress));
 
-                // Show result notification
-                ShowDropZoneStatus(result.GetSummary(), isError: result.TotalImported == 0 && !result.HasErrors);
-
                 // Refresh the asset lists if any were imported
                 if (result.ImagesImported > 0)
                 {
@@ -9935,12 +9929,17 @@ namespace ConditioningControlPanel
                     RefreshVideosList();
                 }
 
+                RefreshAssetTree();
+                ShowTab("assets");
+
                 App.Logger?.Information("Asset import complete: {Summary}", result.GetSummary());
+                MessageBox.Show(result.GetSummary(), "Import Complete", MessageBoxButton.OK,
+                    result.TotalImported > 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
             }
             catch (Exception ex)
             {
                 App.Logger?.Error(ex, "Asset import failed");
-                ShowDropZoneStatus($"Import failed: {ex.Message}", isError: true);
+                MessageBox.Show($"Import failed: {ex.Message}", "Import Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -15615,6 +15614,33 @@ namespace ConditioningControlPanel
             Process.Start("explorer.exe", assetsPath);
         }
 
+        private void BtnDeleteDownloadedPacks_Click(object sender, RoutedEventArgs e)
+        {
+            var installedIds = App.Settings?.Current?.InstalledPackIds;
+            if (installedIds == null || installedIds.Count == 0)
+            {
+                MessageBox.Show("No downloaded packs to delete.", "Delete Packs", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var confirm = MessageBox.Show(
+                $"Delete {installedIds.Count} downloaded content pack(s)?\n\n"
+                + "This only removes downloaded pack data.\n"
+                + "Your own images and videos in the assets folder will NOT be affected.",
+                "Delete Downloaded Packs", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+            if (confirm != MessageBoxResult.Yes) return;
+
+            foreach (var packId in installedIds.ToList())
+                App.ContentPacks?.UninstallPack(packId);
+
+            RefreshAssetTree();
+            App.Flash?.LoadAssets();
+            App.Video?.ReloadAssets();
+            App.BubbleCount?.ReloadAssets();
+            MessageBox.Show("All downloaded packs have been deleted.\nYour local files were not affected.", "Done", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
         private async Task RefreshPacksAsync()
         {
             try
@@ -15697,9 +15723,6 @@ namespace ConditioningControlPanel
                 // Start preview rotation timer
                 StartPackPreviewRotation();
 
-                // Fetch and update bandwidth usage
-                await UpdateBandwidthDisplayAsync();
-
                 // Subscribe to pack events for progress updates
                 if (App.ContentPacks != null)
                 {
@@ -15716,77 +15739,6 @@ namespace ConditioningControlPanel
             catch (Exception ex)
             {
                 App.Logger?.Warning(ex, "Failed to refresh packs");
-            }
-        }
-
-        private async Task UpdateBandwidthDisplayAsync()
-        {
-            try
-            {
-                App.Logger?.Information("UpdateBandwidthDisplayAsync: Starting update");
-
-                // Show default state if not logged in with Patreon or Discord
-                var isPatreonAuth = App.Patreon?.IsAuthenticated == true;
-                var isDiscordAuth = App.Discord?.IsAuthenticated == true;
-
-                if (App.ContentPacks == null || (!isPatreonAuth && !isDiscordAuth))
-                {
-                    App.Logger?.Information("UpdateBandwidthDisplayAsync: Not authenticated, showing default");
-                    // Show default bar for non-authenticated users
-                    BandwidthProgressBar.Value = 0;
-                    TxtBandwidthUsage.Text = "0 / 10 GB";
-                    TxtBandwidthLabel.Text = "Bandwidth (Free):";
-                    BandwidthProgressBar.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x69, 0xB4));
-                    BandwidthPanel.Visibility = Visibility.Visible;
-                    return;
-                }
-
-                var status = await App.ContentPacks.GetFullPackStatusAsync();
-                if (status?.Bandwidth == null)
-                {
-                    App.Logger?.Information("UpdateBandwidthDisplayAsync: Server returned no bandwidth data");
-                    // Server didn't return bandwidth - show default
-                    BandwidthProgressBar.Value = 0;
-                    var isPremium = App.Patreon?.HasPremiumAccess == true;
-                    TxtBandwidthUsage.Text = isPremium ? "0 / 100 GB" : "0 / 10 GB";
-                    TxtBandwidthLabel.Text = isPremium ? "Bandwidth (Patreon):" : "Bandwidth (Free):";
-                    BandwidthProgressBar.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x69, 0xB4));
-                    BandwidthPanel.Visibility = Visibility.Visible;
-                    return;
-                }
-
-                App.Logger?.Information("UpdateBandwidthDisplayAsync: Got bandwidth - UsedBytes={Used}, LimitBytes={Limit}, UsedGB={UsedGB}",
-                    status.Bandwidth.UsedBytes, status.Bandwidth.LimitBytes, status.Bandwidth.UsedGB);
-
-                var bandwidth = status.Bandwidth;
-                var usedGB = double.TryParse(bandwidth.UsedGB, out var used) ? used : 0;
-                var limitGB = bandwidth.LimitGB;
-                var percentage = limitGB > 0 ? (usedGB / limitGB) * 100 : 0;
-
-                BandwidthProgressBar.Value = Math.Min(100, percentage);
-                TxtBandwidthUsage.Text = $"{usedGB:F1} / {limitGB:F0} GB";
-
-                // Change color based on usage
-                if (percentage >= 90)
-                    BandwidthProgressBar.Foreground = new SolidColorBrush(Color.FromRgb(0xE7, 0x4C, 0x3C)); // Red
-                else if (percentage >= 70)
-                    BandwidthProgressBar.Foreground = new SolidColorBrush(Color.FromRgb(0xF3, 0x9C, 0x12)); // Orange
-                else
-                    BandwidthProgressBar.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x69, 0xB4)); // Pink
-
-                // Update label to show if Patreon or free
-                TxtBandwidthLabel.Text = bandwidth.IsPatreon ? "Bandwidth (Patreon):" : "Bandwidth (Free):";
-
-                BandwidthPanel.Visibility = Visibility.Visible;
-            }
-            catch (Exception ex)
-            {
-                App.Logger?.Debug("Failed to update bandwidth display: {Error}", ex.Message);
-                // Show default on error
-                BandwidthProgressBar.Value = 0;
-                TxtBandwidthUsage.Text = "0 / 10 GB";
-                TxtBandwidthLabel.Text = "Bandwidth:";
-                BandwidthPanel.Visibility = Visibility.Visible;
             }
         }
 
@@ -15887,9 +15839,6 @@ namespace ConditioningControlPanel
                 {
                     App.Logger?.Debug("Failed to load preview images after install: {Error}", ex.Message);
                 }
-
-                // Update bandwidth display after download
-                await UpdateBandwidthDisplayAsync();
 
                 RefreshAssetTree();
             });
@@ -17279,6 +17228,13 @@ namespace ConditioningControlPanel
                 }
                 else
                 {
+                    // External packs open in browser (e.g. MEGA link)
+                    if (pack.IsExternal)
+                    {
+                        Process.Start(new ProcessStartInfo(pack.ExternalUrl!) { UseShellExecute = true });
+                        return;
+                    }
+
                     // Show confirmation dialog before download
                     var sizeStr = pack.SizeBytes > 0 ? $" ({pack.SizeBytes / (1024.0 * 1024):F0} MB)" : "";
                     var result = MessageBox.Show(
