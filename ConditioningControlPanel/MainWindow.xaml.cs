@@ -3228,7 +3228,7 @@ namespace ConditioningControlPanel
                 case "lab":
                     LabTab.Visibility = Visibility.Visible;
                     BtnLab.Style = activeStyle;
-                    var hasLabAccess = true //App.Patreon?.CurrentTier >= PatreonTier.Level2 || App.Patreon?.IsWhitelisted == true;
+                    var hasLabAccess = true; //App.Patreon?.CurrentTier >= PatreonTier.Level2 || App.Patreon?.IsWhitelisted == true;
                     LabLockedOverlay.Visibility = hasLabAccess ? Visibility.Collapsed : Visibility.Visible;
                     LabContentBorder.Opacity = hasLabAccess ? 1.0 : 0.15;
                     LabContentBorder.IsHitTestVisible = hasLabAccess;
