@@ -64,6 +64,7 @@
     <Color x:Key="LightGrayColor">#B0B0B0</Color>
     <Color x:Key="MutedGrayColor">#888888</Color>
     <Color x:Key="DarkGrayColor">#666666</Color>
+    <Color x:Key="DarkerGrayColor">#555555</Color>
     <Color x:Key="WhiteColor">#FFFFFF</Color>
     <Color x:Key="SuccessGreenColor">#00E676</Color>
     <Color x:Key="SuccessDarkGreenColor">#00AA00</Color>

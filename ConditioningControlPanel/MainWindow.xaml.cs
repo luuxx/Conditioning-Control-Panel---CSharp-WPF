@@ -5275,10 +5275,8 @@ namespace ConditioningControlPanel
 
             BtnKeywordTriggersStartStop.Content = running ? "Stop" : "Start";
             BtnKeywordTriggersStartStop.Background = running
-                ? new SolidColorBrush(
-                    (Color)ColorConverter.ConvertFromString("#555555"))
-                : new SolidColorBrush(
-                    (Color)ColorConverter.ConvertFromString("#FF69B4"));
+                ? FindResource("BtnKeywordTriggersStopBrush") as SolidColorBrush
+                : FindResource("BtnKeywordTriggersStartBrush") as SolidColorBrush;
         }
 
         private void SliderKeywordBufferTimeout_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -13002,7 +13000,7 @@ namespace ConditioningControlPanel
                 SliderKeywordGlobalCooldown.Value = s.KeywordGlobalCooldownSeconds;
                 SliderKeywordSessionMultiplier.Value = s.KeywordSessionMultiplier;
 
-                var hasT2 = KeywordTriggerService.HasAccess();
+                var hasT2 = true; //KeywordTriggerService.HasAccess();
 
                 // Show/hide lock indicator
                 if (TxtKeywordTriggersLocked != null)

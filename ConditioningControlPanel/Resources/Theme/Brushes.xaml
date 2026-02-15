@@ -173,7 +173,7 @@
     
     <SolidColorBrush x:Key="TxtRemoteCommandBrush" Color="{StaticResource LimeGreenLightColor}"/>
     <SolidColorBrush x:Key="TxtRemoteCommandSecondaryBrush" Color="{StaticResource LighterGrayColor}"/>
-    <SolidColorBrush x:Key="BtnRemoteCommandEndSessionBackgroundBrush" Color="{StaticResource WhiteColor}"/>
+    <SolidColorBrush x:Key="BtnRemoteCommandEndSessionTextBrush" Color="{StaticResource WhiteColor}"/>
     <SolidColorBrush x:Key="BtnRemoteCommandEndSessionBorderHoverBrush" Color="{StaticResource EndSessionHoverColor}"/>
     <SolidColorBrush x:Key="BtnRemoteCommandEndSessionBorderPressBrush" Color="{StaticResource EndSessionPressColor}"/>
     
@@ -317,4 +317,7 @@
     <SolidColorBrush x:Key="TransparentPinkHexBrush" Color="{StaticResource TransparentPinkHexColor}"/>
     <SolidColorBrush x:Key="BtnManagePhrasesBackgroundBrush" Color="{StaticResource BtnManagePhrasesColor}"/>
     <SolidColorBrush x:Key="BtnManagePhrasesTextBrush" Color="{StaticResource PinkBrushColor}"/>
+    <SolidColorBrush x:Key="BtnKeywordTriggersStartBrush" Color="{StaticResource PinkBrushColor}"/>
+    <SolidColorBrush x:Key="BtnKeywordTriggersStopBrush" Color="{StaticResource DarkerGrayColor}"/>
+    
 </ResourceDictionary>

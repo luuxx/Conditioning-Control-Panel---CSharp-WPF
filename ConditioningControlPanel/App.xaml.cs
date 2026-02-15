@@ -472,6 +472,70 @@ namespace ConditioningControlPanel
             }
         }
 
+        private string GetThemePath()
+        {
+            var themePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "Theme", "Custom Theme");
+            if (Directory.Exists(themePath)) return themePath;
+            
+            themePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "Theme", "Default");
+            return !Directory.Exists(themePath) ? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "Theme") : themePath;
+        }
+
+        private void ParseThemeFilesAndAddToMemory(string file, HashSet<string> loadedBaseThemes)
+        {
+            try
+            {
+                var xamlContent = File.ReadAllText(file);
+                    
+                // Fix clr-namespace references that are missing the assembly name.
+                // When loading XAML via XamlReader.Load at runtime from a file, it doesn't know 
+                // about the current assembly unless explicitly told.
+                if (xamlContent.Contains("clr-namespace:ConditioningControlPanel"))
+                {
+                    // Use regex to find all clr-namespace declarations for our app and ensure they have the assembly name
+                    // Matches: xmlns:prefix="clr-namespace:ConditioningControlPanel.Something"
+                    // But NOT if it already has ;assembly=
+                    var regex = new Regex(
+                        @"(clr-namespace:(ConditioningControlPanel[^""; \t>]*))(?![^""]*;assembly=)",
+                        RegexOptions.IgnoreCase);
+                        
+                    xamlContent = regex.Replace(xamlContent, "$1;assembly=ConditioningControlPanel");
+                }
+
+                using var stream = new MemoryStream(Encoding.UTF8.GetBytes(xamlContent));
+                    
+                // Create a parser context to help with assembly resolution
+                var context = new ParserContext();
+                context.XmlnsDictionary.Add("", "http://schemas.microsoft.com/winfx/2006/xaml/presentation");
+                context.XmlnsDictionary.Add("x", "http://schemas.microsoft.com/winfx/2006/xaml");
+                    
+                if (XamlReader.Load(stream, context) is ResourceDictionary externalDict)
+                {
+                    // Set the source property so relative references inside the XAML might work 
+                    // (though absolute pack URIs are preferred in the XAML itself)
+                    externalDict.Source = new Uri(file, UriKind.Absolute);
+                        
+                    // Important: Use a try-catch for the specific addition to avoid one bad file
+                    // breaking the whole application.
+                    try 
+                    {
+                        Resources.MergedDictionaries.Add(externalDict);
+                        loadedBaseThemes.Add(Path.GetFileName(file).ToLowerInvariant());
+                        Debug.WriteLine($"Successfully loaded external theme: {file}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Failed to merge external theme {file}: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Can't use Logger yet as it's not initialized, but we should fail gracefully
+                Debug.WriteLine($"Failed to load external theme {file}: {ex.Message}");
+            }
+        }
+        
         /// <summary>
         /// Loads XAML resource dictionaries from the Resources/Theme folder if they exist on disk.
         /// This allows for theme customization after the project is built.
@@ -480,7 +544,7 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var themePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "Theme");
+                var themePath = GetThemePath();
                 if (!Directory.Exists(themePath)) return;
 
                 var xamlFiles = Directory.GetFiles(themePath, "*.xaml");
@@ -489,59 +553,18 @@ namespace ConditioningControlPanel
                 // Track which base themes we found so we can replace the embedded ones
                 var loadedBaseThemes = new HashSet<string>();
 
+                //Load colors first so they can override the in memory colors if the user wants to.
+                var colors = xamlFiles.FirstOrDefault(x => x.EndsWith("Colors.xaml"));
+                if (colors != null)
+                {
+                    ParseThemeFilesAndAddToMemory(colors, loadedBaseThemes);
+                }
+                
                 foreach (var file in xamlFiles)
                 {
-                    try
-                    {
-                        var xamlContent = File.ReadAllText(file);
-                        
-                        // Fix clr-namespace references that are missing the assembly name.
-                        // When loading XAML via XamlReader.Load at runtime from a file, it doesn't know 
-                        // about the current assembly unless explicitly told.
-                        if (xamlContent.Contains("clr-namespace:ConditioningControlPanel"))
-                        {
-                            // Use regex to find all clr-namespace declarations for our app and ensure they have the assembly name
-                            // Matches: xmlns:prefix="clr-namespace:ConditioningControlPanel.Something"
-                            // But NOT if it already has ;assembly=
-                            var regex = new Regex(
-                                @"(clr-namespace:(ConditioningControlPanel[^""; \t>]*))(?![^""]*;assembly=)",
-                                RegexOptions.IgnoreCase);
-                            
-                            xamlContent = regex.Replace(xamlContent, "$1;assembly=ConditioningControlPanel");
-                        }
-
-                        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(xamlContent));
-                        
-                        // Create a parser context to help with assembly resolution
-                        var context = new ParserContext();
-                        context.XmlnsDictionary.Add("", "http://schemas.microsoft.com/winfx/2006/xaml/presentation");
-                        context.XmlnsDictionary.Add("x", "http://schemas.microsoft.com/winfx/2006/xaml");
-                        
-                        if (XamlReader.Load(stream, context) is ResourceDictionary externalDict)
-                        {
-                            // Set the source property so relative references inside the XAML might work 
-                            // (though absolute pack URIs are preferred in the XAML itself)
-                            externalDict.Source = new Uri(file, UriKind.Absolute);
-                            
-                            // Important: Use a try-catch for the specific addition to avoid one bad file
-                            // breaking the whole application.
-                            try 
-                            {
-                                Resources.MergedDictionaries.Add(externalDict);
-                                loadedBaseThemes.Add(Path.GetFileName(file).ToLowerInvariant());
-                                Debug.WriteLine($"Successfully loaded external theme: {file}");
-                            }
-                            catch (Exception ex)
-                            {
-                                Debug.WriteLine($"Failed to merge external theme {file}: {ex.Message}");
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        // Can't use Logger yet as it's not initialized, but we should fail gracefully
-                        Debug.WriteLine($"Failed to load external theme {file}: {ex.Message}");
-                    }
+                    if(file.EndsWith("Colors.xaml"))
+                        continue;
+                    ParseThemeFilesAndAddToMemory(file, loadedBaseThemes);
                 }
 
                 // If we loaded external versions of our core theme files, we might want to remove
