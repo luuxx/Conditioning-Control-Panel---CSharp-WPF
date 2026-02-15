@@ -305,6 +305,8 @@ namespace ConditioningControlPanel
         public static ScreenOcrService ScreenOcr { get; private set; } = null!;
         public static KeywordHighlightService? KeywordHighlight { get; private set; }
         public static ActivityTracker ActivityTracker { get; private set; } = null!;
+        public static RemoteControlService RemoteControl { get; private set; } = null!;
+        public static CompanionPhraseService CompanionPhrases { get; private set; } = null!;
 
         /// <summary>
         /// Whether user is logged in with either Patreon or Discord (required for progression tracking)
@@ -320,6 +322,15 @@ namespace ConditioningControlPanel
         /// Unified user ID that links Patreon and Discord accounts together
         /// </summary>
         public static string? UnifiedUserId { get; set; }
+
+        /// <summary>
+        /// Best available user identifier — UnifiedUserId, falling back to Patreon email or Discord ID
+        /// </summary>
+        public static string? EffectiveUserId =>
+            !string.IsNullOrEmpty(UnifiedUserId) ? UnifiedUserId :
+            !string.IsNullOrEmpty(Patreon?.PatronEmail) ? $"patreon:{Patreon.PatronEmail}" :
+            !string.IsNullOrEmpty(Discord?.UserId) ? $"discord:{Discord.UserId}" :
+            null;
 
         /// <summary>
         /// Get the user's display name. In offline mode, returns the offline username.
@@ -739,6 +750,8 @@ namespace ConditioningControlPanel
             KeywordTriggers = new KeywordTriggerService();
             ScreenOcr = new ScreenOcrService();
             KeywordHighlight = new KeywordHighlightService();
+            RemoteControl = new RemoteControlService();
+            CompanionPhrases = new CompanionPhraseService();
 
             // Auto-connect haptics if enabled (runs in background)
             if (Settings.Current.Haptics.AutoConnect && Settings.Current.Haptics.Provider != HapticProviderType.Mock)
@@ -881,6 +894,14 @@ namespace ConditioningControlPanel
                 if (Discord.IsAuthenticated)
                 {
                     Logger?.Information("Discord authenticated: {Username} ({Id})", Discord.Username, Discord.UserId);
+
+                    // If not already syncing via Patreon, load cloud profile and start heartbeat for Discord-only users
+                    if (Patreon?.IsAuthenticated != true && ProfileSync != null)
+                    {
+                        Logger?.Information("Discord-only user, loading cloud profile...");
+                        await ProfileSync.LoadProfileAsync();
+                        ProfileSync.StartHeartbeat();
+                    }
                 }
             }
             catch (Exception ex)
@@ -1822,6 +1843,7 @@ Application State:
             }
 
             // Dispose trigger sources FIRST so no new effects get queued during shutdown
+            RemoteControl?.Dispose();
             ScreenOcr?.Dispose();
             KeywordTriggers?.Dispose();
             KeywordHighlight?.Dispose();

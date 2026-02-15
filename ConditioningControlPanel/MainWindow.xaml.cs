@@ -77,6 +77,7 @@ namespace ConditioningControlPanel
         private const int SW_SHOW = 5;
 
         private bool _isRunning = false;
+        public bool IsEngineRunning => _isRunning;
         private bool _isLoading = true;
         private BrowserService? _browser;
         private bool _browserInitialized = false;
@@ -90,6 +91,38 @@ namespace ConditioningControlPanel
         private bool _exitRequested = false;
         private int _panicPressCount = 0;
         private bool _isStreakFixMode = false;
+        private DispatcherTimer? _remoteNotificationTimer;
+
+        private static readonly Dictionary<string, string> CommandLabels = new()
+        {
+            ["show_pink_filter"] = "Pink Filter enabled",
+            ["stop_pink_filter"] = "Pink Filter disabled",
+            ["show_spiral"] = "Spiral enabled",
+            ["stop_spiral"] = "Spiral disabled",
+            ["start_bubbles"] = "Bubbles started",
+            ["stop_bubbles"] = "Bubbles stopped",
+            ["trigger_video"] = "Video triggered",
+            ["trigger_haptic"] = "Haptic triggered",
+            ["trigger_bubble_count"] = "Bubble Count triggered",
+            ["start_autonomy"] = "Autonomy enabled",
+            ["stop_autonomy"] = "Autonomy disabled",
+            ["start_session"] = "Session started",
+            ["pause_session"] = "Session paused",
+            ["resume_session"] = "Session resumed",
+            ["stop_session"] = "Session stopped",
+            ["enable_strict_lock"] = "Strict Lock enabled",
+            ["disable_strict_lock"] = "Strict Lock disabled",
+            ["disable_panic"] = "Panic key disabled",
+            ["enable_panic"] = "Panic key enabled",
+            ["trigger_panic"] = "All effects stopped",
+        };
+
+        private static readonly HashSet<string> SuppressedCommands = new()
+        {
+            "trigger_flash", "trigger_subliminal",
+            "set_pink_opacity", "set_spiral_opacity",
+            "duck_audio", "unduck_audio",
+        };
 
         /// <summary>
         /// Fires when the engine is stopped (for avatar reactions)
@@ -248,6 +281,9 @@ namespace ConditioningControlPanel
             StartupManager.SyncWithSettings(App.Settings.Current.RunOnStartup);
 
             _isLoading = false;
+
+            // Initialize phrase count display
+            UpdatePhraseCountDisplay();
 
             // Initialize achievement grid and subscribe to unlock events
             PopulateAchievementGrid();
@@ -2941,6 +2977,22 @@ namespace ConditioningControlPanel
             }
         }
 
+        private void BtnLabGuide_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "https://codebambi.github.io/Conditioning-Control-Panel---CSharp-WPF/guide-lab.html",
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "Failed to open Lab guide link");
+            }
+        }
+
         private void ChkDiscordRichPresence_Changed(object sender, RoutedEventArgs e)
         {
             // Get the state from whichever checkbox was clicked
@@ -3176,6 +3228,10 @@ namespace ConditioningControlPanel
                 case "lab":
                     LabTab.Visibility = Visibility.Visible;
                     BtnLab.Style = activeStyle;
+                    var hasLabAccess = App.Patreon?.CurrentTier >= PatreonTier.Level2 || App.Patreon?.IsWhitelisted == true;
+                    LabLockedOverlay.Visibility = hasLabAccess ? Visibility.Collapsed : Visibility.Visible;
+                    LabContentBorder.Opacity = hasLabAccess ? 1.0 : 0.15;
+                    LabContentBorder.IsHitTestVisible = hasLabAccess;
                     break;
             }
         }
@@ -4536,6 +4592,20 @@ namespace ConditioningControlPanel
             UpdateCommunityPromptsUI();
         }
 
+        private void BtnManagePhrases_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new CompanionPhraseEditorDialog { Owner = this };
+            dialog.ShowDialog();
+            UpdatePhraseCountDisplay();
+        }
+
+        private void UpdatePhraseCountDisplay()
+        {
+            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
+            var count = App.CompanionPhrases?.GetActivePhraseCount(mode) ?? 0;
+            TxtPhraseCount.Text = $"{count} active";
+        }
+
         private void ChkAiChat_Changed(object sender, RoutedEventArgs e)
         {
             if (_isLoading) return;
@@ -5591,10 +5661,7 @@ namespace ConditioningControlPanel
             {
                 Tag = trigger.Id,
                 SelectedIndex = (int)trigger.VisualEffect,
-                Background = new SolidColorBrush(Color.FromRgb(0x25, 0x25, 0x42)),
-                Foreground = new SolidColorBrush(Colors.White),
-                BorderThickness = new Thickness(0),
-                FontSize = 10,
+                Style = (Style)FindResource("DarkComboBoxStyle"),
                 Margin = new Thickness(6, 0, 0, 0),
                 MinWidth = 100
             };
@@ -5668,6 +5735,427 @@ namespace ConditioningControlPanel
 
             border.Child = mainStack;
             return border;
+        }
+
+        #endregion
+
+        #region Remote Control Handlers
+
+        private async void ChkRemoteControlEnabled_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            var isEnabled = ChkRemoteControlEnabled.IsChecked ?? false;
+
+            if (isEnabled)
+            {
+                // Must be logged in
+                if (!App.IsLoggedIn || string.IsNullOrEmpty(App.EffectiveUserId))
+                {
+                    _isLoading = true;
+                    ChkRemoteControlEnabled.IsChecked = false;
+                    _isLoading = false;
+                    ShowStyledDialog("Login Required", "You must be logged in to use Remote Control.", "OK", "");
+                    return;
+                }
+
+                var tier = GetSelectedRemoteTier();
+
+                // Show consent waiver
+                if (!ShowRemoteControlWaiver(tier))
+                {
+                    _isLoading = true;
+                    ChkRemoteControlEnabled.IsChecked = false;
+                    _isLoading = false;
+                    return;
+                }
+
+                // Start session
+                RemoteControlPanel.Visibility = System.Windows.Visibility.Visible;
+                var code = await App.RemoteControl.StartSessionAsync(tier);
+                if (code == null)
+                {
+                    _isLoading = true;
+                    ChkRemoteControlEnabled.IsChecked = false;
+                    _isLoading = false;
+                    RemoteControlPanel.Visibility = System.Windows.Visibility.Collapsed;
+                    ShowStyledDialog("Error", "Failed to start remote control session. Check your connection.", "OK", "");
+                    return;
+                }
+
+                TxtRemoteCode.Text = string.Join(" ", code.ToCharArray());
+                RemoteLinkPanel.Visibility = System.Windows.Visibility.Visible;
+                RemoteCodePanel.Visibility = System.Windows.Visibility.Visible;
+                RemoteStatusPanel.Visibility = System.Windows.Visibility.Visible;
+                BtnStopRemote.Visibility = System.Windows.Visibility.Visible;
+                UpdateRemoteStatus(false);
+
+                // Listen for controller connection changes
+                App.RemoteControl.ControllerConnectedChanged += OnRemoteControllerChanged;
+                App.RemoteControl.CommandReceived += OnRemoteCommandReceived;
+                App.RemoteControl.SessionEnded += OnRemoteSessionEnded;
+            }
+            else
+            {
+                await StopRemoteControl();
+            }
+        }
+
+        private string GetSelectedRemoteTier()
+        {
+            return (CmbRemoteTier.SelectedIndex) switch
+            {
+                0 => "light",
+                1 => "standard",
+                2 => "full",
+                _ => "light"
+            };
+        }
+
+        private bool ShowRemoteControlWaiver(string tier)
+        {
+            var actions = new System.Text.StringBuilder();
+            actions.AppendLine("  - Trigger flash images (from YOUR image folder)");
+            actions.AppendLine("  - Trigger subliminal messages (from YOUR subliminal pool)");
+            actions.AppendLine("  - Toggle overlays (pink filter, spiral)");
+            actions.AppendLine("  - Start/stop bubbles");
+
+            if (tier is "standard" or "full")
+            {
+                actions.AppendLine("  - Trigger mandatory videos (from YOUR video folder)");
+                actions.AppendLine("  - Trigger haptic device patterns");
+                actions.AppendLine("  - Duck/unduck audio");
+            }
+
+            if (tier == "full")
+            {
+                actions.AppendLine("  - Start/stop autonomy mode");
+                actions.AppendLine("  - Start/pause/stop sessions");
+                actions.AppendLine("  - Enable strict lock (videos cannot be skipped)");
+                actions.AppendLine("  - Disable panic button (ESC key won't work)");
+            }
+
+            var message = $"You are about to allow another person to remotely control parts of your app.\n\n" +
+                          $"The Controller will be able to:\n{actions}\n" +
+                          $"All media content shown comes from YOUR local files and settings.\n" +
+                          $"You assume full responsibility for this interaction.\n" +
+                          $"You can stop the session at ANY time by clicking \"Stop Session\" or closing the app.\n" +
+                          $"The session code expires after 4 hours automatically.";
+
+            var confirmed = WarningDialog.ShowDoubleWarning(this,
+                "Remote Control",
+                message);
+
+            return confirmed;
+        }
+
+        private async void CmbRemoteTier_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            if (_isLoading) return;
+            if (!App.RemoteControl?.IsActive == true) return;
+
+            // If session is active and tier changed, restart with new tier
+            var newTier = GetSelectedRemoteTier();
+            if (newTier != App.RemoteControl.Tier)
+            {
+                if (!ShowRemoteControlWaiver(newTier))
+                    return;
+
+                // Unsubscribe before stopping so OnRemoteSessionEnded doesn't collapse the panel
+                App.RemoteControl.ControllerConnectedChanged -= OnRemoteControllerChanged;
+                App.RemoteControl.CommandReceived -= OnRemoteCommandReceived;
+                App.RemoteControl.SessionEnded -= OnRemoteSessionEnded;
+
+                await App.RemoteControl.StopSessionAsync();
+                var code = await App.RemoteControl.StartSessionAsync(newTier);
+                if (code != null)
+                {
+                    TxtRemoteCode.Text = string.Join(" ", code.ToCharArray());
+                    UpdateRemoteStatus(false);
+                }
+
+                // Re-subscribe after restart
+                App.RemoteControl.ControllerConnectedChanged += OnRemoteControllerChanged;
+                App.RemoteControl.CommandReceived += OnRemoteCommandReceived;
+                App.RemoteControl.SessionEnded += OnRemoteSessionEnded;
+            }
+        }
+
+        private void BtnCopyRemoteCode_Click(object sender, RoutedEventArgs e)
+        {
+            var code = App.RemoteControl?.SessionCode;
+            if (!string.IsNullOrEmpty(code))
+            {
+                System.Windows.Clipboard.SetText(code);
+                BtnCopyRemoteCode.Content = "Copied!";
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                timer.Tick += (s, _) => { BtnCopyRemoteCode.Content = "Copy"; timer.Stop(); };
+                timer.Start();
+            }
+        }
+
+        private void BtnCopyRemoteLink_Click(object sender, RoutedEventArgs e)
+        {
+            System.Windows.Clipboard.SetText("https://codebambi.github.io/Conditioning-Control-Panel---CSharp-WPF/remote/");
+            BtnCopyRemoteLink.Content = "Copied!";
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            timer.Tick += (s, _) => { BtnCopyRemoteLink.Content = "Copy Link"; timer.Stop(); };
+            timer.Start();
+        }
+
+        private async void BtnStopRemote_Click(object sender, RoutedEventArgs e)
+        {
+            await StopRemoteControl();
+            _isLoading = true;
+            ChkRemoteControlEnabled.IsChecked = false;
+            _isLoading = false;
+        }
+
+        private async Task StopRemoteControl()
+        {
+            if (App.RemoteControl != null)
+            {
+                App.RemoteControl.ControllerConnectedChanged -= OnRemoteControllerChanged;
+                App.RemoteControl.CommandReceived -= OnRemoteCommandReceived;
+                App.RemoteControl.SessionEnded -= OnRemoteSessionEnded;
+                await App.RemoteControl.StopSessionAsync();
+            }
+
+            HideRemoteControlOverlay();
+            UpdateStartButtonForRemoteControl(false);
+            RemoteControlPanel.Visibility = System.Windows.Visibility.Collapsed;
+            RemoteLinkPanel.Visibility = System.Windows.Visibility.Collapsed;
+            RemoteCodePanel.Visibility = System.Windows.Visibility.Collapsed;
+            RemoteStatusPanel.Visibility = System.Windows.Visibility.Collapsed;
+            BtnStopRemote.Visibility = System.Windows.Visibility.Collapsed;
+        }
+
+        private void OnRemoteControllerChanged(object? sender, EventArgs e)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                var connected = App.RemoteControl?.ControllerConnected ?? false;
+                UpdateRemoteStatus(connected);
+                UpdateStartButtonForRemoteControl(connected);
+
+                if (connected)
+                    ShowRemoteControlOverlay();
+                else
+                    HideRemoteControlOverlay();
+            });
+        }
+
+        private void OnRemoteSessionEnded(object? sender, EventArgs e)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                HideRemoteControlOverlay();
+                UpdateStartButtonForRemoteControl(false);
+                _isLoading = true;
+                ChkRemoteControlEnabled.IsChecked = false;
+                _isLoading = false;
+                RemoteControlPanel.Visibility = System.Windows.Visibility.Collapsed;
+                RemoteCodePanel.Visibility = System.Windows.Visibility.Collapsed;
+                RemoteStatusPanel.Visibility = System.Windows.Visibility.Collapsed;
+                BtnStopRemote.Visibility = System.Windows.Visibility.Collapsed;
+            });
+        }
+
+        private void UpdateRemoteStatus(bool controllerConnected)
+        {
+            if (controllerConnected)
+            {
+                RemoteStatusDot.Fill = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0x00, 0xFF, 0x88));
+                TxtRemoteStatus.Text = "Controller connected";
+                TxtRemoteStatus.Foreground = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0x00, 0xFF, 0x88));
+            }
+            else
+            {
+                RemoteStatusDot.Fill = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0xFF, 0xA5, 0x00));
+                TxtRemoteStatus.Text = "Waiting for controller...";
+                TxtRemoteStatus.Foreground = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0xA0, 0xA0, 0xA0));
+            }
+        }
+
+        private void ShowRemoteControlOverlay()
+        {
+            var code = App.RemoteControl?.SessionCode;
+            TxtOverlaySessionCode.Text = !string.IsNullOrEmpty(code)
+                ? $"Session: {string.Join(" ", code.ToCharArray())}"
+                : "";
+            RemoteControlOverlay.Visibility = System.Windows.Visibility.Visible;
+
+            var fadeIn = new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(300));
+            RemoteControlOverlay.BeginAnimation(OpacityProperty, fadeIn);
+        }
+
+        private void HideRemoteControlOverlay()
+        {
+            if (RemoteControlOverlay.Visibility != System.Windows.Visibility.Visible) return;
+
+            var fadeOut = new System.Windows.Media.Animation.DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(200));
+            fadeOut.Completed += (s, _) =>
+            {
+                RemoteControlOverlay.Visibility = System.Windows.Visibility.Collapsed;
+            };
+            RemoteControlOverlay.BeginAnimation(OpacityProperty, fadeOut);
+            _remoteNotificationTimer?.Stop();
+        }
+
+        private void OnRemoteCommandReceived(object? sender, string action)
+        {
+            if (SuppressedCommands.Contains(action)) return;
+
+            Dispatcher.Invoke(() => ShowCommandNotification(action));
+        }
+
+        private void ShowCommandNotification(string action)
+        {
+            var label = CommandLabels.TryGetValue(action, out var l) ? l : action.Replace("_", " ");
+            TxtRemoteCommand.Text = label;
+
+            var fadeIn = new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200));
+            RemoteCommandNotification.BeginAnimation(OpacityProperty, fadeIn);
+
+            _remoteNotificationTimer?.Stop();
+            _remoteNotificationTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            _remoteNotificationTimer.Tick += (s, _) =>
+            {
+                _remoteNotificationTimer.Stop();
+                HideCommandNotification();
+            };
+            _remoteNotificationTimer.Start();
+        }
+
+        private void HideCommandNotification()
+        {
+            var fadeOut = new System.Windows.Media.Animation.DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(300));
+            RemoteCommandNotification.BeginAnimation(OpacityProperty, fadeOut);
+        }
+
+        private async void BtnEndRemoteSession_Click(object sender, RoutedEventArgs e)
+        {
+            await StopRemoteControl();
+            _isLoading = true;
+            ChkRemoteControlEnabled.IsChecked = false;
+            _isLoading = false;
+        }
+
+        // Methods called by RemoteControlService for session commands
+        internal async void StartSessionFromRemote(Models.Session session)
+        {
+            try
+            {
+                if (_sessionEngine == null)
+                {
+                    _sessionEngine = new Services.SessionEngine(this);
+                    _sessionEngine.SessionCompleted += OnSessionCompleted;
+                    _sessionEngine.SessionStopped += OnSessionStopped;
+                }
+
+                if (!_isRunning)
+                {
+                    BtnStart_Click(this, new RoutedEventArgs());
+                }
+
+                App.IsSessionRunning = true;
+                await _sessionEngine.StartSessionAsync(session);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "[RemoteControl] Failed to start session from remote");
+            }
+        }
+
+        internal void PauseSessionFromRemote()
+        {
+            try
+            {
+                if (_sessionEngine?.IsRunning == true && !_sessionEngine.IsPaused)
+                    _sessionEngine.PauseSession();
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "[RemoteControl] Failed to pause session from remote");
+            }
+        }
+
+        internal void ResumeSessionFromRemote()
+        {
+            try
+            {
+                if (_sessionEngine?.IsRunning == true && _sessionEngine.IsPaused)
+                    _sessionEngine.ResumeSession();
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "[RemoteControl] Failed to resume session from remote");
+            }
+        }
+
+        internal void StopSessionFromRemote()
+        {
+            try
+            {
+                if (_sessionEngine?.IsRunning == true)
+                    _sessionEngine.StopSession();
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "[RemoteControl] Failed to stop session from remote");
+            }
+        }
+
+        internal void TriggerPanicFromRemote()
+        {
+            try
+            {
+                App.Logger?.Information("[RemoteControl] Panic triggered from remote");
+
+                // Kill all audio immediately
+                App.KillAllAudio();
+                App.Autonomy?.CancelActivePulses();
+
+                if (_sessionEngine != null && _sessionEngine.IsRunning && !_sessionEngine.IsPaused)
+                {
+                    _sessionEngine.PauseSession();
+                }
+
+                // Stop video explicitly (closes all video windows)
+                App.Video?.Stop();
+
+                // Stop other active effects
+                App.Flash?.Stop();
+                App.Subliminal?.Stop();
+                App.Bubbles?.Stop();
+                App.BouncingText?.Stop();
+                App.BubbleCount?.Stop();
+                App.MindWipe?.Stop();
+                App.BrainDrain?.Stop();
+                App.LockCard?.Stop();
+
+                // Turn off overlays but keep the overlay service alive
+                // so the controller can turn them back on
+                EnablePinkFilter(false);
+                EnableSpiral(false);
+                App.Overlay?.RefreshOverlays();
+
+                App.InteractionQueue?.ForceReset();
+
+                Show();
+                WindowState = WindowState.Normal;
+                Activate();
+                Topmost = true;
+                Topmost = false;
+                ShowAvatarTube();
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "[RemoteControl] Failed to trigger panic from remote");
+            }
         }
 
         #endregion
@@ -7635,6 +8123,7 @@ namespace ConditioningControlPanel
             // Lab tab
             SetHelpContent(HelpBtnKeywordTriggers, "KeywordTriggers");
             SetHelpContent(HelpBtnScreenOcr, "ScreenOcr");
+            SetHelpContent(HelpBtnRemoteControl, "RemoteControl");
 
             // Side panels
             SetHelpContent(HelpBtnAchievements, "Achievements");
@@ -11572,6 +12061,9 @@ namespace ConditioningControlPanel
 
         private void BtnStart_Click(object sender, RoutedEventArgs e)
         {
+            // Don't allow manual start/stop while remote controller is connected
+            if (App.RemoteControl?.ControllerConnected == true) return;
+
             if (_isRunning)
             {
                 // Check if a session is running
@@ -12166,6 +12658,9 @@ namespace ConditioningControlPanel
 
         private void UpdateStartButton()
         {
+            // Don't overwrite the remote control label while controller is connected
+            if (App.RemoteControl?.ControllerConnected == true) return;
+
             if (_isRunning)
             {
                 BtnStart.Background = new SolidColorBrush(Color.FromRgb(255, 107, 107)); // Red
@@ -12209,7 +12704,63 @@ namespace ConditioningControlPanel
                 }
             }
         }
-        
+
+        private void UpdateStartButtonForRemoteControl(bool connected)
+        {
+            if (connected)
+            {
+                BtnStart.IsEnabled = false;
+                BtnStart.Background = new SolidColorBrush(Color.FromRgb(0x00, 0xFF, 0x88)); // Green
+                BtnStart.Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Height = 24,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Children =
+                    {
+                        new TextBlock { Text = "\U0001F3AE", FontSize = 16, Width = 24, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center },
+                        new TextBlock { Text = "REMOTE CONNECTED", FontSize = 14, VerticalAlignment = VerticalAlignment.Center }
+                    }
+                };
+            }
+            else
+            {
+                BtnStart.IsEnabled = true;
+                // Directly set button state — don't delegate to UpdateStartButton() which has a
+                // ControllerConnected guard that can prevent restoration due to event timing
+                if (_isRunning)
+                {
+                    BtnStart.Background = new SolidColorBrush(Color.FromRgb(255, 107, 107)); // Red
+                    BtnStart.Content = new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Height = 24,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Children =
+                        {
+                            new TextBlock { Text = "■", FontSize = 16, Width = 20, Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center },
+                            new TextBlock { Text = "STOP", FontSize = 18, Width = 60, VerticalAlignment = VerticalAlignment.Center }
+                        }
+                    };
+                }
+                else
+                {
+                    BtnStart.Background = FindResource("PinkBrush") as SolidColorBrush;
+                    BtnStart.Content = new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Height = 24,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Children =
+                        {
+                            new TextBlock { Text = "▶", FontSize = 16, Width = 20, Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center },
+                            new TextBlock { Text = "START", FontSize = 18, Width = 60, VerticalAlignment = VerticalAlignment.Center }
+                        }
+                    };
+                }
+            }
+        }
+
         /// <summary>
         /// Find a visual child by name in the visual tree
         /// </summary>
@@ -13895,7 +14446,8 @@ namespace ConditioningControlPanel
                     "Strict Bubble Count",
                     "• You will NOT be able to skip the bubble count challenge\n" +
                     "• You MUST answer correctly to dismiss\n" +
-                    "• After 3 wrong attempts, a mercy lock card appears\n" +
+                    "• Wrong answers force you to REWATCH the video\n" +
+                    "• Mercy system grants escape after 3 retries (if enabled)\n" +
                     "• This can be very restrictive!");
 
                 if (!confirmed)

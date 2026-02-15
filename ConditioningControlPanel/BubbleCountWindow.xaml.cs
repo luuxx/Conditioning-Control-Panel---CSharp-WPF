@@ -557,10 +557,10 @@ namespace ConditioningControlPanel
         {
             double baseRate = _difficulty switch
             {
-                BubbleCountService.Difficulty.Easy => 6,
-                BubbleCountService.Difficulty.Medium => 10,
-                BubbleCountService.Difficulty.Hard => 16,
-                _ => 10
+                BubbleCountService.Difficulty.Easy => 3,
+                BubbleCountService.Difficulty.Medium => 5,
+                BubbleCountService.Difficulty.Hard => 8,
+                _ => 5
             };
 
             var scaledCount = (baseRate / 30.0) * _videoDurationSeconds;
@@ -698,11 +698,11 @@ namespace ConditioningControlPanel
                 var screenX = (_screen.Bounds.X + (relX * _screen.Bounds.Width) - size / 2) / dpiScale;
                 var screenY = (_screen.Bounds.Y + (relY * _screen.Bounds.Height) - size / 2) / dpiScale;
 
-                if (_isPrimary) PlayPopSound();
+                PlayPopSound();
 
                 // Bubble is now a separate window (doesn't block video rendering)
                 var bubble = new CountBubble(_bubbleImage, size, screenX, screenY, _random,
-                    _isPrimary ? PlayPopSound : null, OnBubblePopped);
+                    PlayPopSound, OnBubblePopped);
                 _activeBubbles.Add(bubble);
             }
             catch (Exception ex)

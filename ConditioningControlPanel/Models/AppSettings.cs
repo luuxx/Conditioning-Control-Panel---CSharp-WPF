@@ -2496,6 +2496,22 @@ namespace ConditioningControlPanel.Models
 
         #endregion
 
+        #region Companion Phrase Manager
+
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public HashSet<string> DisabledPhraseIds { get; set; } = new();
+
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public HashSet<string> RemovedPhraseIds { get; set; } = new();
+
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public List<CustomCompanionPhrase> CustomCompanionPhrases { get; set; } = new();
+
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public Dictionary<string, string> PhraseAudioOverrides { get; set; } = new();
+
+        #endregion
+
         #region Validation
 
         /// <summary>
