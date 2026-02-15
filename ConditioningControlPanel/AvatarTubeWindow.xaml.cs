@@ -4708,7 +4708,7 @@ namespace ConditioningControlPanel
             // Talk to companion (Patreon only) - mode-aware label
             var mode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
             var talkToLabel = ContentModeConfig.GetTalkToLabel(mode);
-            var chatAvailable = true;
+            var chatAvailable = App.Patreon?.HasAiAccess == true;
             MenuItemTalkToBambi.IsEnabled = chatAvailable;
             if (chatAvailable)
             {

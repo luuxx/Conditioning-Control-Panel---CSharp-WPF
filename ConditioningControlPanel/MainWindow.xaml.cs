@@ -865,7 +865,7 @@ namespace ConditioningControlPanel
                 // Force browser navigation to HypnoTube regardless of current content
                 if (_browser != null && _browserInitialized)
                 {
-                    _browser.Navigate("https://giveinto.me/");
+                    _browser.Navigate("https://hypnotube.com/");
                     App.Logger?.Information("Browser navigated to HypnoTube due to Sissy mode switch");
                 }
             }
@@ -3228,7 +3228,7 @@ namespace ConditioningControlPanel
                 case "lab":
                     LabTab.Visibility = Visibility.Visible;
                     BtnLab.Style = activeStyle;
-                    var hasLabAccess = true; //App.Patreon?.CurrentTier >= PatreonTier.Level2 || App.Patreon?.IsWhitelisted == true;
+                    var hasLabAccess = App.Patreon?.CurrentTier >= PatreonTier.Level2 || App.Patreon?.IsWhitelisted == true;
                     LabLockedOverlay.Visibility = hasLabAccess ? Visibility.Collapsed : Visibility.Visible;
                     LabContentBorder.Opacity = hasLabAccess ? 1.0 : 0.15;
                     LabContentBorder.IsHitTestVisible = hasLabAccess;
@@ -10358,7 +10358,7 @@ namespace ConditioningControlPanel
             var isBambiCloud = RbBambiCloud.IsChecked == true;
             var url = isBambiCloud
                 ? "https://bambicloud.com/"
-                : "https://giveinto.me/";
+                : "https://hypnotube.com/";
 
             // Set zoom: 50% for both sites
             _browser.ZoomFactor = 0.5;
@@ -10406,7 +10406,7 @@ namespace ConditioningControlPanel
                     _skipSiteToggleNavigation = true;
                     RbBambiCloud.IsChecked = true;
                 }
-                else if (lowerUrl.Contains("giveinto.me") && RbHypnoTube.IsChecked != true)
+                else if (lowerUrl.Contains("hypnotube.com") && RbHypnoTube.IsChecked != true)
                 {
                     _skipSiteToggleNavigation = true;
                     RbHypnoTube.IsChecked = true;
@@ -10435,7 +10435,7 @@ namespace ConditioningControlPanel
                 _browser.Navigate(url);
 
                 App.Logger?.Information("Speech link navigated to: {Url} (Site: {Site}, AutoPlay: {AutoPlay})",
-                    url, lowerUrl.Contains("bambicloud") ? "BambiCloud" : "GiveInToMe", autoPlayFullscreen);
+                    url, lowerUrl.Contains("bambicloud") ? "BambiCloud" : "Hypnotube", autoPlayFullscreen);
 
                 return true;
             }
@@ -13000,7 +13000,7 @@ namespace ConditioningControlPanel
                 SliderKeywordGlobalCooldown.Value = s.KeywordGlobalCooldownSeconds;
                 SliderKeywordSessionMultiplier.Value = s.KeywordSessionMultiplier;
 
-                var hasT2 = true; //KeywordTriggerService.HasAccess();
+                var hasT2 = KeywordTriggerService.HasAccess();
 
                 // Show/hide lock indicator
                 if (TxtKeywordTriggersLocked != null)
@@ -17877,7 +17877,7 @@ namespace ConditioningControlPanel
                             var isBambiCloud = RbBambiCloud?.IsChecked == true;
                             var url = isBambiCloud
                                 ? "https://bambicloud.com/"
-                                : "https://giveinto.me/";
+                                : "https://hypnotube.com/";
                             _browser.Navigate(url);
                             App.Logger?.Information("Browser reloaded after exiting offline mode: {Url}", url);
                         }
