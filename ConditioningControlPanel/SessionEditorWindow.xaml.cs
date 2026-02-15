@@ -1,14 +1,13 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Windows;
+using System.IO;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using ConditioningControlPanel.Models;
 using ConditioningControlPanel.Services;
 using Microsoft.Win32;
+using Path = System.IO.Path;
 
 namespace ConditioningControlPanel
 {
@@ -121,11 +120,6 @@ namespace ConditioningControlPanel
         }
 
         private void TutorialOverlay_Close(object sender, RoutedEventArgs e)
-        {
-            TutorialOverlay.Visibility = Visibility.Collapsed;
-        }
-
-        private void TutorialOverlay_Close(object sender, MouseButtonEventArgs e)
         {
             TutorialOverlay.Visibility = Visibility.Collapsed;
         }
@@ -532,30 +526,30 @@ namespace ConditioningControlPanel
             {
                 try
                 {
-                    System.Windows.Media.Imaging.BitmapImage? bitmap = null;
+                    BitmapImage? bitmap = null;
 
                     // Normalize path separators for Windows
-                    var normalizedPath = feature.ImagePath.Replace('/', System.IO.Path.DirectorySeparatorChar);
+                    var normalizedPath = feature.ImagePath.Replace('/', Path.DirectorySeparatorChar);
 
                     // First try file system path (allows user customization)
-                    var filePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, normalizedPath);
-                    if (System.IO.File.Exists(filePath))
+                    var filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, normalizedPath);
+                    if (File.Exists(filePath))
                     {
-                        bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                        bitmap = new BitmapImage();
                         bitmap.BeginInit();
                         bitmap.UriSource = new Uri(filePath, UriKind.Absolute);
-                        bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                        bitmap.CacheOption = BitmapCacheOption.OnLoad;
                         bitmap.EndInit();
                     }
                     else
                     {
                         // Then try as embedded resource (pack URI)
                         var packUri = new Uri($"pack://application:,,,/{feature.ImagePath}", UriKind.Absolute);
-                        bitmap = new System.Windows.Media.Imaging.BitmapImage(packUri);
+                        bitmap = new BitmapImage(packUri);
                     }
 
                     // Use Rectangle with ImageBrush for rounded corners
-                    var rect = new System.Windows.Shapes.Rectangle
+                    var rect = new Rectangle
                     {
                         Width = size,
                         Height = size,
@@ -563,10 +557,10 @@ namespace ConditioningControlPanel
                         RadiusY = size * 0.15,
                         HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Center,
-                        Fill = new System.Windows.Media.ImageBrush
+                        Fill = new ImageBrush
                         {
                             ImageSource = bitmap,
-                            Stretch = System.Windows.Media.Stretch.UniformToFill
+                            Stretch = Stretch.UniformToFill
                         }
                     };
                     return rect;

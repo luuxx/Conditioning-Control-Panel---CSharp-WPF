@@ -2531,7 +2531,7 @@
                                         </Style>
                                     </Border.Style>
                                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                                        <TextBlock Text="?" FontSize="20" HorizontalAlignment="Center" Foreground="{StaticResource PinkBrush}"/>
+                                        <TextBlock Text="➕" FontSize="20" HorizontalAlignment="Center" Foreground="{StaticResource PinkBrush}"/>
                                         <TextBlock Text="New" FontSize="10" FontWeight="Bold" 
                                                    Foreground="{StaticResource PinkBrush}" HorizontalAlignment="Center" Margin="0,2,0,0"/>
                                     </StackPanel>
