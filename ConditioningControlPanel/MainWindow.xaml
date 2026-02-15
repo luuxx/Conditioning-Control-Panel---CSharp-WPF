@@ -2578,7 +2578,7 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0">
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="🎯 Morning Drift" Foreground="White" FontWeight="SemiBold" FontSize="15"/>
+                                                <TextBlock Text="🌅 Morning Drift" Foreground="White" FontWeight="SemiBold" FontSize="15"/>
                                                 <Border Background="{StaticResource PinkBrush}" CornerRadius="3" Padding="8,3" Margin="10,0,0,0">
                                                     <TextBlock Text="30 MIN" Foreground="White" FontSize="10" FontWeight="Bold"/>
                                                 </Border>
@@ -2622,12 +2622,12 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0">
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="🎯 Gamer Girl" Foreground="White" FontWeight="SemiBold" FontSize="15"/>
+                                                <TextBlock Text="🎮 Gamer Girl" Foreground="White" FontWeight="SemiBold" FontSize="15"/>
                                                 <Border Background="{StaticResource PinkBrush}" CornerRadius="3" Padding="8,3" Margin="10,0,0,0">
                                                     <TextBlock Text="45 MIN" Foreground="White" FontSize="10" FontWeight="Bold"/>
                                                 </Border>
                                                 <Border Background="{StaticResource PrimaryActionDarkGreenBrush}" CornerRadius="3" Padding="8,3" Margin="6,0,0,0">
-                                                    <TextBlock Text="⭐ Medium" Foreground="{StaticResource GoldBrush}" FontSize="10" FontWeight="Bold"/>
+                                                    <TextBlock Text="⭐⭐ Medium" Foreground="{StaticResource GoldBrush}" FontSize="10" FontWeight="Bold"/>
                                                 </Border>
                                                 <Border Background="{StaticResource PrimaryActionDarkGreenBrush}" CornerRadius="3" Padding="8,3" Margin="6,0,0,0">
                                                     <TextBlock Text="+800 XP" Foreground="{StaticResource GoldBrush}" FontSize="10" FontWeight="Bold"/>
