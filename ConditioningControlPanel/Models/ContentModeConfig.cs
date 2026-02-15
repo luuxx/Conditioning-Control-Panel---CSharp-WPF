@@ -279,7 +279,7 @@ namespace ConditioningControlPanel.Models
         public static string GetDefaultBrowserUrl(ContentMode mode) => mode switch
         {
             ContentMode.BambiSleep => "https://bambicloud.com/",
-            ContentMode.SissyHypno => "https://giveinto.me/",
+            ContentMode.SissyHypno => "https://hypnotube.com/",
             _ => "https://bambicloud.com/"
         };
 

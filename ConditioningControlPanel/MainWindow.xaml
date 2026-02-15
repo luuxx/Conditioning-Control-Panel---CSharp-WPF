@@ -1256,7 +1256,7 @@
                                     </ControlTemplate>
                                 </CheckBox.Template>
                             </CheckBox>
-                            <TextBlock x:Name="TxtModeSH" Text="EAR" FontSize="10" FontWeight="Bold" VerticalAlignment="Center"
+                            <TextBlock x:Name="TxtModeSH" Text="SH" FontSize="10" FontWeight="Bold" VerticalAlignment="Center"
                                        Foreground="{StaticResource HelpButtonForegroundBrush}" Margin="4,0,0,0"/>
                         </StackPanel>
                     </Border>
@@ -2189,7 +2189,7 @@
                                         </ControlTemplate>
                                     </RadioButton.Template>
                                 </RadioButton>
-                                <RadioButton x:Name="RbHypnoTube" Content="GiveInToMe" GroupName="BrowserSite"
+                                <RadioButton x:Name="RbHypnoTube" Content="HypnoTube" GroupName="BrowserSite"
                                              Checked="BrowserSiteToggle_Changed"
                                              Foreground="{StaticResource TextLightBrush}" FontSize="10" Cursor="Hand" Margin="2,1">
                                     <RadioButton.Template>
