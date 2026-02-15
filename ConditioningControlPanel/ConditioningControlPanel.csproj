@@ -231,22 +231,18 @@
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
     <!-- Theme files - compiled as Page for BAML, but also copied as loose XAML for customization -->
-    <Page Update="Resources\Theme\**\*.xaml">
+    <Page Update="Resources\Theme\**\**\*.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
-    <None Include="Resources\Theme\**\*.xaml">
+    <None Include="Resources\Theme\**\**\*.xaml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
-    <Content Include="Resources\Theme\**\*" Exclude="Resources\Theme\**\*.xaml">
+    <Content Include="Resources\Theme\**\**\*" Exclude="Resources\Theme\**\**\*.xaml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
-  </ItemGroup>
-
-  <ItemGroup>
-    <Folder Include="Resources\Theme\" />
   </ItemGroup>
 
   <!-- Ensure all content files are copied during publish -->

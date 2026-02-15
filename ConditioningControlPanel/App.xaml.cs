@@ -474,11 +474,12 @@ namespace ConditioningControlPanel
 
         private string GetThemePath()
         {
-            var themePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "Theme", "Custom Theme");
+            var resourcesPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources");
+            var themePath = Path.Combine(resourcesPath, "theme", "custom theme");
             if (Directory.Exists(themePath)) return themePath;
             
-            themePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "Theme", "Default");
-            return !Directory.Exists(themePath) ? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "Theme") : themePath;
+            themePath = Path.Combine(resourcesPath, "theme", "default");
+            return !Directory.Exists(themePath) ? Path.Combine(resourcesPath, "theme") : themePath;
         }
 
         private void ParseThemeFilesAndAddToMemory(string file, HashSet<string> loadedBaseThemes)
@@ -689,6 +690,7 @@ namespace ConditioningControlPanel
             // Create user assets directories in LocalAppData (persists across updates)
             Directory.CreateDirectory(Path.Combine(UserAssetsPath, "images"));
             Directory.CreateDirectory(Path.Combine(UserAssetsPath, "videos"));
+            Directory.CreateDirectory(Path.Combine(UserAssetsPath, "theme"));
             Directory.CreateDirectory(Path.Combine(UserDataPath, "Spirals"));
 
             // Migrate assets from old location (install dir) to new location (user data) in background
@@ -699,6 +701,7 @@ namespace ConditioningControlPanel
             Directory.CreateDirectory(resourcesPath);
             Directory.CreateDirectory(Path.Combine(resourcesPath, "sub_audio"));
             Directory.CreateDirectory(Path.Combine(resourcesPath, "sounds", "mindwipe"));
+            Directory.CreateDirectory(Path.Combine(resourcesPath, "theme", "default"));
 
             splash.SetProgress(0.2, "Loading settings...");
 
@@ -1694,7 +1697,7 @@ Application State:
                     var appRoot = Path.GetDirectoryName(AppDomain.CurrentDomain.BaseDirectory);
                     if (!string.IsNullOrEmpty(appRoot))
                     {
-                        foreach (var dir in Directory.GetDirectories(appRoot, "app-*"))
+                        foreach (var dir in Directory.GetDirectories(appRoot,"app-*"))
                         {
                             // Skip current directory to avoid double-processing
                             if (dir.Equals(AppDomain.CurrentDomain.BaseDirectory, StringComparison.OrdinalIgnoreCase))
