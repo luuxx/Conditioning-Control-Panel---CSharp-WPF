@@ -436,6 +436,7 @@ const WHITELISTED_NAMES = new Set([
     'Mimi Mi',
     'Mimi  Mi',
     'BBPuppyDoll',
+    'Issa',
 ].map(n => n.toLowerCase()));
 
 function isWhitelisted(email, name, displayName = null) {
@@ -6443,6 +6444,72 @@ app.post('/v2/auth/link', async (req, res) => {
 });
 
 /**
+ * POST /v2/auth/restore-session
+ * Validate a stored unified_id without OAuth. Updates last_seen.
+ * Body: { unified_id: string, client_version?: string }
+ * Returns same shape as GET /v2/user/profile on success.
+ */
+app.post('/v2/auth/restore-session', async (req, res) => {
+    try {
+        const { unified_id, client_version } = req.body;
+
+        if (!unified_id) {
+            return res.status(400).json({ success: false, error: 'unified_id required' });
+        }
+        if (!redis) return res.status(503).json({ success: false, error: 'Redis not available' });
+
+        const userData = await redis.get(`user:${unified_id}`);
+        if (!userData) {
+            return res.status(404).json({ success: false, error: 'user_not_found' });
+        }
+
+        const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+
+        // Update last_seen
+        user.last_seen = new Date().toISOString();
+        if (client_version) {
+            user.last_client_version = client_version;
+        }
+        await redis.set(`user:${unified_id}`, JSON.stringify(user));
+
+        // Privacy: never expose patron_name as display_name
+        let safeName = user.display_name || null;
+        if (safeName && user.patron_name && !user.display_name_set_at &&
+            safeName.toLowerCase().trim() === user.patron_name.toLowerCase().trim()) {
+            safeName = null;
+        }
+
+        res.json({
+            success: true,
+            user: {
+                unified_id: user.unified_id,
+                display_name: safeName,
+                discord_id: user.discord_id,
+                patreon_id: user.patreon_id,
+                level: user.level,
+                xp: user.xp,
+                current_season: user.current_season,
+                highest_level_ever: user.highest_level_ever,
+                unlocks: user.unlocks,
+                achievements: user.achievements,
+                all_time_stats: user.all_time_stats,
+                is_season0_og: user.is_season0_og,
+                patreon_tier: user.patreon_tier,
+                patreon_is_active: user.patreon_is_active,
+                patreon_is_whitelisted: user.patreon_is_whitelisted,
+                allow_discord_dm: user.allow_discord_dm,
+                show_online_status: user.show_online_status,
+                created_at: user.created_at,
+                last_seen: user.last_seen
+            }
+        });
+    } catch (error) {
+        console.error('V2 auth restore-session error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
  * GET /v2/user/profile
  * Get current user's profile (requires unified_id)
  * Query: ?unified_id=XXX
@@ -10964,6 +11031,158 @@ app.get('/admin/xp-rate-anomalies', async (req, res) => {
     } catch (error) {
         console.error('Admin xp-rate-anomalies error:', error.message);
         res.status(500).json({ error: 'Failed to query XP rate anomalies' });
+    }
+});
+
+/**
+ * GET /admin/export-all-users
+ * Full backup: all user records, index keys, and leaderboard entries.
+ * Query: ?admin_token=xxx
+ */
+app.get('/admin/export-all-users', async (req, res) => {
+    try {
+        const { admin_token } = req.query;
+        const expectedToken = process.env.ADMIN_TOKEN;
+        if (!expectedToken || admin_token !== expectedToken) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        if (!redis) return res.status(503).json({ error: 'Redis not available' });
+
+        // 1. Scan all user:* keys and collect full records
+        const users = [];
+        let cursor = "0";
+        do {
+            const result = await redis.scan(cursor, { match: 'user:*', count: 100 });
+            cursor = String(result[0]);
+            for (const key of (result[1] || [])) {
+                try {
+                    const raw = await redis.get(key);
+                    if (raw) {
+                        const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                        users.push({ key, data });
+                    }
+                } catch (e) { /* skip corrupt keys */ }
+            }
+        } while (cursor !== "0");
+
+        // 2. Collect index keys (patreon_index, discord_index, email_index, display_name_index, plus V1 variants)
+        const indexes = {};
+        const indexPrefixes = ['patreon_index:', 'discord_index:', 'email_index:', 'display_name_index:', 'patreon_user:', 'discord_user:'];
+        for (const prefix of indexPrefixes) {
+            const entries = {};
+            let idxCursor = "0";
+            do {
+                const result = await redis.scan(idxCursor, { match: `${prefix}*`, count: 100 });
+                idxCursor = String(result[0]);
+                for (const key of (result[1] || [])) {
+                    try {
+                        const val = await redis.get(key);
+                        if (val) entries[key] = val;
+                    } catch (e) { /* skip */ }
+                }
+            } while (idxCursor !== "0");
+            indexes[prefix.replace(':', '')] = entries;
+        }
+
+        // 3. Collect leaderboard sorted sets
+        const leaderboards = {};
+        let lbCursor = "0";
+        do {
+            const result = await redis.scan(lbCursor, { match: 'leaderboard:*', count: 100 });
+            lbCursor = String(result[0]);
+            for (const key of (result[1] || [])) {
+                try {
+                    const members = await redis.zrange(key, 0, -1, { withScores: true });
+                    // zrange with withScores returns [member, score, member, score, ...]
+                    const entries = [];
+                    if (Array.isArray(members)) {
+                        for (let i = 0; i < members.length; i += 2) {
+                            entries.push({ member: members[i], score: parseFloat(members[i + 1]) || 0 });
+                        }
+                    }
+                    leaderboards[key] = entries;
+                } catch (e) { /* skip */ }
+            }
+        } while (lbCursor !== "0");
+
+        res.json({
+            users,
+            indexes,
+            leaderboards,
+            exported_at: new Date().toISOString(),
+            user_count: users.length
+        });
+    } catch (error) {
+        console.error('Admin export-all-users error:', error.message);
+        res.status(500).json({ error: 'Failed to export users' });
+    }
+});
+
+/**
+ * POST /admin/import-all-users
+ * Restore from a full backup. Writes user records, indexes, and leaderboard entries.
+ * Body: { admin_token: string, backup: <export JSON> }
+ */
+app.post('/admin/import-all-users', async (req, res) => {
+    try {
+        const { admin_token, backup } = req.body;
+        const expectedToken = process.env.ADMIN_TOKEN;
+        if (!expectedToken || admin_token !== expectedToken) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        if (!redis) return res.status(503).json({ error: 'Redis not available' });
+        if (!backup || !backup.users) {
+            return res.status(400).json({ error: 'Invalid backup format: missing users array' });
+        }
+
+        const results = { users_written: 0, indexes_written: 0, leaderboard_entries: 0, errors: [] };
+
+        // 1. Write user records
+        for (const { key, data } of backup.users) {
+            try {
+                await redis.set(key, JSON.stringify(data));
+                results.users_written++;
+            } catch (e) {
+                results.errors.push(`user ${key}: ${e.message}`);
+            }
+        }
+
+        // 2. Write index keys
+        if (backup.indexes) {
+            for (const [prefix, entries] of Object.entries(backup.indexes)) {
+                for (const [key, value] of Object.entries(entries)) {
+                    try {
+                        await redis.set(key, value);
+                        results.indexes_written++;
+                    } catch (e) {
+                        results.errors.push(`index ${key}: ${e.message}`);
+                    }
+                }
+            }
+        }
+
+        // 3. Write leaderboard entries
+        if (backup.leaderboards) {
+            for (const [key, entries] of Object.entries(backup.leaderboards)) {
+                for (const { member, score } of entries) {
+                    try {
+                        await redis.zadd(key, { score, member });
+                        results.leaderboard_entries++;
+                    } catch (e) {
+                        results.errors.push(`leaderboard ${key}/${member}: ${e.message}`);
+                    }
+                }
+            }
+        }
+
+        res.json({
+            success: true,
+            ...results,
+            imported_at: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('Admin import-all-users error:', error.message);
+        res.status(500).json({ error: 'Failed to import users' });
     }
 });
 
