@@ -437,6 +437,11 @@ const WHITELISTED_NAMES = new Set([
     'Mimi  Mi',
     'BBPuppyDoll',
     'Issa',
+    'teaseplease',
+    'desiree',
+    'jessissi',
+    'zenec41',
+    'Bimbo Dina',
 ].map(n => n.toLowerCase()));
 
 function isWhitelisted(email, name, displayName = null) {
@@ -7861,6 +7866,9 @@ app.post('/v2/user/sync', async (req, res) => {
             // Reset seasonal data
             user.xp = 0;
             user.level = 1;
+            user.skill_points = 1; // level 1 = 1 sparkle point
+            user.unlocked_skills = [];
+            user.force_skills_reset = true; // Tell client to clear local skills
             user.stats = {
                 total_flashes: 0,
                 total_bubbles_popped: 0,
@@ -8619,6 +8627,83 @@ app.post('/admin/user-announcement', async (req, res) => {
     }
 });
 
+/**
+ * POST /admin/update-user
+ * Admin-only: patch specific fields on a user record.
+ * Body: { admin_token, display_name, updates: { new_display_name?, patreon_is_whitelisted?, patreon_tier? } }
+ */
+app.post('/admin/update-user', async (req, res) => {
+    try {
+        const { admin_token, display_name, updates } = req.body;
+
+        const expectedToken = process.env.ADMIN_TOKEN;
+        if (!expectedToken || admin_token !== expectedToken) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        if (!display_name || !updates) {
+            return res.status(400).json({ error: 'display_name and updates required' });
+        }
+
+        if (!redis) {
+            return res.status(503).json({ error: 'Redis not available' });
+        }
+
+        // Find user by display_name index
+        const indexKey = `display_name_index:${display_name.trim().toLowerCase()}`;
+        const unifiedId = await redis.get(indexKey);
+
+        if (!unifiedId) {
+            return res.status(404).json({ error: `User "${display_name}" not found` });
+        }
+
+        const userKey = `user:${unifiedId}`;
+        const userData = await redis.get(userKey);
+
+        if (!userData) {
+            return res.status(404).json({ error: `User data for "${display_name}" not found` });
+        }
+
+        const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+        const changes = {};
+
+        // Update display_name (also update index)
+        if (updates.new_display_name && updates.new_display_name !== user.display_name) {
+            const oldName = user.display_name;
+            const newName = updates.new_display_name;
+
+            // Remove old index, add new
+            await redis.del(`display_name_index:${oldName.toLowerCase()}`);
+            await redis.set(`display_name_index:${newName.toLowerCase()}`, unifiedId);
+
+            changes.display_name = { from: oldName, to: newName };
+            user.display_name = newName;
+        }
+
+        // Update whitelist flag
+        if (typeof updates.patreon_is_whitelisted === 'boolean') {
+            changes.patreon_is_whitelisted = { from: user.patreon_is_whitelisted, to: updates.patreon_is_whitelisted };
+            user.patreon_is_whitelisted = updates.patreon_is_whitelisted;
+        }
+
+        // Update tier
+        if (typeof updates.patreon_tier === 'number') {
+            changes.patreon_tier = { from: user.patreon_tier, to: updates.patreon_tier };
+            user.patreon_tier = updates.patreon_tier;
+        }
+
+        user.updated_at = new Date().toISOString();
+        await redis.set(userKey, JSON.stringify(user));
+
+        console.log(`[ADMIN] Updated user "${user.display_name}" (${unifiedId}):`, changes);
+
+        res.json({ success: true, unified_id: unifiedId, changes });
+    } catch (error) {
+        console.error('Admin update-user error:', error.message);
+        res.status(500).json({ error: 'Failed to update user' });
+    }
+});
+
 // =============================================================================
 // CONTENT PACK DOWNLOAD SYSTEM
 // =============================================================================
@@ -8666,7 +8751,7 @@ const AVAILABLE_PACKS = {
         version: '1.0.0',
         imageCount: 50,
         videoCount: 10,
-        path: '/Basic%20Bimbo%20Starter%20Pack.zip',
+        externalUrl: 'https://mega.nz/file/B6BhAJLb#wFFxCBHbm5r1M2Z449cnzmxG8HU0GQHq7vdIJG0t9As',
         sizeBytes: 2397264867,
         previewImageUrl: 'https://ccp-packs.b-cdn.net/previews/basic-bimbo-starter.png',
         patreonUrl: 'https://patreon.com/CodeBambi'
@@ -8679,7 +8764,7 @@ const AVAILABLE_PACKS = {
         version: '1.0.0',
         imageCount: 0,
         videoCount: 25,
-        path: '/Enhanced%20Bimbodoll%20video%20pack.zip',
+        externalUrl: 'https://mega.nz/file/gvoDVLIK#255-xsisRWiA_e9tBpG4oHP9p6mJV0UfAy7SvWe_8Cc',
         sizeBytes: 4392954093,
         previewImageUrl: 'https://ccp-packs.b-cdn.net/previews/enhanced-bimbodoll-video.png',
         patreonUrl: 'https://patreon.com/CodeBambi'
@@ -8692,7 +8777,7 @@ const AVAILABLE_PACKS = {
         version: '1.0.0',
         imageCount: 217,
         videoCount: 0,
-        path: '/bambi-core.zip',
+        externalUrl: 'https://mega.nz/file/AjJQ3bpC#yVY-bLupmR2zc_kx8EtWQBZ3ARyA6cCAVt18vX1c99Q',
         sizeBytes: 1289338675,
         previewImageUrl: 'https://ccp-packs.b-cdn.net/previews/bambi-core.png',
         previewUrls: [
@@ -8755,7 +8840,7 @@ const AVAILABLE_PACKS = {
         version: '1.0.0',
         imageCount: 276,
         videoCount: 0,
-        path: '/empty-head.zip',
+        externalUrl: 'https://mega.nz/file/ZqxSwQiJ#t-d_Q9-0eBb162ggG_S9-0ZPTEZpBGdIIvKqimrhYHg',
         sizeBytes: 1465909698,
         previewImageUrl: 'https://ccp-packs.b-cdn.net/previews/empty-head.png',
         previewUrls: [
@@ -8890,7 +8975,8 @@ app.get('/packs/manifest', (req, res) => {
                 imageCount: pack.imageCount || 0,
                 videoCount: pack.videoCount || 0,
                 sizeBytes: pack.sizeBytes || 0,
-                downloadUrl: `https://${BUNNY_CONFIG.CDN_HOSTNAME}${pack.path}`,
+                downloadUrl: pack.externalUrl ? '' : `https://${BUNNY_CONFIG.CDN_HOSTNAME}${pack.path}`,
+                externalUrl: pack.externalUrl || null,
                 previewImageUrl: pack.previewImageUrl || '',
                 previewUrls: pack.previewUrls || [],
                 patreonUrl: pack.patreonUrl || null,
