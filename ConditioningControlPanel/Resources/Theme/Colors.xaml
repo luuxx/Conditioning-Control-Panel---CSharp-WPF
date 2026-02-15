@@ -14,7 +14,8 @@
     <Color x:Key="PanelAccentHoverColor">#FF505080</Color>
     <Color x:Key="PreviewBgColor">#FF101020</Color>
     <Color x:Key="MiniGameBackgroundColor">#1E1E3A</Color>
-
+    <Color x:Key="MiniGameBackgroundLightColor">#252548</Color>
+    
     <Color x:Key="DangerColor">#FFE53935</Color>
     <Color x:Key="DangerHoverColor">#FFD32F2F</Color>
     <Color x:Key="TransparentPinkColor">#30FF69B4</Color>
@@ -59,6 +60,7 @@
     <Color x:Key="GoldTransparentColor">#30FFD700</Color>
     <Color x:Key="GoldBorderTransparentColor">#AAFFD700</Color>
     <Color x:Key="GrayColor">#808080</Color>
+    <Color x:Key="LighterGrayColor">#A0A0A0</Color>
     <Color x:Key="LightGrayColor">#B0B0B0</Color>
     <Color x:Key="MutedGrayColor">#888888</Color>
     <Color x:Key="DarkGrayColor">#666666</Color>
@@ -70,8 +72,12 @@
     <Color x:Key="WarningRedColor">#FF6B6B</Color>
     <Color x:Key="WarningDarkRedColor">#F44336</Color>
     <Color x:Key="WarningPinkColor">#FF1493</Color>
+    <Color x:Key="EndSessionColor">#CC3333</Color>
+    <Color x:Key="EndSessionHoverColor">#FF4444</Color>
+    <Color x:Key="EndSessionPressColor">#AA2222</Color>    
     <Color x:Key="DiscordBlurpleColor">#5865F2</Color>
     <Color x:Key="PanelBlueColor">#252542</Color>
+    <Color x:Key="PanelBlueBorderColor">#3A3A5C</Color>
     <Color x:Key="OverlayBlackColor">#80000000</Color>
     <Color x:Key="OverlayDarkBlackColor">#E0000000</Color>
     <Color x:Key="OverlayFullBlackColor">#E8000000</Color>
@@ -100,6 +106,7 @@
     <Color x:Key="CornerGifOptionPanelBackgroundColor">#FF252540</Color>
     <Color x:Key="QuestCompleteBannerBackgroundColor">#FF2D4A2D</Color>
     <Color x:Key="PinkBrushColor">#FF69B4</Color>
+    <Color x:Key="PinkBrushLightColor">#FF85C8</Color>
     <Color x:Key="HapticsGridColor">#2D2D4A</Color>
     <Color x:Key="AchievementBackgroundTransparentColor">#E0151530</Color>
     <Color x:Key="BubbleCountBackgroundBrushColor">#FF2D2D3A</Color>
@@ -186,4 +193,9 @@
     <Color x:Key="MutedVioletColor">#9C27B0</Color>
     <Color x:Key="DarkRedColor">#E81123</Color>
     <Color x:Key="TransparentPinkHexColor">#20FF69B4</Color>
+    <Color x:Key="BtnManagePhrasesColor">#1A1A32</Color>
+    <Color x:Key="ControlLinkBackgroundColor">#0D0D1A</Color>
+    <Color x:Key="LimeGreenLightColor">#00FF88</Color>
+    <Color x:Key="InfoNoticeGray">#666680</Color>
+    <Color x:Key="RemoteCommandNotificationDarkGreen">#2200FF88</Color>
 </ResourceDictionary>

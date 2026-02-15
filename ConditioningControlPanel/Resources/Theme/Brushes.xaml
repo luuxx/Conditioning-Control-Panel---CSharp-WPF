@@ -23,7 +23,7 @@
     <SolidColorBrush x:Key="PatreonPurpleBrush" Color="{StaticResource PatreonPurpleColor}"/>
     <SolidColorBrush x:Key="PatreonLightPurpleBrush" Color="{StaticResource PatreonLightPurpleColor}"/>
     <SolidColorBrush x:Key="PatreonDarkPurpleBrush" Color="{StaticResource PatreonDarkPurpleColor}"/>
-
+    <SolidColorBrush x:Key="PatreonRoleBrush" Color="{StaticResource PinkBrushColor}"/>
     <!-- Semi-transparent white -->
     <SolidColorBrush x:Key="TransparentWhiteBrush" Color="{StaticResource TransparentWhiteColor}"/>
 
@@ -49,6 +49,10 @@
     
     <!-- ComboBox brushes -->
     <SolidColorBrush x:Key="ComboBoxBackgroundBrush" Color="{StaticResource DeepBlueColor}"/>
+    <SolidColorBrush x:Key="ComboBoxItemBackgroundBrush" Color="{StaticResource PanelBlueColor}"/>
+    <SolidColorBrush x:Key="ComboBoxItemBackgroundHighLightedBrush" Color="{StaticResource PinkBrushColor}"/>
+    <SolidColorBrush x:Key="ComboBoxItemTextBrush" Color="{StaticResource WhiteColor}"/>
+    <SolidColorBrush x:Key="ComboBoxTextBrush" Color="{StaticResource LightGrayColor}"/>
     <SolidColorBrush x:Key="ComboBoxDropDownArrowBrush" Color="{StaticResource TextLightColor}"/>
     <SolidColorBrush x:Key="ComboBoxWatermarkBrush" Color="{StaticResource HelpButtonForegroundColor}"/>
     <LinearGradientBrush x:Key="AnimatedGradientBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
@@ -57,7 +61,9 @@
         <GradientStop Color="{StaticResource DarkerBgColor}" Offset="1"/>
     </LinearGradientBrush>
     <SolidColorBrush x:Key="AchievementTileBackgroundBrush" Color="{StaticResource DeepBlueColor}"/>
-
+    <SolidColorBrush x:Key="ToggleButtonBackgroundBrush" Color="{StaticResource PanelBlueColor}"/>
+    <SolidColorBrush x:Key="ToggleButtonBorderBrush" Color="{StaticResource PanelBlueBorderColor}"/>
+    
     <!-- Help buttons -->
     <SolidColorBrush x:Key="HelpButtonForegroundBrush" Color="{StaticResource HelpButtonForegroundColor}"/>
     <SolidColorBrush x:Key="HelpButtonBorderBrush" Color="{StaticResource HelpButtonBorderColor}"/>
@@ -139,7 +145,47 @@
         <GradientStop Color="{StaticResource LightPurpleColor}" Offset="0"/>
         <GradientStop Color="{StaticResource MediumPurpleColor}" Offset="1"/>
     </LinearGradientBrush>
-
+    
+    <!-- Remote controle -->
+    <LinearGradientBrush x:Key="RemoteControlBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="{StaticResource MiniGameBackgroundColor}" Offset="0"/>
+        <GradientStop Color="{StaticResource MiniGameBackgroundLightColor}" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="RemoteControlBorderBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="{StaticResource PinkBrushColor}" Offset="0"/>
+        <GradientStop Color="{StaticResource MutedPurpleColor}" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="RemoteControlTextBrush" Color="{StaticResource GrayColor}"/>
+    <SolidColorBrush x:Key="RemoteControlTextSecondaryBrush" Color="{StaticResource MutedTextSilverColor}"/>
+    <SolidColorBrush x:Key="RemoteControlTextFourthBrush" Color="{StaticResource WhiteColor}"/>
+    <SolidColorBrush x:Key="RemoteControlTextInfoNoticeBrush" Color="{StaticResource InfoNoticeGray}"/>
+    <SolidColorBrush x:Key="RemoteControlControllerLinkBackgroundBrush" Color="{StaticResource ControlLinkBackgroundColor}"/>
+    <SolidColorBrush x:Key="RemoteControlControllerLinkBorderBrush" Color="{StaticResource GridHeaderBorderColor}"/>
+    <SolidColorBrush x:Key="RemoteControlBtnCopyBrush" Color="{StaticResource GridHeaderBorderColor}"/>
+    <SolidColorBrush x:Key="RemoteControlBtnCopyTextBrush" Color="{StaticResource WhiteColor}"/>
+    <SolidColorBrush x:Key="RemoteControlTextThirdBrush" Color="{StaticResource MutedPurpleColor}"/>
+    <SolidColorBrush x:Key="RemoteControlRemoteCodePanelBackgroundBrush" Color="{StaticResource ControlLinkBackgroundColor}"/>
+    <SolidColorBrush x:Key="RemoteControlRemoteCodePanelBorderBrush" Color="{StaticResource GridHeaderBorderColor}"/>
+    <SolidColorBrush x:Key="RemoteControlRemoteCodePanelTextBrush" Color="{Binding Color, Source={StaticResource RemoteControlTextBrush}}"/>
+    <SolidColorBrush x:Key="RemoteControlRemoteCodePanelTextSecondaryBrush" Color="{StaticResource PinkBrushColor}"/>
+    
+    <SolidColorBrush x:Key="RemoteControlRemoteCommandNotificationBorderBrush" Color="{StaticResource RemoteCommandNotificationDarkGreen}"/>
+    
+    <SolidColorBrush x:Key="TxtRemoteCommandBrush" Color="{StaticResource LimeGreenLightColor}"/>
+    <SolidColorBrush x:Key="TxtRemoteCommandSecondaryBrush" Color="{StaticResource LighterGrayColor}"/>
+    <SolidColorBrush x:Key="BtnRemoteCommandEndSessionBackgroundBrush" Color="{StaticResource WhiteColor}"/>
+    <SolidColorBrush x:Key="BtnRemoteCommandEndSessionBorderHoverBrush" Color="{StaticResource EndSessionHoverColor}"/>
+    <SolidColorBrush x:Key="BtnRemoteCommandEndSessionBorderPressBrush" Color="{StaticResource EndSessionPressColor}"/>
+    
+    <SolidColorBrush x:Key="BtnRemoteCommandEndSessionBorderBrush" Color="{StaticResource EndSessionColor}"/>
+    
+    <!-- Locked overlay -->
+    <SolidColorBrush x:Key="LabLockedOverlayBackgroundBrush" Color="{StaticResource RoadmapOverlayColor}"/>
+    <SolidColorBrush x:Key="LabLockedOverlayTextBrush" Color="{StaticResource WhiteColor}"/>
+    <SolidColorBrush x:Key="LabLockedOverlayTextSecondaryBrush" Color="{StaticResource LightGrayColor}"/>
+    <SolidColorBrush x:Key="LabLockedOverlayBtnBorderBrush" Color="{StaticResource PinkBrushColor}"/>
+    <SolidColorBrush x:Key="LabLockedOverlayBtnHoverBrush" Color="{StaticResource PinkBrushLightColor}"/>
+    
     <!-- Generic / Root Brushes -->
     <SolidColorBrush x:Key="WhiteBrush" Color="{StaticResource WhiteColor}"/>
     <SolidColorBrush x:Key="GrayBrush" Color="{StaticResource GrayColor}"/>
@@ -269,5 +315,6 @@
     <SolidColorBrush x:Key="MutedVioletBrush" Color="{StaticResource MutedVioletColor}"/>
     <SolidColorBrush x:Key="DarkRedBrush" Color="{StaticResource DarkRedColor}"/>
     <SolidColorBrush x:Key="TransparentPinkHexBrush" Color="{StaticResource TransparentPinkHexColor}"/>
-    
+    <SolidColorBrush x:Key="BtnManagePhrasesBackgroundBrush" Color="{StaticResource BtnManagePhrasesColor}"/>
+    <SolidColorBrush x:Key="BtnManagePhrasesTextBrush" Color="{StaticResource PinkBrushColor}"/>
 </ResourceDictionary>
