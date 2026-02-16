@@ -267,6 +267,7 @@ const WHITELISTED_NAMES = new Set([
     'Bimbo Dina',
     'y0na',
     'BimboBunnyDeer',
+    'Mckenzi',
 ].map(n => n.toLowerCase()));
 
 function isWhitelisted(email, name, displayName = null) {
@@ -7940,13 +7941,13 @@ app.post('/v2/user/sync', async (req, res) => {
             delete user.force_streak_override;
         }
 
-        // Handle force_skills_reset flag - capture before clearing
-        const pendingForceSkillsReset = user.force_skills_reset === true;
-
         // Clear force_skills_reset when client acknowledges (sends false)
         if (clientForceSkillsReset === false) {
             delete user.force_skills_reset;
         }
+
+        // Capture AFTER clearing so the ack response doesn't echo back true
+        const pendingForceSkillsReset = user.force_skills_reset === true;
 
         // Auto-flag OG if user has achievements but isn't flagged yet
         if (!user.is_season0_og && user.achievements?.length > 0) {
