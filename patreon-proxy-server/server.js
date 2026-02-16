@@ -6233,6 +6233,14 @@ app.post('/v2/auth/restore-session', async (req, res) => {
         if (client_version) {
             user.last_client_version = client_version;
         }
+
+        // Re-check whitelist on every session restore so Discord-only users get flagged
+        if (!user.patreon_is_whitelisted && isWhitelisted(user.email, user.patron_name, user.display_name)) {
+            user.patreon_is_whitelisted = true;
+            user.patreon_tier = Math.max(user.patreon_tier || 0, 2);
+            console.log(`Whitelist applied via restore-session for ${unified_id} (${user.display_name})`);
+        }
+
         await redis.set(`user:${unified_id}`, JSON.stringify(user));
 
         // Privacy: never expose patron_name as display_name
@@ -10878,7 +10886,8 @@ const REMOTE_TIER_ACTIONS = {
         'set_pink_opacity', 'set_spiral_opacity',
         'start_bubbles', 'stop_bubbles',
         'trigger_panic',
-        'trigger_video', 'trigger_haptic',
+        'trigger_video', 'start_video', 'stop_video',
+        'trigger_haptic',
         'duck_audio', 'unduck_audio',
         'trigger_lock_card', 'start_lock_card', 'stop_lock_card'
     ],
@@ -10892,7 +10901,8 @@ const REMOTE_TIER_ACTIONS = {
         'set_pink_opacity', 'set_spiral_opacity',
         'start_bubbles', 'stop_bubbles',
         'trigger_panic',
-        'trigger_video', 'trigger_haptic',
+        'trigger_video', 'start_video', 'stop_video',
+        'trigger_haptic',
         'duck_audio', 'unduck_audio',
         'trigger_lock_card', 'start_lock_card', 'stop_lock_card',
         'start_autonomy', 'stop_autonomy',
