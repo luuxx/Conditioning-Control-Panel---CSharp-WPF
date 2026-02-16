@@ -265,6 +265,8 @@ const WHITELISTED_NAMES = new Set([
     'jessissi',
     'zenec41',
     'Bimbo Dina',
+    'y0na',
+    'BimboBunnyDeer',
 ].map(n => n.toLowerCase()));
 
 function isWhitelisted(email, name, displayName = null) {
@@ -7804,6 +7806,25 @@ app.post('/v2/user/sync', async (req, res) => {
                 if (hasForceStreakOverride && STREAK_STAT_KEYS.has(key)) {
                     continue;
                 }
+
+                // Handle non-numeric stat fields (date strings, arrays) — these can't go through Math.max
+                if (key === 'last_daily_quest_date') {
+                    // Take the more recent date string (lexicographic compare works for YYYY-MM-DD)
+                    const clientDate = typeof value === 'string' ? value : '';
+                    const serverDate = typeof user.stats[key] === 'string' ? user.stats[key] : '';
+                    if (clientDate >= serverDate) {
+                        user.stats[key] = clientDate;
+                    }
+                    continue;
+                }
+                if (key === 'quest_completion_dates') {
+                    // Take the longer array (more completion dates = more progress)
+                    const clientDates = Array.isArray(value) ? value : [];
+                    const serverDates = Array.isArray(user.stats[key]) ? user.stats[key] : [];
+                    user.stats[key] = clientDates.length >= serverDates.length ? clientDates : serverDates;
+                    continue;
+                }
+
                 const numValue = Number(value) || 0;
                 const existingValue = Number(user.stats[key]) || 0;
 
@@ -7975,7 +7996,10 @@ app.post('/v2/user/sync', async (req, res) => {
             // Include server's authoritative level/xp when reset is active
             ...(hadLevelReset ? { server_level: user.level, server_xp: user.xp } : {}),
             // Include whitelist status so Discord-only users get Patreon features without OAuth
-            patreon_is_whitelisted: user.patreon_is_whitelisted || false
+            patreon_is_whitelisted: user.patreon_is_whitelisted || false,
+            // Include bonus rerolls (admin-granted extra rerolls)
+            bonus_daily_rerolls: user.bonus_daily_rerolls || 0,
+            bonus_weekly_rerolls: user.bonus_weekly_rerolls || 0
         });
     } catch (error) {
         console.error('V2 sync error:', error.message);
@@ -8446,6 +8470,26 @@ app.post('/admin/update-user', async (req, res) => {
         if (typeof updates.patreon_tier === 'number') {
             changes.patreon_tier = { from: user.patreon_tier, to: updates.patreon_tier };
             user.patreon_tier = updates.patreon_tier;
+        }
+
+        // Update bonus rerolls
+        if (typeof updates.bonus_daily_rerolls === 'number') {
+            changes.bonus_daily_rerolls = { from: user.bonus_daily_rerolls || 0, to: updates.bonus_daily_rerolls };
+            user.bonus_daily_rerolls = updates.bonus_daily_rerolls;
+        }
+        if (typeof updates.bonus_weekly_rerolls === 'number') {
+            changes.bonus_weekly_rerolls = { from: user.bonus_weekly_rerolls || 0, to: updates.bonus_weekly_rerolls };
+            user.bonus_weekly_rerolls = updates.bonus_weekly_rerolls;
+        }
+
+        // Fix leaderboard — set current_season and add to leaderboard sorted set
+        if (updates.fix_leaderboard === true) {
+            const currentSeason = getCurrentSeason();
+            const oldSeason = user.current_season;
+            user.current_season = currentSeason;
+            const score = user.xp || 0;
+            await redis.zadd(`leaderboard:${currentSeason}`, { score, member: unifiedId });
+            changes.fix_leaderboard = { current_season: currentSeason, old_season: oldSeason || null, leaderboard_score: score };
         }
 
         user.updated_at = new Date().toISOString();
@@ -10815,6 +10859,9 @@ const REMOTE_CONTROLLER_STALE_SECONDS = 15;
 const REMOTE_TIER_ACTIONS = {
     light: [
         'trigger_flash', 'trigger_subliminal',
+        'start_flash', 'stop_flash',
+        'start_subliminal', 'stop_subliminal',
+        'trigger_custom_subliminal',
         'show_pink_filter', 'stop_pink_filter',
         'show_spiral', 'stop_spiral',
         'set_pink_opacity', 'set_spiral_opacity',
@@ -10823,16 +10870,9 @@ const REMOTE_TIER_ACTIONS = {
     ],
     standard: [
         'trigger_flash', 'trigger_subliminal',
-        'show_pink_filter', 'stop_pink_filter',
-        'show_spiral', 'stop_spiral',
-        'set_pink_opacity', 'set_spiral_opacity',
-        'start_bubbles', 'stop_bubbles',
-        'trigger_panic',
-        'trigger_video', 'trigger_haptic',
-        'duck_audio', 'unduck_audio'
-    ],
-    full: [
-        'trigger_flash', 'trigger_subliminal',
+        'start_flash', 'stop_flash',
+        'start_subliminal', 'stop_subliminal',
+        'trigger_custom_subliminal',
         'show_pink_filter', 'stop_pink_filter',
         'show_spiral', 'stop_spiral',
         'set_pink_opacity', 'set_spiral_opacity',
@@ -10840,10 +10880,28 @@ const REMOTE_TIER_ACTIONS = {
         'trigger_panic',
         'trigger_video', 'trigger_haptic',
         'duck_audio', 'unduck_audio',
+        'trigger_lock_card', 'start_lock_card', 'stop_lock_card'
+    ],
+    full: [
+        'trigger_flash', 'trigger_subliminal',
+        'start_flash', 'stop_flash',
+        'start_subliminal', 'stop_subliminal',
+        'trigger_custom_subliminal',
+        'show_pink_filter', 'stop_pink_filter',
+        'show_spiral', 'stop_spiral',
+        'set_pink_opacity', 'set_spiral_opacity',
+        'start_bubbles', 'stop_bubbles',
+        'trigger_panic',
+        'trigger_video', 'trigger_haptic',
+        'duck_audio', 'unduck_audio',
+        'trigger_lock_card', 'start_lock_card', 'stop_lock_card',
         'start_autonomy', 'stop_autonomy',
         'trigger_bubble_count',
+        'trigger_mind_wipe', 'start_mind_wipe', 'stop_mind_wipe',
+        'start_bounce_text', 'stop_bounce_text',
         'enable_strict_lock', 'disable_strict_lock',
-        'disable_panic', 'enable_panic'
+        'disable_panic', 'enable_panic',
+        'start_session', 'stop_session', 'pause_session', 'resume_session'
     ]
 };
 
