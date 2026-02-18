@@ -539,6 +539,13 @@ namespace ConditioningControlPanel.Models
             set { _attentionFloatingText = value; OnPropertyChanged(); }
         }
 
+        private bool _pauseVideoOnStart = true;
+        public bool PauseVideoOnStart
+        {
+            get => _pauseVideoOnStart;
+            set { _pauseVideoOnStart = value; OnPropertyChanged(); }
+        }
+
         #endregion
 
         #region Audio

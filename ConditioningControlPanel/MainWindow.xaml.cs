@@ -13121,6 +13121,7 @@ namespace ConditioningControlPanel
 
             // Video
             ChkVideoEnabled.IsChecked = s.MandatoryVideosEnabled;
+            ChkVideoPause.IsChecked = s.PauseVideoOnStart;
             SliderPerHour.Value = s.VideosPerHour;
             ChkStrictLock.IsChecked = s.StrictLockEnabled;
             ChkMiniGameEnabled.IsChecked = s.AttentionChecksEnabled;
@@ -14628,6 +14629,16 @@ namespace ConditioningControlPanel
                 }
                 App.Logger?.Information("Mandatory videos toggled: {Enabled}", isEnabled);
             }
+
+            App.Settings.Save();
+        }
+        
+        private void ChkVideoPause_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+
+            var isEnabled = ChkVideoPause.IsChecked ?? false;
+            App.Settings.Current.PauseVideoOnStart = isEnabled;
 
             App.Settings.Save();
         }

@@ -1956,14 +1956,19 @@
                                               Checked="ChkVideoEnabled_Changed" Unchecked="ChkVideoEnabled_Changed"/>
                                     <TextBlock Style="{StaticResource SettingLabel}" Text="Enable" Margin="6,0,15,0"/>
                                 </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" ToolTip="Strict mode: videos cannot be skipped, must watch entirely">
-                                    <CheckBox x:Name="ChkStrictLock" Style="{StaticResource ToggleStyle}" Checked="ChkStrictLock_Checked" Unchecked="ChkStrictLock_Unchecked"/>
-                                    <TextBlock Style="{StaticResource SettingLabel}" Text="⚠ Strict" Foreground="#FFB347" Margin="6,0,15,0"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" ToolTip="Pauses other media that is playing when video start. Turns it back on when video is done.">
+                                    <CheckBox x:Name="ChkVideoPause" Style="{StaticResource ToggleStyle}"
+                                              Checked="ChkVideoPause_Changed" Unchecked="ChkVideoPause_Changed"/>
+                                    <TextBlock Style="{StaticResource SettingLabel}" Text="Pause" Margin="6,0,15,0"/>
                                 </StackPanel>
                                 <Slider Grid.Column="2" x:Name="SliderPerHour" Minimum="1" Maximum="20" Value="2" ValueChanged="SliderPerHour_Changed"
                                         ToolTip="Videos per hour"/>
                                 <TextBlock x:Name="TxtPerHour" Grid.Column="3" Style="{StaticResource ValueLabel}" Text="2" HorizontalAlignment="Right"/>
                             </Grid>
+                            <StackPanel Margin="0,3" Grid.Column="1" Orientation="Horizontal" ToolTip="Strict mode: videos cannot be skipped, must watch entirely">
+                                <CheckBox x:Name="ChkStrictLock" Style="{StaticResource ToggleStyle}" Checked="ChkStrictLock_Checked" Unchecked="ChkStrictLock_Unchecked"/>
+                                <TextBlock Style="{StaticResource SettingLabel}" Text="⚠ Strict" Foreground="#FFB347" Margin="6,0,15,0"/>
+                            </StackPanel>
 
                             <!-- Mini-Game Sub-Section -->
                             <Border Background="#1E1E3A" CornerRadius="6" Padding="10,7" Margin="0,7,0,0">
