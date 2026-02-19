@@ -1412,7 +1412,7 @@ namespace ConditioningControlPanel.Services
             }
         }
 
-        #region Stop other video in background
+        #region Stop other media in background
         
         public const int KEYEVENTF_EXTENTEDKEY = 1;
         public const int VK_MEDIA_PLAY_PAUSE = 0xB3;
