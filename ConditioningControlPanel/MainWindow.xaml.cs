@@ -48,6 +48,12 @@ namespace ConditioningControlPanel
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
             int X, int Y, int cx, int cy, uint uFlags);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
         private static readonly IntPtr HWND_TOPMOST = new(-1);
         private static readonly IntPtr HWND_NOTOPMOST = new(-2);
         private const uint SWP_NOACTIVATE = 0x0010;
@@ -286,6 +292,7 @@ namespace ConditioningControlPanel
             {
                 App.Quests.QuestCompleted += OnQuestCompleted;
                 App.Quests.QuestProgressChanged += OnQuestProgressChanged;
+                App.Quests.QuestsRefreshed += (s, e) => Dispatcher.Invoke(() => RefreshQuestUI());
             }
 
             // Subscribe to skill tree events
@@ -643,6 +650,7 @@ namespace ConditioningControlPanel
                 Activate();
                 Topmost = true;  // Temporarily topmost to ensure it's visible
                 Topmost = false; // Then disable topmost
+                App.Overlay?.NotifyTopWindowClosed();
                 ShowAvatarTube();
 
                 if (sessionWasPaused)
@@ -2553,8 +2561,8 @@ namespace ConditioningControlPanel
             }
             else
             {
-                // Offline fallback
-                TxtFixStreakStatus.Text = "❌ Oopsie Insurance requires an internet connection";
+                // No cloud account
+                TxtFixStreakStatus.Text = "❌ Oopsie Insurance requires a cloud account. Please log in first.";
                 TxtFixStreakStatus.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF5252"));
                 TxtFixStreakStatus.Visibility = Visibility.Visible;
                 return;
@@ -3017,21 +3025,6 @@ namespace ConditioningControlPanel
             }
         }
 
-        private void BtnLabGuide_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = "https://codebambi.github.io/Conditioning-Control-Panel---CSharp-WPF/guide-lab.html",
-                    UseShellExecute = true
-                });
-            }
-            catch (Exception ex)
-            {
-                App.Logger?.Error(ex, "Failed to open Lab guide link");
-            }
-        }
 
         private void ChkDiscordRichPresence_Changed(object sender, RoutedEventArgs e)
         {
@@ -3170,7 +3163,6 @@ namespace ConditioningControlPanel
             AssetsTab.Visibility = Visibility.Collapsed;
             DiscordTab.Visibility = Visibility.Collapsed;
             EnhancementsTab.Visibility = Visibility.Collapsed;
-            LabTab.Visibility = Visibility.Collapsed;
 
             // Reset all button styles to inactive
             var inactiveStyle = FindResource("TabButton") as Style;
@@ -3184,7 +3176,6 @@ namespace ConditioningControlPanel
             BtnCompanion.Style = inactiveStyle;
             BtnLeaderboard.Style = inactiveStyle;
             BtnOpenAssetsTop.Style = inactiveStyle;
-            BtnLab.Style = inactiveStyle;
             // BtnPatreonExclusives keeps its inline Patreon red style defined in XAML
 
             switch (tab)
@@ -3266,14 +3257,6 @@ namespace ConditioningControlPanel
                     UpdateDiscordTabUI();
                     break;
 
-                case "lab":
-                    LabTab.Visibility = Visibility.Visible;
-                    BtnLab.Style = activeStyle;
-                    var hasLabAccess = App.Patreon?.CurrentTier >= PatreonTier.Level2 || App.Patreon?.IsWhitelisted == true;
-                    LabLockedOverlay.Visibility = hasLabAccess ? Visibility.Collapsed : Visibility.Visible;
-                    LabContentBorder.Opacity = hasLabAccess ? 1.0 : 0.15;
-                    LabContentBorder.IsHitTestVisible = hasLabAccess;
-                    break;
             }
         }
 
@@ -4152,17 +4135,17 @@ namespace ConditioningControlPanel
             }
 
             // Re-evaluate keyword triggers access (may have been disabled before Patreon validated)
-            var hasT2 = KeywordTriggerService.HasAccess();
+            var hasKeywordAccess = KeywordTriggerService.HasAccess();
             if (TxtKeywordTriggersLocked != null)
-                TxtKeywordTriggersLocked.Visibility = hasT2 ? Visibility.Collapsed : Visibility.Visible;
+                TxtKeywordTriggersLocked.Visibility = hasKeywordAccess ? Visibility.Collapsed : Visibility.Visible;
             if (BtnKeywordTriggersStartStop != null)
-                BtnKeywordTriggersStartStop.IsEnabled = hasT2;
+                BtnKeywordTriggersStartStop.IsEnabled = hasKeywordAccess;
             if (ChkScreenOcrEnabled != null)
-                ChkScreenOcrEnabled.IsEnabled = hasT2;
+                ChkScreenOcrEnabled.IsEnabled = hasKeywordAccess;
 
             // If triggers were enabled in settings but couldn't start earlier (Patreon not validated yet),
             // start them now that access is confirmed
-            if (hasT2 && App.Settings?.Current?.KeywordTriggersEnabled == true)
+            if (hasKeywordAccess && App.Settings?.Current?.KeywordTriggersEnabled == true)
             {
                 App.KeywordTriggers?.Start();
                 _keyboardHook?.Start();
@@ -4342,6 +4325,13 @@ namespace ConditioningControlPanel
             // Show individual buttons for unlinked providers
             BtnLinkPatreon.Visibility = (hasUnifiedId && !hasLinkedPatreon) ? Visibility.Visible : Visibility.Collapsed;
             BtnLinkDiscord.Visibility = (hasUnifiedId && !hasLinkedDiscord) ? Visibility.Visible : Visibility.Collapsed;
+
+            // Show cloud settings backup section if user has a cloud identity
+            CloudSettingsBackupSection.Visibility = hasUnifiedId ? Visibility.Visible : Visibility.Collapsed;
+            if (hasUnifiedId)
+            {
+                _ = UpdateBackupStatus();
+            }
         }
 
         /// <summary>
@@ -4428,27 +4418,181 @@ namespace ConditioningControlPanel
             }
         }
 
+        #region Cloud Settings Backup
+
+        private async void BtnBackupSettingsNow_Click(object sender, RoutedEventArgs e)
+        {
+            if (App.ProfileSync == null) return;
+
+            BtnBackupSettingsNow.IsEnabled = false;
+            BtnBackupSettingsNow.Content = "Backing up...";
+
+            try
+            {
+                var success = await App.ProfileSync.BackupSettingsAsync(force: true);
+
+                if (success)
+                {
+                    MessageBox.Show(
+                        "Settings backed up to cloud successfully!",
+                        "Backup Complete",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+
+                    await UpdateBackupStatus();
+                }
+                else
+                {
+                    MessageBox.Show(
+                        "Failed to backup settings. Please try again later.",
+                        "Backup Failed",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Manual settings backup failed");
+                MessageBox.Show(
+                    $"Backup failed: {ex.Message}",
+                    "Backup Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            finally
+            {
+                BtnBackupSettingsNow.IsEnabled = true;
+                BtnBackupSettingsNow.Content = "☁ Backup Now";
+            }
+        }
+
+        private async void BtnRestoreSettings_Click(object sender, RoutedEventArgs e)
+        {
+            if (App.ProfileSync == null) return;
+
+            var confirm = MessageBox.Show(
+                "This will replace your current settings with the cloud backup.\n\n" +
+                "Your progression (level, XP, skills) will NOT be affected.\n\n" +
+                "Are you sure you want to restore?",
+                "Restore Settings from Cloud",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (confirm != MessageBoxResult.Yes) return;
+
+            BtnRestoreSettings.IsEnabled = false;
+            BtnRestoreSettings.Content = "Restoring...";
+
+            try
+            {
+                var restored = await App.ProfileSync.RestoreSettingsFromCloudAsync();
+
+                if (restored == null)
+                {
+                    MessageBox.Show(
+                        "No cloud backup found or restore failed.",
+                        "Restore Failed",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+
+                // Preserve identity/progression fields from current settings
+                var current = App.Settings?.Current;
+                if (current != null)
+                {
+                    restored.UnifiedId = current.UnifiedId;
+                    restored.PlayerLevel = current.PlayerLevel;
+                    restored.PlayerXP = current.PlayerXP;
+                    restored.SkillPoints = current.SkillPoints;
+                    restored.UnlockedSkills = current.UnlockedSkills;
+                    restored.HighestLevelEver = current.HighestLevelEver;
+                    restored.IsSeason0Og = current.IsSeason0Og;
+                    restored.CurrentSeason = current.CurrentSeason;
+                    restored.PendingSkillsResetAck = current.PendingSkillsResetAck;
+                    restored.UserDisplayName = current.UserDisplayName;
+                    restored.PatreonTier = current.PatreonTier;
+                    restored.PatreonPremiumValidUntil = current.PatreonPremiumValidUntil;
+                    restored.LastPatreonVerification = current.LastPatreonVerification;
+                    restored.OpenRouterApiKey = current.OpenRouterApiKey;
+                }
+
+                App.Settings?.RestoreFrom(restored);
+
+                _isLoading = true;
+                LoadSettings();
+                _isLoading = false;
+
+                MessageBox.Show(
+                    "Settings restored from cloud! Some changes may require a restart to take full effect.",
+                    "Settings Restored",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Manual settings restore failed");
+                MessageBox.Show(
+                    $"Restore failed: {ex.Message}",
+                    "Restore Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            finally
+            {
+                BtnRestoreSettings.IsEnabled = true;
+                BtnRestoreSettings.Content = "Restore from Cloud";
+            }
+        }
+
+        private async Task UpdateBackupStatus()
+        {
+            try
+            {
+                if (App.ProfileSync == null || !App.HasCloudIdentity) return;
+
+                var info = await App.ProfileSync.GetSettingsBackupInfoAsync();
+
+                if (info?.BackedUpAt != null)
+                {
+                    var dateStr = info.BackedUpAt.Value.ToLocalTime().ToString("MMM d, yyyy h:mm tt");
+                    TxtCloudBackupStatus.Text = $"Last backup: {dateStr} (v{info.AppVersion})";
+                }
+                else
+                {
+                    TxtCloudBackupStatus.Text = "No cloud backup found. Back up your settings to protect them.";
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Debug("Failed to update backup status: {Error}", ex.Message);
+                TxtCloudBackupStatus.Text = "Could not check backup status.";
+            }
+        }
+
+        #endregion
+
         private void ChkShareAchievements_Changed(object sender, RoutedEventArgs e)
         {
-            if (App.Settings?.Current != null)
+            if (App.Settings?.Current != null && sender is CheckBox chk)
             {
-                App.Settings.Current.DiscordShareAchievements = ChkShareAchievements.IsChecked == true;
+                App.Settings.Current.DiscordShareAchievements = chk.IsChecked == true;
             }
         }
 
         private void ChkShareLevelUps_Changed(object sender, RoutedEventArgs e)
         {
-            if (App.Settings?.Current != null)
+            if (App.Settings?.Current != null && sender is CheckBox chk)
             {
-                App.Settings.Current.DiscordShareLevelUps = ChkShareLevelUps.IsChecked == true;
+                App.Settings.Current.DiscordShareLevelUps = chk.IsChecked == true;
             }
         }
 
         private void ChkShowLevelInPresence_Changed(object sender, RoutedEventArgs e)
         {
-            if (App.Settings?.Current != null)
+            if (App.Settings?.Current != null && sender is CheckBox chk)
             {
-                App.Settings.Current.DiscordShowLevelInPresence = ChkShowLevelInPresence.IsChecked == true;
+                App.Settings.Current.DiscordShowLevelInPresence = chk.IsChecked == true;
                 // Update presence immediately to reflect change
                 App.DiscordRpc?.UpdateLevel(App.Settings.Current.PlayerLevel);
             }
@@ -4461,9 +4605,7 @@ namespace ConditioningControlPanel
                 var isChecked = chk.IsChecked == true;
                 App.Settings.Current.AllowDiscordDm = isChecked;
 
-                // Sync both checkboxes
-                if (ChkAllowDiscordDm != null && ChkAllowDiscordDm != chk)
-                    ChkAllowDiscordDm.IsChecked = isChecked;
+                // Sync profile tab checkbox
                 if (ChkDiscordTabAllowDm != null && ChkDiscordTabAllowDm != chk)
                     ChkDiscordTabAllowDm.IsChecked = isChecked;
 
@@ -4499,9 +4641,7 @@ namespace ConditioningControlPanel
                 var isChecked = chk.IsChecked == true;
                 App.Settings.Current.ShareProfilePicture = isChecked;
 
-                // Sync both checkboxes (Patreon tab and Discord tab)
-                if (ChkShareProfilePicture != null && ChkShareProfilePicture != chk)
-                    ChkShareProfilePicture.IsChecked = isChecked;
+                // Sync profile tab checkbox
                 if (ChkDiscordTabSharePfp != null && ChkDiscordTabSharePfp != chk)
                     ChkDiscordTabSharePfp.IsChecked = isChecked;
 
@@ -4520,9 +4660,7 @@ namespace ConditioningControlPanel
                 var isChecked = chk.IsChecked == true;
                 App.Settings.Current.ShowOnlineStatus = isChecked;
 
-                // Sync both checkboxes (Patreon tab and Discord tab)
-                if (ChkShowOnlineStatus != null && ChkShowOnlineStatus != chk)
-                    ChkShowOnlineStatus.IsChecked = isChecked;
+                // Sync profile tab checkbox
                 if (ChkDiscordTabShowOnline != null && ChkDiscordTabShowOnline != chk)
                     ChkDiscordTabShowOnline.IsChecked = isChecked;
 
@@ -5298,7 +5436,7 @@ namespace ConditioningControlPanel
                 if (!KeywordTriggerService.HasAccess())
                 {
                     MessageBox.Show(
-                        "Keyword Triggers are available for Tier 2 Patreon supporters.",
+                        "Keyword Triggers are available for Patreon supporters.",
                         "Patreon Feature",
                         MessageBoxButton.OK,
                         MessageBoxImage.Information);
@@ -5374,7 +5512,7 @@ namespace ConditioningControlPanel
             {
                 ChkScreenOcrEnabled.IsChecked = false;
                 MessageBox.Show(
-                    "Screen OCR requires Tier 2 Patreon access.",
+                    "Screen OCR requires Patreon access.",
                     "Patreon Feature",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
@@ -5407,6 +5545,29 @@ namespace ConditioningControlPanel
         {
             if (_isLoading) return;
             App.Settings.Current.KeywordHighlightEnabled = ChkKeywordHighlightEnabled.IsChecked == true;
+            if (HighlightDurationPanel != null)
+                HighlightDurationPanel.Visibility = ChkKeywordHighlightEnabled.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void SliderKeywordHighlightDuration_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_isLoading) return;
+            var ms = (int)(SliderKeywordHighlightDuration.Value * 1000);
+            TxtKeywordHighlightDuration.Text = $"{SliderKeywordHighlightDuration.Value:0.0}s";
+            App.Settings.Current.KeywordHighlightDurationMs = ms;
+        }
+
+        private void CmbOcrHighlightMode_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isLoading) return;
+            App.Settings.Current.OcrHighlightAll = CmbOcrHighlightMode.SelectedIndex == 0;
+        }
+
+        private void ChkHighlightVisibleInCapture_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            App.Settings.Current.OcrHighlightVisibleInCapture = ChkHighlightVisibleInCapture.IsChecked == true;
+            App.KeywordHighlight?.RefreshCaptureVisibility();
         }
 
         private void BtnAddKeywordTrigger_Click(object sender, RoutedEventArgs e)
@@ -5726,7 +5887,9 @@ namespace ConditioningControlPanel
                 MinWidth = 100
             };
             visualCombo.Items.Add("None");
+            visualCombo.Items.Add("Highlight Only");
             visualCombo.Items.Add("Subliminal");
+            visualCombo.Items.Add("Exact Subliminal");
             visualCombo.Items.Add("Image Flash");
             visualCombo.Items.Add("Overlay Pulse");
             visualCombo.Items.Add("Mind Wipe");
@@ -5950,8 +6113,16 @@ namespace ConditioningControlPanel
             var code = App.RemoteControl?.SessionCode;
             if (!string.IsNullOrEmpty(code))
             {
-                System.Windows.Clipboard.SetText(code);
-                BtnCopyRemoteCode.Content = "Copied!";
+                try
+                {
+                    System.Windows.Clipboard.SetText(code);
+                    BtnCopyRemoteCode.Content = "Copied!";
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Warning(ex, "Failed to copy remote code to clipboard");
+                    BtnCopyRemoteCode.Content = "Failed";
+                }
                 var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
                 timer.Tick += (s, _) => { BtnCopyRemoteCode.Content = "Copy"; timer.Stop(); };
                 timer.Start();
@@ -5964,8 +6135,16 @@ namespace ConditioningControlPanel
             var url = "https://codebambi.github.io/Conditioning-Control-Panel---CSharp-WPF/remote/";
             if (!string.IsNullOrEmpty(code))
                 url += $"?code={code}";
-            System.Windows.Clipboard.SetText(url);
-            BtnCopyRemoteLink.Content = "Copied!";
+            try
+            {
+                System.Windows.Clipboard.SetText(url);
+                BtnCopyRemoteLink.Content = "Copied!";
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Failed to copy remote link to clipboard");
+                BtnCopyRemoteLink.Content = "Failed";
+            }
             var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             timer.Tick += (s, _) => { BtnCopyRemoteLink.Content = "Copy Link"; timer.Stop(); };
             timer.Start();
@@ -6359,6 +6538,7 @@ namespace ConditioningControlPanel
                 Activate();
                 Topmost = true;
                 Topmost = false;
+                App.Overlay?.NotifyTopWindowClosed();
                 ShowAvatarTube();
             }
             catch (Exception ex)
@@ -12435,6 +12615,9 @@ namespace ConditioningControlPanel
         {
             SaveSettings();
 
+            // Check for Relapse achievement (restart within 10s of ESC)
+            App.Achievements?.CheckRelapse();
+
             var settings = App.Settings.Current;
 
             // Track session count and start skill tree service
@@ -13314,13 +13497,13 @@ namespace ConditioningControlPanel
                 SliderKeywordGlobalCooldown.Value = s.KeywordGlobalCooldownSeconds;
                 SliderKeywordSessionMultiplier.Value = s.KeywordSessionMultiplier;
 
-                var hasT2 = KeywordTriggerService.HasAccess();
+                var hasKeywordAccess = KeywordTriggerService.HasAccess();
 
                 // Show/hide lock indicator
                 if (TxtKeywordTriggersLocked != null)
-                    TxtKeywordTriggersLocked.Visibility = hasT2 ? Visibility.Collapsed : Visibility.Visible;
+                    TxtKeywordTriggersLocked.Visibility = hasKeywordAccess ? Visibility.Collapsed : Visibility.Visible;
                 if (BtnKeywordTriggersStartStop != null)
-                    BtnKeywordTriggersStartStop.IsEnabled = hasT2;
+                    BtnKeywordTriggersStartStop.IsEnabled = hasKeywordAccess;
 
                 UpdateKeywordTriggersButtonState();
                 RefreshKeywordTriggerList();
@@ -13329,21 +13512,27 @@ namespace ConditioningControlPanel
                 if (ChkScreenOcrEnabled != null)
                 {
                     ChkScreenOcrEnabled.IsChecked = s.ScreenOcrEnabled;
-                    ChkScreenOcrEnabled.IsEnabled = hasT2;
+                    ChkScreenOcrEnabled.IsEnabled = hasKeywordAccess;
                     SliderScreenOcrInterval.Value = s.ScreenOcrIntervalMs / 1000.0;
-                    ScreenOcrIntervalPanel.Visibility = s.ScreenOcrEnabled && hasT2 ? Visibility.Visible : Visibility.Collapsed;
+                    ScreenOcrIntervalPanel.Visibility = s.ScreenOcrEnabled && hasKeywordAccess ? Visibility.Visible : Visibility.Collapsed;
                 }
                 if (ChkKeywordHighlightEnabled != null)
+                {
                     ChkKeywordHighlightEnabled.IsChecked = s.KeywordHighlightEnabled;
+                    if (HighlightDurationPanel != null)
+                    {
+                        HighlightDurationPanel.Visibility = s.KeywordHighlightEnabled ? Visibility.Visible : Visibility.Collapsed;
+                        SliderKeywordHighlightDuration.Value = s.KeywordHighlightDurationMs / 1000.0;
+                        TxtKeywordHighlightDuration.Text = $"{s.KeywordHighlightDurationMs / 1000.0:0.0}s";
+                        if (CmbOcrHighlightMode != null)
+                            CmbOcrHighlightMode.SelectedIndex = s.OcrHighlightAll ? 0 : 1;
+                        if (ChkHighlightVisibleInCapture != null)
+                            ChkHighlightVisibleInCapture.IsChecked = s.OcrHighlightVisibleInCapture;
+                    }
+                }
             }
 
             // Discord Sharing Settings
-            ChkShareAchievements.IsChecked = s.DiscordShareAchievements;
-            ChkShareLevelUps.IsChecked = s.DiscordShareLevelUps;
-            ChkShowLevelInPresence.IsChecked = s.DiscordShowLevelInPresence;
-            ChkAllowDiscordDm.IsChecked = s.AllowDiscordDm;
-            ChkShareProfilePicture.IsChecked = s.ShareProfilePicture;
-            if (ChkShowOnlineStatus != null) ChkShowOnlineStatus.IsChecked = s.ShowOnlineStatus;
             if (ChkDiscordTabShowOnline != null) ChkDiscordTabShowOnline.IsChecked = s.ShowOnlineStatus;
 
             // Update Discord UI (both main tab and Patreon tab)
@@ -15929,7 +16118,6 @@ namespace ConditioningControlPanel
         private AssetTreeItem? _selectedFolder;
 
         private void BtnAssets_Click(object sender, RoutedEventArgs e) => ShowTab("assets");
-        private void BtnLab_Click(object sender, RoutedEventArgs e) => ShowTab("lab");
 
         private void BtnOpenAssetsFolder_Click(object sender, RoutedEventArgs e)
         {
@@ -16960,7 +17148,14 @@ namespace ConditioningControlPanel
                 };
                 previewWindow.Closed += (s, args) =>
                 {
-                    // Reactivate main window when preview closes to prevent it going behind other apps
+                    // Only reactivate if our process still owns the foreground
+                    var foreground = GetForegroundWindow();
+                    if (foreground != IntPtr.Zero)
+                    {
+                        GetWindowThreadProcessId(foreground, out uint foregroundPid);
+                        uint ourPid = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+                        if (foregroundPid != ourPid) return;
+                    }
                     Activate();
                 };
                 previewWindow.LoadFile(filePath);

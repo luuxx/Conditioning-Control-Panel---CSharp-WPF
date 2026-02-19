@@ -38,6 +38,9 @@ public class OverlayService : IDisposable
     private bool _isGifSpiral;
     private string _spiralPath = "";
     private Dictionary<MediaElement, DateTime> _mediaStartTimes = new();
+    private double _lastAppliedPinkOpacity = -1;
+    private double _lastAppliedSpiralOpacity = -1;
+    private int _consecutiveTopmostLossCount;
 
     // GIF frame animation fields
     private List<BitmapSource> _spiralGifFrames = new();
@@ -258,6 +261,7 @@ public class OverlayService : IDisposable
                         brush.Color = System.Windows.Media.Color.FromArgb(alpha, 255, 105, 180);
                     }
                 }
+                _lastAppliedPinkOpacity = -1;
             }
 
             if (hasSpiral)
@@ -267,6 +271,7 @@ public class OverlayService : IDisposable
                     image.Opacity = boostedOpacity;
                 foreach (var media in _spiralMediaElements)
                     media.Opacity = boostedOpacity;
+                _lastAppliedSpiralOpacity = -1;
             }
 
             if (hasBrainDrain)
@@ -379,6 +384,21 @@ public class OverlayService : IDisposable
         {
             UpdateSpiralOpacity();
         }
+
+        bool needed = ReassertZOrder();
+        if (needed)
+        {
+            _consecutiveTopmostLossCount++;
+            if (_consecutiveTopmostLossCount >= 6) // 6 x 500ms = 3 seconds of continuous loss
+            {
+                _consecutiveTopmostLossCount = 0;
+                RecreateOverlays();
+            }
+        }
+        else
+        {
+            _consecutiveTopmostLossCount = 0;
+        }
     }
 
     #region Pink Filter
@@ -486,6 +506,7 @@ public class OverlayService : IDisposable
                 App.Logger?.Debug("Failed to close pink filter window: {Error}", ex.Message);
             }
         }
+        _lastAppliedPinkOpacity = -1;
         _pinkFilterWindows.Clear();
         App.Logger?.Debug("Pink filter stopped");
     }
@@ -493,6 +514,8 @@ public class OverlayService : IDisposable
     private void UpdatePinkFilterOpacity()
     {
         var actualOpacity = App.Settings.Current.PinkFilterOpacity / 100.0;
+        if (actualOpacity == _lastAppliedPinkOpacity) return;
+        _lastAppliedPinkOpacity = actualOpacity;
         foreach (var window in _pinkFilterWindows)
         {
             if (window.Content is Border border)
@@ -970,6 +993,7 @@ public class OverlayService : IDisposable
                 App.Logger?.Debug("Failed to close spiral window: {Error}", ex.Message);
             }
         }
+        _lastAppliedSpiralOpacity = -1;
         _spiralWindows.Clear();
         App.Logger?.Debug("Spiral stopped");
     }
@@ -978,6 +1002,8 @@ public class OverlayService : IDisposable
     {
         // Very subtle opacity - 90% reduction
         var opacity = (App.Settings.Current.SpiralOpacity / 100.0) * 0.1;
+        if (opacity == _lastAppliedSpiralOpacity) return;
+        _lastAppliedSpiralOpacity = opacity;
 
         // Update GIF images
         foreach (var image in _spiralGifImages)
@@ -1388,6 +1414,70 @@ public class OverlayService : IDisposable
     }
 
     /// <summary>
+    /// Re-asserts HWND_TOPMOST on overlay windows, but only if they've actually lost it.
+    /// Returns true if any window needed recovery.
+    /// </summary>
+    private bool ReassertZOrder()
+    {
+        bool anyRecovered = false;
+        foreach (var list in new[] { _pinkFilterWindows, _spiralWindows, _brainDrainBlurWindows })
+        {
+            foreach (var window in list)
+            {
+                var hwnd = new System.Windows.Interop.WindowInteropHelper(window).Handle;
+                if (hwnd == IntPtr.Zero) continue;
+
+                int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+                if ((exStyle & WS_EX_TOPMOST) == 0)
+                {
+                    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    anyRecovered = true;
+                }
+            }
+        }
+        return anyRecovered;
+    }
+
+    /// <summary>
+    /// Called by FlashService/VideoService/MainWindow after closing topmost windows.
+    /// Immediately re-asserts overlay z-order after a short delay to let the closing window fully destroy.
+    /// </summary>
+    public void NotifyTopWindowClosed()
+    {
+        if (!_isRunning) return;
+
+        Application.Current?.Dispatcher?.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            if (_isDisposed || !_isRunning) return;
+            ReassertZOrder();
+        });
+    }
+
+    /// <summary>
+    /// Recreates all active overlay windows. Used as a fallback when overlays persistently lose topmost status.
+    /// </summary>
+    private void RecreateOverlays()
+    {
+        App.Logger?.Warning("Overlay topmost loss persisted for 3s — recreating overlay windows");
+
+        var settings = App.Settings.Current;
+        bool hadPinkFilter = _pinkFilterWindows.Count > 0;
+        bool hadSpiral = _spiralWindows.Count > 0;
+        bool hadBrainDrain = _brainDrainBlurWindows.Count > 0;
+
+        if (hadPinkFilter) StopPinkFilter();
+        if (hadSpiral) StopSpiral();
+        if (hadBrainDrain) StopBrainDrainBlur();
+
+        if (hadPinkFilter && settings.PinkFilterEnabled) StartPinkFilter();
+        if (hadSpiral && settings.SpiralEnabled) StartSpiral();
+        // Brain drain is started externally, so just log if it was active
+        if (hadBrainDrain)
+            App.Logger?.Debug("Brain drain blur was active before recreation — must be restarted externally");
+    }
+
+    /// <summary>
     /// Gets the screen bounds converted to WPF device-independent coordinates.
     /// Used for initial window creation - final positioning done via SetWindowPos.
     /// </summary>
@@ -1520,6 +1610,7 @@ public class OverlayService : IDisposable
     private const int WS_EX_LAYERED = 0x00080000;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WS_EX_NOACTIVATE = 0x08000000;
+    private const int WS_EX_TOPMOST = 0x00000008;
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern int GetWindowLong(IntPtr hwnd, int index);
@@ -1569,6 +1660,8 @@ public class OverlayService : IDisposable
     private const uint SWP_NOACTIVATE = 0x0010;
     private const uint SWP_FRAMECHANGED = 0x0020;
     private const uint SWP_NOZORDER = 0x0004;
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOSIZE = 0x0001;
 
     [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);

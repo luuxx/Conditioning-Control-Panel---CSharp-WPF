@@ -2454,12 +2454,12 @@ namespace ConditioningControlPanel.Models
 
         #endregion
 
-        #region Keyword Triggers (Patreon T2)
+        #region Keyword Triggers
 
         private bool _keywordTriggersEnabled = false;
         /// <summary>
         /// Enable keyword trigger system — intercepts typed text and fires multi-modal responses.
-        /// Requires Patreon Tier 2 or whitelist.
+        /// Requires Patreon access.
         /// </summary>
         public bool KeywordTriggersEnabled
         {
@@ -2517,6 +2517,30 @@ namespace ConditioningControlPanel.Models
         {
             get => _keywordHighlightEnabled;
             set { _keywordHighlightEnabled = value; OnPropertyChanged(); }
+        }
+
+        private int _keywordHighlightDurationMs = 600;
+        [JsonProperty]
+        public int KeywordHighlightDurationMs
+        {
+            get => _keywordHighlightDurationMs;
+            set { _keywordHighlightDurationMs = Math.Clamp(value, 300, 5000); OnPropertyChanged(); }
+        }
+
+        private bool _ocrHighlightAll = true;
+        [JsonProperty("ocrHighlightAll")]
+        public bool OcrHighlightAll
+        {
+            get => _ocrHighlightAll;
+            set { _ocrHighlightAll = value; OnPropertyChanged(); }
+        }
+
+        private bool _ocrHighlightVisibleInCapture;
+        [JsonProperty("ocrHighlightVisibleInCapture")]
+        public bool OcrHighlightVisibleInCapture
+        {
+            get => _ocrHighlightVisibleInCapture;
+            set { _ocrHighlightVisibleInCapture = value; OnPropertyChanged(); }
         }
 
         private List<KeywordTrigger> _keywordTriggers = new();

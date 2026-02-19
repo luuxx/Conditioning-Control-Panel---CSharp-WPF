@@ -16,7 +16,7 @@ namespace ConditioningControlPanel.Services
     /// <summary>
     /// Intercepts typed text system-wide and fires multi-modal responses (audio, visual, haptic, XP)
     /// when configured keyword triggers are detected.
-    /// Requires Patreon Tier 2 or whitelist.
+    /// Requires Patreon access.
     /// </summary>
     public class KeywordTriggerService : IDisposable
     {
@@ -156,13 +156,13 @@ namespace ConditioningControlPanel.Services
         }
 
         /// <summary>
-        /// Check if user has access to keyword triggers (T2 or whitelisted).
+        /// Check if user has access to keyword triggers (Patreon supporter).
         /// </summary>
         public static bool HasAccess()
         {
             var patreon = App.Patreon;
             if (patreon == null) return false;
-            return patreon.CurrentTier >= PatreonTier.Level2 || patreon.IsWhitelisted;
+            return patreon.HasPremiumAccess;
         }
 
         /// <summary>
@@ -338,42 +338,56 @@ namespace ConditioningControlPanel.Services
             // Forget highlighted texts that are no longer on screen at all
             _highlightedOcrTexts.IntersectWith(visibleTexts);
 
-            // 4. Two-scan position stability: stable = present in both current and previous scan
-            var stableKeys = new HashSet<string>(currentPositions);
-            stableKeys.IntersectWith(_pendingOcrPositions);
-
-            // 5. From stable words, keep only those whose TEXT hasn't been highlighted yet
             var newWords = new List<OcrWordHit>();
             var newTexts = new HashSet<string>();
 
-            foreach (var key in stableKeys)
+            bool highlightAll = settings.OcrHighlightAll;
+
+            if (highlightAll)
             {
-                if (wordsByKey.TryGetValue(key, out var word))
+                // "All matches" mode: skip two-scan stability gate, highlight every match immediately
+                foreach (var kvp in wordsByKey)
                 {
-                    var text = word.Text.ToLowerInvariant();
+                    var text = kvp.Value.Text.ToLowerInvariant();
                     if (!_highlightedOcrTexts.Contains(text))
                     {
-                        newWords.Add(word);
+                        newWords.Add(kvp.Value);
                         newTexts.Add(text);
                     }
                 }
             }
-
-            // 5.5 Check if any new positions have unhighlighted text needing confirmation
-            //     (positions in current scan NOT in previous scan, with text not yet handled)
-            foreach (var key in currentPositions)
+            else
             {
-                if (_pendingOcrPositions.Contains(key)) continue;
-                if (!wordsByKey.TryGetValue(key, out var w)) continue;
-                var t = w.Text.ToLowerInvariant();
-                if (_highlightedOcrTexts.Contains(t) || newTexts.Contains(t)) continue;
-                NeedsOcrConfirmation = true;
-                break;
+                // "Random subset" mode: pick a random subset of unhighlighted matches
+                var candidates = new List<OcrWordHit>();
+                foreach (var kvp in wordsByKey)
+                {
+                    var text = kvp.Value.Text.ToLowerInvariant();
+                    if (!_highlightedOcrTexts.Contains(text))
+                        candidates.Add(kvp.Value);
+                }
+
+                if (candidates.Count > 0)
+                {
+                    var rng = new Random();
+                    int count = rng.Next(1, candidates.Count + 1);
+                    // Shuffle and take 'count' items
+                    for (int i = candidates.Count - 1; i > 0; i--)
+                    {
+                        int j = rng.Next(i + 1);
+                        (candidates[i], candidates[j]) = (candidates[j], candidates[i]);
+                    }
+                    for (int i = 0; i < count; i++)
+                    {
+                        newWords.Add(candidates[i]);
+                        newTexts.Add(candidates[i].Text.ToLowerInvariant());
+                    }
+                }
             }
 
             // 6. Update tracking
-            _pendingOcrPositions = currentPositions;       // current positions become next scan's pending
-            _highlightedOcrTexts.UnionWith(newTexts);      // mark newly highlighted texts
+            _pendingOcrPositions = currentPositions;
+            _highlightedOcrTexts.UnionWith(newTexts);
 
             if (newWords.Count == 0 || effectTrigger == null) return;
 
@@ -549,6 +563,18 @@ namespace ConditioningControlPanel.Services
             {
                 if (_disposed) return;
 
+                // HighlightOnly — show highlight overlay and skip all other effects
+                if (trigger.VisualEffect == KeywordVisualEffect.HighlightOnly)
+                {
+                    if (matchedWords != null && matchedWords.Count > 0
+                        && App.Settings?.Current?.KeywordHighlightEnabled == true)
+                    {
+                        Application.Current?.Dispatcher?.Invoke(() =>
+                            App.KeywordHighlight?.ShowHighlight(matchedWords));
+                    }
+                    return;
+                }
+
                 // 1. Duck audio (if enabled)
                 if (trigger.DuckAudio && App.Settings?.Current?.AudioDuckingEnabled == true)
                 {
@@ -639,6 +665,11 @@ namespace ConditioningControlPanel.Services
                         App.Subliminal?.FlashSubliminal();
                         break;
 
+                    case KeywordVisualEffect.ExactSubliminal:
+                        // Flash the matched keyword itself as subliminal text
+                        App.Subliminal?.FlashSubliminalCustom(trigger.Keyword.ToUpperInvariant());
+                        break;
+
                     case KeywordVisualEffect.ImageFlash:
                         // Trigger a single image flash
                         App.Flash?.TriggerFlashOnce();
@@ -659,6 +690,7 @@ namespace ConditioningControlPanel.Services
                         App.Bubbles?.SpawnOnce();
                         break;
 
+                    case KeywordVisualEffect.HighlightOnly:
                     case KeywordVisualEffect.None:
                     default:
                         break;

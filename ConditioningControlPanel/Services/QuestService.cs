@@ -51,6 +51,7 @@ public class QuestService : IDisposable
 {
     private readonly string _progressPath;
     private readonly DispatcherTimer _saveTimer;
+    private readonly DispatcherTimer _refreshTimer;
     private readonly Random _random = new();
     private bool _isDirty;
 
@@ -64,6 +65,7 @@ public class QuestService : IDisposable
 
     public event EventHandler<QuestCompletedEventArgs>? QuestCompleted;
     public event EventHandler<QuestProgressEventArgs>? QuestProgressChanged;
+    public event EventHandler? QuestsRefreshed;
 
     public QuestService()
     {
@@ -103,6 +105,19 @@ public class QuestService : IDisposable
             }
         };
         _saveTimer.Start();
+
+        // Quest refresh timer — detect day/week rollover while app is running
+        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+        _refreshTimer.Tick += (s, e) =>
+        {
+            if (Progress.IsDailyExpired() || Progress.IsWeeklyExpired())
+            {
+                App.Logger?.Information("Quest day/week rollover detected, refreshing quests");
+                CheckAndGenerateQuests();
+                QuestsRefreshed?.Invoke(this, EventArgs.Empty);
+            }
+        };
+        _refreshTimer.Start();
 
         App.Logger?.Information("QuestService initialized. Daily: {Daily}, Weekly: {Weekly}",
             Progress.DailyQuest?.DefinitionId ?? "none",
@@ -163,8 +178,21 @@ public class QuestService : IDisposable
         // Check daily quest - reset counter on new day
         if (Progress.IsDailyExpired() || Progress.DailyQuest == null)
         {
+            // Before replacing: if the expired quest was completed today (ran past midnight),
+            // preserve the completion count so it isn't lost when the counter resets
+            bool wasCompletedToday = Progress.DailyQuest?.IsCompleted == true
+                && Progress.DailyQuest.CompletedAt?.Date == DateTime.Today;
+
             // New day resets the daily completion counter
             Progress.GetDailyQuestsCompletedToday(); // triggers reset if new day
+
+            // Restore the count if the quest was completed after midnight on the "old" quest
+            if (wasCompletedToday && Progress.DailyQuestsCompletedToday == 0)
+            {
+                Progress.DailyQuestsCompletedToday = 1;
+                App.Logger?.Information("Quest day rollover: preserved completion count (quest completed today on expired quest)");
+            }
+
             GenerateNewDailyQuest();
             changed = true;
         }
@@ -782,6 +810,7 @@ public class QuestService : IDisposable
     public void Dispose()
     {
         _saveTimer.Stop();
+        _refreshTimer.Stop();
         if (_isDirty)
         {
             Save();

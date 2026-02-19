@@ -22,48 +22,18 @@ namespace ConditioningControlPanel.Services
         /// <summary>
         /// Current application version - UPDATE THIS WHEN BUMPING VERSION
         /// </summary>
-        public const string AppVersion = "5.5.20";
+        public const string AppVersion = "5.5.22";
 
         /// <summary>
         /// Patch notes for the current version - UPDATE THIS WHEN BUMPING VERSION
         /// These are shown in the update dialog and can be used when GitHub release notes are unavailable.
         /// </summary>
-        public const string CurrentPatchNotes = @"v5.5.20 - Remote Control Overhaul
-
-📡 REMOTE CONTROL
-• Session picker — controllers choose from sub's available sessions
-• Live progress display — elapsed time, phase, pause state in real-time
-• Sub overlay shows session name + countdown timer during remote sessions
-• Flash/subliminal loop toggles, lock card, mind wipe, bounce text commands
-• Custom subliminal text input from controller (max 200 chars)
-• Video loop toggle
-• Auto-connect link (Copy Link includes session code)
-• Companion menu locked during remote control
-
-🎯 KEYWORD TRIGGERS
-• New effects: Mind Wipe and Bubbles
-• Overlay Pulse effect now doubles intensity for 1 second
-• Start button no longer stuck on launch
-
-💬 COMPANION
-• Phrase presets — save/load phrase configs as named presets
-
-🔄 QUEST SYSTEM
-• Bonus rerolls synced from server
-• Rerolls only pick quests unlocked at your level
+        public const string CurrentPatchNotes = @"v5.5.22 - Overlay & Focus Fixes
 
 🔧 FIXES
-• Remote sessions no longer silently fail when window is in tray
-• Remote session no longer drops from browser tab throttling
-• Panic key closes bubble count answer screen
-• Skill points reset no longer repeats on crash
-• Long videos no longer killed by stuck detection
-• Quest progress bar no longer overflows track
-• Avatar tube z-order fixed when attached to main window
-• Lab tab dead scroll zones fixed
-
-⚡ PERFORMANCE
-• Flash images load in parallel for faster spawning";
+• Overlays (pink filter, spiral, brain drain) now stay on top after mandatory videos
+• Reduced overlay flicker by skipping redundant opacity updates
+• Preview window no longer steals focus from other apps when closed";
 
         private const string GitHubOwner = "CodeBambi";
         private const string GitHubRepo = "Conditioning-Control-Panel---CSharp-WPF";

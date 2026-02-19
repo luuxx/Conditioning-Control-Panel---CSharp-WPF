@@ -97,7 +97,9 @@ namespace ConditioningControlPanel.Services
                     PositionWindowOnScreen(window, targetScreen);
 
                     // Exclude from screen capture so our highlights don't get OCR'd
-                    SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+                    // (unless user wants highlights visible in streams/recordings)
+                    if (App.Settings?.Current?.OcrHighlightVisibleInCapture != true)
+                        SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
                 };
 
                 window.Show();
@@ -155,11 +157,14 @@ namespace ConditioningControlPanel.Services
 
         private void AnimateHighlight(Border border, Canvas canvas)
         {
-            // Quick pop-in + fade-out (~600ms total)
+            var totalMs = App.Settings?.Current?.KeywordHighlightDurationMs ?? 600;
+            var popIn = (int)(totalMs * 0.13);
+            var holdEnd = (int)(totalMs * 0.42);
+
             var anim = new DoubleAnimationUsingKeyFrames();
-            anim.KeyFrames.Add(new LinearDoubleKeyFrame(1.0, TimeSpan.FromMilliseconds(80)));   // pop in
-            anim.KeyFrames.Add(new LinearDoubleKeyFrame(1.0, TimeSpan.FromMilliseconds(250)));  // hold
-            anim.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, TimeSpan.FromMilliseconds(600)));  // fade out
+            anim.KeyFrames.Add(new LinearDoubleKeyFrame(1.0, TimeSpan.FromMilliseconds(popIn)));     // pop in
+            anim.KeyFrames.Add(new LinearDoubleKeyFrame(1.0, TimeSpan.FromMilliseconds(holdEnd)));   // hold
+            anim.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, TimeSpan.FromMilliseconds(totalMs)));   // fade out
 
             Storyboard.SetTarget(anim, border);
             Storyboard.SetTargetProperty(anim, new PropertyPath(UIElement.OpacityProperty));
@@ -172,6 +177,28 @@ namespace ConditioningControlPanel.Services
             };
 
             storyboard.Begin();
+        }
+
+        /// <summary>
+        /// Updates the display affinity on all existing overlay windows
+        /// so the capture-visibility setting takes effect immediately.
+        /// </summary>
+        public void RefreshCaptureVisibility()
+        {
+            if (_disposed) return;
+            bool visible = App.Settings?.Current?.OcrHighlightVisibleInCapture == true;
+            uint affinity = visible ? 0u : WDA_EXCLUDEFROMCAPTURE;
+
+            foreach (var (window, _) in _screenOverlays.Values)
+            {
+                try
+                {
+                    var hwnd = new WindowInteropHelper(window).Handle;
+                    if (hwnd != IntPtr.Zero)
+                        SetWindowDisplayAffinity(hwnd, affinity);
+                }
+                catch { }
+            }
         }
 
         #region DPI / Positioning Helpers

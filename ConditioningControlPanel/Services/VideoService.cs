@@ -2021,6 +2021,9 @@ namespace ConditioningControlPanel.Services
                 }
                 _windows.Clear();
 
+                if (!synchronous)
+                    App.Overlay?.NotifyTopWindowClosed();
+
                 // Dispose media players - synchronously during app exit, async during normal operation
                 if (playersCopy.Count > 0)
                 {
