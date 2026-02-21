@@ -658,11 +658,6 @@ namespace ConditioningControlPanel
                     // Update pause button to show resume icon
                     if (TxtPauseIcon != null) TxtPauseIcon.Text = "▶";
                     if (BtnPauseSession != null) BtnPauseSession.ToolTip = "Resume session";
-                    _trayIcon?.ShowNotification("Session Paused", "Press panic key again within 2 seconds to exit completely.", System.Windows.Forms.ToolTipIcon.Info);
-                }
-                else
-                {
-                    _trayIcon?.ShowNotification("Stopped", "Press panic key again within 2 seconds to exit completely.", System.Windows.Forms.ToolTipIcon.Info);
                 }
             }
             else if (_panicPressCount >= 2)
@@ -752,6 +747,7 @@ namespace ConditioningControlPanel
 
                 // Update mode-aware takeover labels
                 var takeoverLabel = Models.ContentModeConfig.GetTakeoverLabel(mode);
+                TxtTakeoverHeader.Text = $"🤖 {takeoverLabel}";
                 TxtTakeoverLocked.Text = $"🤖 {takeoverLabel}";
                 TxtTakeoverUnlocked.Text = $"🤖 {takeoverLabel}";
                 BtnAutonomyStartStop.ToolTip = $"Start/Stop {takeoverLabel}";
@@ -934,7 +930,19 @@ namespace ConditioningControlPanel
                 TxtHypnotubeModeLabel.Text = App.Settings?.Current?.ContentModeDisplay ?? "Bambi Sleep";
 
             if (TxtHypnotubeLinks != null)
-                TxtHypnotubeLinks.Text = App.Settings?.Current?.ActiveHypnotubeLinks ?? "";
+            {
+                var links = App.Settings?.Current?.ActiveHypnotubeLinks ?? "";
+                // Show default links when empty so users see examples of the expected format
+                if (string.IsNullOrWhiteSpace(links))
+                {
+                    links = App.Settings?.Current?.IsBambiMode == true
+                        ? Services.BambiSprite.DefaultBambiSleepLinks
+                        : Services.BambiSprite.DefaultSissyHypnoLinks;
+                    if (App.Settings?.Current != null)
+                        App.Settings.Current.ActiveHypnotubeLinks = links;
+                }
+                TxtHypnotubeLinks.Text = links;
+            }
         }
 
         private void TxtHypnotubeLinks_TextChanged(object sender, TextChangedEventArgs e)
@@ -2640,6 +2648,11 @@ namespace ConditioningControlPanel
             ShowTab("leaderboard");
         }
 
+        private void BtnLab_Click(object sender, RoutedEventArgs e)
+        {
+            ShowTab("lab");
+        }
+
         private void BtnPatreonExclusives_Click(object sender, RoutedEventArgs e)
         {
             ShowTab("patreon");
@@ -3149,6 +3162,23 @@ namespace ConditioningControlPanel
             });
         }
 
+        private void AnimateTabIn(UIElement tab)
+        {
+            try
+            {
+                tab.Opacity = 0;
+                var anim = new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200))
+                {
+                    EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut }
+                };
+                tab.BeginAnimation(OpacityProperty, anim);
+            }
+            catch
+            {
+                tab.Opacity = 1;
+            }
+        }
+
         private void ShowTab(string tab)
         {
             // Hide all tabs
@@ -3163,6 +3193,7 @@ namespace ConditioningControlPanel
             AssetsTab.Visibility = Visibility.Collapsed;
             DiscordTab.Visibility = Visibility.Collapsed;
             EnhancementsTab.Visibility = Visibility.Collapsed;
+            LabTab.Visibility = Visibility.Collapsed;
 
             // Reset all button styles to inactive
             var inactiveStyle = FindResource("TabButton") as Style;
@@ -3175,6 +3206,7 @@ namespace ConditioningControlPanel
             BtnAchievements.Style = inactiveStyle;
             BtnCompanion.Style = inactiveStyle;
             BtnLeaderboard.Style = inactiveStyle;
+            BtnLab.Style = inactiveStyle;
             BtnOpenAssetsTop.Style = inactiveStyle;
             // BtnPatreonExclusives keeps its inline Patreon red style defined in XAML
 
@@ -3182,11 +3214,13 @@ namespace ConditioningControlPanel
             {
                 case "settings":
                     SettingsTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(SettingsTab);
                     BtnSettings.Style = activeStyle;
                     break;
 
                 case "presets":
                     PresetsTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(PresetsTab);
                     BtnPresets.Style = activeStyle;
                     break;
 
@@ -3195,6 +3229,7 @@ namespace ConditioningControlPanel
                     try
                     {
                         ProgressionTab.Visibility = Visibility.Visible;
+                        AnimateTabIn(ProgressionTab);
                         App.Logger?.Debug("ShowTab: ProgressionTab visibility set to Visible.");
                     }
                     catch (Exception ex)
@@ -3207,18 +3242,21 @@ namespace ConditioningControlPanel
 
                 case "quests":
                     QuestsTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(QuestsTab);
                     BtnQuests.Style = activeStyle;
                     RefreshQuestUI();
                     break;
 
                 case "enhancements":
                     EnhancementsTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(EnhancementsTab);
                     BtnEnhancements.Style = activeStyle;
                     RefreshEnhancementsUI();
                     break;
 
                 case "achievements":
                     AchievementsTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(AchievementsTab);
                     BtnAchievements.Style = activeStyle;
                     RefreshAllAchievementTiles();
                     UpdateAchievementCount();
@@ -3226,25 +3264,35 @@ namespace ConditioningControlPanel
 
                 case "companion":
                     CompanionTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(CompanionTab);
                     BtnCompanion.Style = activeStyle;
                     SyncCompanionTabUI();
                     InitializePhrasePresets();
                     break;
 
+                case "lab":
+                    LabTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(LabTab);
+                    BtnLab.Style = activeStyle;
+                    break;
+
                 case "patreon":
                     PatreonTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(PatreonTab);
                     // Note: The main Discord login button isn't a tab button, so no style update needed
                     UpdatePatreonUI();
                     break;
 
                 case "leaderboard":
                     LeaderboardTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(LeaderboardTab);
                     BtnLeaderboard.Style = activeStyle;
                     _ = RefreshLeaderboardAsync(); // Load on first view
                     break;
 
                 case "assets":
                     AssetsTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(AssetsTab);
                     BtnOpenAssetsTop.Style = activeStyle;
                     RefreshAssetTree();
                     InitializeAssetPresets();
@@ -3253,6 +3301,7 @@ namespace ConditioningControlPanel
 
                 case "discord":
                     DiscordTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(DiscordTab);
                     // BtnDiscordTab keeps its inline Discord blue style defined in XAML
                     UpdateDiscordTabUI();
                     break;
@@ -4091,6 +4140,9 @@ namespace ConditioningControlPanel
             var level1Unlocked = hasPremiumAccess;
             var level2Unlocked = hasPremiumAccess; // Same as Level 1 now - all features at Tier 1
 
+            // Master overlay for the entire features grid
+            PatreonFeaturesOverlay.Visibility = hasPremiumAccess ? Visibility.Collapsed : Visibility.Visible;
+
             AiChatLocked.Visibility = level1Unlocked ? Visibility.Collapsed : Visibility.Visible;
             AiChatUnlocked.Visibility = level1Unlocked ? Visibility.Visible : Visibility.Collapsed;
 
@@ -4328,6 +4380,7 @@ namespace ConditioningControlPanel
 
             // Show cloud settings backup section if user has a cloud identity
             CloudSettingsBackupSection.Visibility = hasUnifiedId ? Visibility.Visible : Visibility.Collapsed;
+            DataPrivacySection.Visibility = hasUnifiedId ? Visibility.Visible : Visibility.Collapsed;
             if (hasUnifiedId)
             {
                 _ = UpdateBackupStatus();
@@ -4542,6 +4595,76 @@ namespace ConditioningControlPanel
             {
                 BtnRestoreSettings.IsEnabled = true;
                 BtnRestoreSettings.Content = "Restore from Cloud";
+            }
+        }
+
+        private async void BtnExportData_Click(object sender, RoutedEventArgs e)
+        {
+            if (App.ProfileSync == null) return;
+
+            BtnExportData.IsEnabled = false;
+            BtnExportData.Content = "Exporting...";
+
+            try
+            {
+                var (success, error, jsonData) = await App.ProfileSync.ExportDataAsync();
+
+                if (!success || jsonData == null)
+                {
+                    MessageBox.Show(
+                        error ?? "Failed to export data.",
+                        "Export Failed",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+
+                var dialog = new Microsoft.Win32.SaveFileDialog
+                {
+                    FileName = $"my-data-export-{DateTime.Now:yyyy-MM-dd}.json",
+                    Filter = "JSON files (*.json)|*.json",
+                    Title = "Save Data Export"
+                };
+
+                if (dialog.ShowDialog() == true)
+                {
+                    File.WriteAllText(dialog.FileName, jsonData);
+                    MessageBox.Show(
+                        $"Data exported to:\n{dialog.FileName}",
+                        "Export Complete",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Data export failed");
+                MessageBox.Show(
+                    $"Export failed: {ex.Message}",
+                    "Export Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            finally
+            {
+                BtnExportData.IsEnabled = true;
+                BtnExportData.Content = "Export My Data";
+            }
+        }
+
+        private void BtnPrivacyPolicy_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "https://codebambi.github.io/Conditioning-Control-Panel---CSharp-WPF/privacy-policy.html",
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Failed to open privacy policy");
             }
         }
 
@@ -16180,6 +16303,10 @@ namespace ConditioningControlPanel
                 // Bind to ItemsControl
                 PackCardsItemsControl.ItemsSource = _availablePacks;
 
+                // Force ScrollViewer to recalculate after items are loaded
+                PacksScrollViewer?.InvalidateMeasure();
+                PacksScrollViewer?.UpdateLayout();
+
                 // Load preview images for all packs
                 var loadTasks = new List<Task>();
                 foreach (var pack in packs)
@@ -16214,7 +16341,7 @@ namespace ConditioningControlPanel
                         {
                             try
                             {
-                                var previewImages = await LoadPreviewImagesFromUrlsAsync(pack.PreviewUrls);
+                                var previewImages = await LoadPreviewImagesFromUrlsAsync(pack.Id, pack.PreviewUrls);
                                 if (previewImages.Count > 0)
                                 {
                                     Dispatcher.Invoke(() =>
@@ -16288,9 +16415,14 @@ namespace ConditioningControlPanel
             _packPreviewTimer = null;
         }
 
-        private async Task<List<BitmapImage>> LoadPreviewImagesFromUrlsAsync(List<string> urls)
+        private async Task<List<BitmapImage>> LoadPreviewImagesFromUrlsAsync(string packId, List<string> urls)
         {
             var images = new List<BitmapImage>();
+            var cacheDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "ConditioningControlPanel", "pack-previews", packId);
+            Directory.CreateDirectory(cacheDir);
+
             using var httpClient = new HttpClient();
             httpClient.Timeout = TimeSpan.FromSeconds(10);
 
@@ -16298,7 +16430,20 @@ namespace ConditioningControlPanel
             {
                 try
                 {
-                    var bytes = await httpClient.GetByteArrayAsync(url);
+                    var fileName = GetPackPreviewFileName(url);
+                    var localPath = Path.Combine(cacheDir, fileName);
+                    byte[] bytes;
+
+                    if (File.Exists(localPath))
+                    {
+                        bytes = await File.ReadAllBytesAsync(localPath);
+                    }
+                    else
+                    {
+                        bytes = await httpClient.GetByteArrayAsync(url);
+                        await File.WriteAllBytesAsync(localPath, bytes);
+                    }
+
                     var bitmap = new BitmapImage();
                     using (var stream = new MemoryStream(bytes))
                     {
@@ -16317,6 +16462,12 @@ namespace ConditioningControlPanel
             }
 
             return images;
+        }
+
+        private static string GetPackPreviewFileName(string url)
+        {
+            try { return Path.GetFileName(new Uri(url).LocalPath); }
+            catch { return "image.png"; }
         }
 
         private void OnPackDownloadProgress(object? sender, (ContentPack Pack, int Progress) e)

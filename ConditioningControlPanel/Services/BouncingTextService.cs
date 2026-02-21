@@ -36,6 +36,10 @@ public class BouncingTextService : IDisposable
     
     // Corner hit detection - tolerance in pixels (corners are hard to hit exactly)
     private const double CORNER_TOLERANCE = 15.0;
+
+    // Anti-exploit: minimum time between XP-awarding bounces
+    private DateTime _lastBounceXpTime = DateTime.MinValue;
+    private static readonly TimeSpan BounceXpCooldown = TimeSpan.FromSeconds(2);
     
     public bool IsRunning => _isRunning;
     
@@ -270,7 +274,12 @@ public class BouncingTextService : IDisposable
         if (bounced)
         {
             _currentColor = GetRandomColor();
-            App.Progression?.AddXP(25, XPSource.BouncingText);
+            var now = DateTime.UtcNow;
+            if (now - _lastBounceXpTime >= BounceXpCooldown)
+            {
+                App.Progression?.AddXP(25, XPSource.BouncingText);
+                _lastBounceXpTime = now;
+            }
             OnBounce?.Invoke(this, EventArgs.Empty);
 
             // Haptic pulse on bounce
@@ -450,7 +459,9 @@ internal class BouncingTextWindow : Window
     public void UpdateText(string text, Color color)
     {
         _textBlock.Text = text;
-        _textBlock.Foreground = new SolidColorBrush(color);
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        _textBlock.Foreground = brush;
     }
 
     public void UpdateFontSize(int fontSize)

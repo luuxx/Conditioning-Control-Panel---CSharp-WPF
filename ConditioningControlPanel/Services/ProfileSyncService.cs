@@ -21,7 +21,7 @@ namespace ConditioningControlPanel.Services
     public class ProfileSyncService : IDisposable
     {
         private const string ProxyBaseUrl = "https://codebambi-proxy.vercel.app";
-        private const int HeartbeatIntervalSeconds = 45; // Send heartbeat every 45 seconds
+        private const int HeartbeatIntervalSeconds = 120; // Send heartbeat every 2 minutes
 
         private readonly HttpClient _httpClient;
         private DispatcherTimer? _heartbeatTimer;
@@ -129,6 +129,7 @@ namespace ConditioningControlPanel.Services
                 {
                     // V2 heartbeat - uses unified_id with enriched activity data
                     var v2Request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/user/heartbeat");
+                    AddAuthHeader(v2Request);
                     v2Request.Content = new StringContent(
                         Newtonsoft.Json.JsonConvert.SerializeObject(new
                         {
@@ -140,6 +141,7 @@ namespace ConditioningControlPanel.Services
                         Encoding.UTF8, "application/json");
 
                     var v2Response = await _httpClient.SendAsync(v2Request);
+                    HandleUnauthorized(v2Response);
                     App.Logger?.Debug("V2 Heartbeat: {Status}", v2Response.StatusCode);
                     return;
                 }
@@ -278,6 +280,8 @@ namespace ConditioningControlPanel.Services
         /// Sync local progression to cloud.
         /// Called after sessions and periodically.
         /// </summary>
+        private static readonly TimeSpan SyncCooldown = TimeSpan.FromSeconds(30);
+
         public async Task<bool> SyncProfileAsync()
         {
             // Skip if offline mode is enabled
@@ -290,6 +294,14 @@ namespace ConditioningControlPanel.Services
             if (!IsSyncEnabled)
             {
                 App.Logger?.Debug("Profile sync skipped - not authenticated");
+                return false;
+            }
+
+            // Client-side sync cooldown to match server-side enforcement
+            if (LastSyncTime.HasValue && DateTime.Now - LastSyncTime.Value < SyncCooldown)
+            {
+                App.Logger?.Debug("Profile sync skipped - cooldown active ({Remaining}s remaining)",
+                    Math.Ceiling((SyncCooldown - (DateTime.Now - LastSyncTime.Value)).TotalSeconds));
                 return false;
             }
 
@@ -356,6 +368,8 @@ namespace ConditioningControlPanel.Services
                         },
                         unlocked_skills = settings.UnlockedSkills?.ToList() ?? new List<string>(),
                         skill_points = settings.SkillPoints,
+                        total_conditioning_minutes = settings.TotalConditioningMinutes,
+                        companion_progress = settings.CompanionProgressData,
                         allow_discord_dm = settings.AllowDiscordDm,
                         show_online_status = settings.ShowOnlineStatus,
                         share_profile_picture = settings.ShareProfilePicture,
@@ -367,6 +381,7 @@ namespace ConditioningControlPanel.Services
                     };
 
                     var v2Request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/user/sync");
+                    AddAuthHeader(v2Request);
                     var v2Body = JsonConvert.SerializeObject(v2SyncData);
                     v2Request.Content = new StringContent(v2Body, Encoding.UTF8, "application/json");
                     SignRequest(v2Request, v2Body);
@@ -375,6 +390,14 @@ namespace ConditioningControlPanel.Services
 
                     if (!v2Response.IsSuccessStatusCode)
                     {
+                        // On 429 (cooldown), set LastSyncTime to prevent immediate retry
+                        if (v2Response.StatusCode == (System.Net.HttpStatusCode)429)
+                        {
+                            LastSyncTime = DateTime.Now;
+                            App.Logger?.Debug("V2 Profile sync rate-limited by server, will retry later");
+                            return false;
+                        }
+                        HandleUnauthorized(v2Response);
                         var error = await v2Response.Content.ReadAsStringAsync();
                         App.Logger?.Warning("V2 Profile sync failed: {Status} - {Error}", v2Response.StatusCode, error);
                         LastSyncError = $"Sync failed: {v2Response.StatusCode}";
@@ -517,6 +540,48 @@ namespace ConditioningControlPanel.Services
                                 settings.HighestLevelEver = serverHighest;
                                 App.Settings?.Save();
                             }
+                        }
+
+                        // Merge total conditioning minutes from server (take higher)
+                        if (v2Result?.TotalConditioningMinutes.HasValue == true && v2Result.TotalConditioningMinutes.Value > settings.TotalConditioningMinutes)
+                        {
+                            App.Logger?.Information("V2 Sync: Conditioning time server={Server:F1} > local={Local:F1} — using server value",
+                                v2Result.TotalConditioningMinutes.Value, settings.TotalConditioningMinutes);
+                            settings.TotalConditioningMinutes = v2Result.TotalConditioningMinutes.Value;
+                            App.Settings?.Save();
+                        }
+
+                        // Merge companion progress from server (per-companion, higher level wins)
+                        if (v2Result?.CompanionProgress != null && v2Result.CompanionProgress.Count > 0)
+                        {
+                            var needsCompanionSave = false;
+                            foreach (var (key, serverProgress) in v2Result.CompanionProgress)
+                            {
+                                if (int.TryParse(key, out var companionId))
+                                {
+                                    var localData = settings.CompanionProgressData;
+                                    localData.TryGetValue(companionId, out var localProgress);
+
+                                    var localLevel = localProgress?.Level ?? 0;
+                                    var serverLevel = serverProgress?.Level ?? 0;
+                                    var localXP = localProgress?.TotalXPEarned ?? 0;
+                                    var serverXP = serverProgress?.TotalXPEarned ?? 0;
+
+                                    if (serverLevel > localLevel || (serverLevel == localLevel && serverXP > localXP))
+                                    {
+                                        App.Logger?.Information("V2 Sync: Companion {Id} server Lv.{SLv} > local Lv.{LLv} — using server",
+                                            companionId, serverLevel, localLevel);
+                                        localData[companionId] = serverProgress!;
+                                        needsCompanionSave = true;
+                                    }
+                                    else if (localProgress == null && serverProgress != null)
+                                    {
+                                        localData[companionId] = serverProgress;
+                                        needsCompanionSave = true;
+                                    }
+                                }
+                            }
+                            if (needsCompanionSave) App.Settings?.Save();
                         }
 
                         // Handle level_reset — server admin reset all levels, force client to accept
@@ -924,6 +989,28 @@ namespace ConditioningControlPanel.Services
                 }
             }
 
+            // Merge companion progress from cloud (per-companion, higher level wins)
+            if (cloudProfile.CompanionProgress != null && cloudProfile.CompanionProgress.Count > 0)
+            {
+                foreach (var (key, serverProgress) in cloudProfile.CompanionProgress)
+                {
+                    if (int.TryParse(key, out var companionId))
+                    {
+                        var localData = settings.CompanionProgressData;
+                        localData.TryGetValue(companionId, out var localProgress);
+
+                        var localLevel = localProgress?.Level ?? 0;
+                        var serverLevel = serverProgress?.Level ?? 0;
+
+                        if (serverLevel > localLevel || (localProgress == null && serverProgress != null))
+                        {
+                            localData[companionId] = serverProgress!;
+                            needsSave = true;
+                        }
+                    }
+                }
+            }
+
             // Handle server-side quest reset flags
             if (cloudProfile.ResetWeeklyQuest == true)
             {
@@ -1069,6 +1156,7 @@ namespace ConditioningControlPanel.Services
             {
                 var requestData = new { unified_id = unifiedId, fix_date = fixDate };
                 var request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/user/use-oopsie");
+                AddAuthHeader(request);
                 request.Content = new StringContent(
                     JsonConvert.SerializeObject(requestData),
                     Encoding.UTF8,
@@ -1080,6 +1168,7 @@ namespace ConditioningControlPanel.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
+                    HandleUnauthorized(response);
                     var errorResult = JsonConvert.DeserializeObject<OopsieErrorResponse>(json);
                     var errorMsg = errorResult?.Error ?? $"Server error: {response.StatusCode}";
                     App.Logger?.Warning("Oopsie insurance failed: {Error}", errorMsg);
@@ -1113,6 +1202,7 @@ namespace ConditioningControlPanel.Services
             {
                 var requestData = new { unified_id = unifiedId, new_display_name = newName };
                 var request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/user/change-display-name");
+                AddAuthHeader(request);
                 request.Content = new StringContent(
                     JsonConvert.SerializeObject(requestData),
                     Encoding.UTF8,
@@ -1124,6 +1214,7 @@ namespace ConditioningControlPanel.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
+                    HandleUnauthorized(response);
                     var errorResult = JsonConvert.DeserializeObject<ChangeDisplayNameErrorResponse>(json);
                     var errorMsg = errorResult?.Error ?? $"Server error: {response.StatusCode}";
                     App.Logger?.Warning("Change display name failed: {Error}", errorMsg);
@@ -1157,6 +1248,7 @@ namespace ConditioningControlPanel.Services
             {
                 var requestData = new { unified_id = unifiedId, confirmation = "DELETE" };
                 var request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/user/delete-account");
+                AddAuthHeader(request);
                 request.Content = new StringContent(
                     JsonConvert.SerializeObject(requestData),
                     Encoding.UTF8,
@@ -1168,6 +1260,7 @@ namespace ConditioningControlPanel.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
+                    HandleUnauthorized(response);
                     var errorResult = JsonConvert.DeserializeObject<DeleteAccountErrorResponse>(json);
                     var errorMsg = errorResult?.Error ?? $"Server error: {response.StatusCode}";
                     App.Logger?.Warning("Delete account failed: {Error}", errorMsg);
@@ -1183,6 +1276,84 @@ namespace ConditioningControlPanel.Services
                 App.Logger?.Error(ex, "Delete account request failed");
                 return (false, "Account deletion requires an internet connection");
             }
+        }
+
+        /// <summary>
+        /// Export all user data from the server (GDPR data access request).
+        /// Returns the raw JSON string for saving to file.
+        /// </summary>
+        public async Task<(bool success, string? error, string? jsonData)> ExportDataAsync()
+        {
+            var unifiedId = App.Settings?.Current?.UnifiedId;
+            if (string.IsNullOrEmpty(unifiedId))
+            {
+                return (false, "You must be logged in to export your data", null);
+            }
+
+            try
+            {
+                var requestData = new { unified_id = unifiedId };
+                var request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/user/export-data");
+                AddAuthHeader(request);
+                request.Content = new StringContent(
+                    JsonConvert.SerializeObject(requestData),
+                    Encoding.UTF8,
+                    "application/json"
+                );
+
+                var response = await _httpClient.SendAsync(request);
+                var json = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    HandleUnauthorized(response);
+                    var errorResult = JsonConvert.DeserializeObject<DeleteAccountErrorResponse>(json);
+                    var errorMsg = errorResult?.Error ?? $"Server error: {response.StatusCode}";
+                    App.Logger?.Warning("Export data failed: {Error}", errorMsg);
+                    return (false, errorMsg, null);
+                }
+
+                // Pretty-print the JSON for readability
+                var parsed = Newtonsoft.Json.Linq.JToken.Parse(json);
+                var prettyJson = parsed.ToString(Formatting.Indented);
+
+                App.Logger?.Information("Data exported for user: {UnifiedId}", unifiedId);
+                return (true, null, prettyJson);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "Export data request failed");
+                return (false, "Data export requires an internet connection", null);
+            }
+        }
+
+        /// <summary>
+        /// Adds the X-Auth-Token header to a V2 API request if an auth token is available.
+        /// </summary>
+        private static void AddAuthHeader(HttpRequestMessage request)
+        {
+            var token = App.Settings?.Current?.AuthToken;
+            if (!string.IsNullOrEmpty(token))
+                request.Headers.Add("X-Auth-Token", token);
+        }
+
+        /// <summary>
+        /// Handles a 401 Unauthorized response by clearing the stored auth token.
+        /// Returns true if the response was a 401.
+        /// </summary>
+        private static bool HandleUnauthorized(HttpResponseMessage response)
+        {
+            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                App.Logger?.Warning("[Auth] Received 401 — clearing stored auth token. User will get a new token on next auth.");
+                if (App.Settings?.Current != null)
+                {
+                    App.Settings.Current.AuthToken = null;
+                    App.Settings.Save();
+                }
+                return true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -1234,6 +1405,7 @@ namespace ConditioningControlPanel.Services
             nameof(AppSettings.PatreonTier),
             nameof(AppSettings.PatreonPremiumValidUntil),
             nameof(AppSettings.LastPatreonVerification),
+            nameof(AppSettings.AuthToken),
         };
 
         /// <summary>
@@ -1296,6 +1468,7 @@ namespace ConditioningControlPanel.Services
                 };
 
                 var request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/user/backup-settings");
+                AddAuthHeader(request);
                 request.Content = new StringContent(
                     JsonConvert.SerializeObject(requestData),
                     Encoding.UTF8,
@@ -1306,6 +1479,7 @@ namespace ConditioningControlPanel.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
+                    HandleUnauthorized(response);
                     var error = await response.Content.ReadAsStringAsync();
                     App.Logger?.Warning("Settings backup failed: {Status} - {Error}", response.StatusCode, error);
                     return false;
@@ -1334,6 +1508,7 @@ namespace ConditioningControlPanel.Services
             {
                 var requestData = new { unified_id = unifiedId };
                 var request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/user/settings-backup");
+                AddAuthHeader(request);
                 request.Content = new StringContent(
                     JsonConvert.SerializeObject(requestData),
                     Encoding.UTF8,
@@ -1341,7 +1516,11 @@ namespace ConditioningControlPanel.Services
                 );
 
                 var response = await _httpClient.SendAsync(request);
-                if (!response.IsSuccessStatusCode) return null;
+                if (!response.IsSuccessStatusCode)
+                {
+                    HandleUnauthorized(response);
+                    return null;
+                }
 
                 var json = await response.Content.ReadAsStringAsync();
                 var result = JsonConvert.DeserializeObject<SettingsBackupResponse>(json);
@@ -1375,6 +1554,7 @@ namespace ConditioningControlPanel.Services
             {
                 var requestData = new { unified_id = unifiedId };
                 var request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/user/settings-backup");
+                AddAuthHeader(request);
                 request.Content = new StringContent(
                     JsonConvert.SerializeObject(requestData),
                     Encoding.UTF8,
@@ -1382,7 +1562,11 @@ namespace ConditioningControlPanel.Services
                 );
 
                 var response = await _httpClient.SendAsync(request);
-                if (!response.IsSuccessStatusCode) return null;
+                if (!response.IsSuccessStatusCode)
+                {
+                    HandleUnauthorized(response);
+                    return null;
+                }
 
                 var json = await response.Content.ReadAsStringAsync();
                 var result = JsonConvert.DeserializeObject<SettingsBackupResponse>(json);
@@ -1488,6 +1672,9 @@ namespace ConditioningControlPanel.Services
             [JsonProperty("total_conditioning_minutes")]
             public double? TotalConditioningMinutes { get; set; }
 
+            [JsonProperty("companion_progress")]
+            public Dictionary<string, Models.CompanionProgress>? CompanionProgress { get; set; }
+
             [JsonProperty("reset_weekly_quest")]
             public bool? ResetWeeklyQuest { get; set; }
 
@@ -1592,6 +1779,12 @@ namespace ConditioningControlPanel.Services
 
             [JsonProperty("level_reset")]
             public bool? LevelReset { get; set; }
+
+            [JsonProperty("total_conditioning_minutes")]
+            public double? TotalConditioningMinutes { get; set; }
+
+            [JsonProperty("companion_progress")]
+            public Dictionary<string, Models.CompanionProgress>? CompanionProgress { get; set; }
 
             [JsonProperty("user")]
             public V2SyncUser? User { get; set; }
