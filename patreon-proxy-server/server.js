@@ -23,7 +23,8 @@ app.use(express.json());
 // =============================================================================
 
 const RATE_LIMIT = {
-    DAILY_REQUESTS: 2000,  // Max requests per user per day
+    DAILY_REQUESTS: 2000,  // Max requests per user per day (Patreon supporters)
+    FREE_DAILY_REQUESTS: 100, // Max requests per user per day (free users)
     KEY_PREFIX: 'ratelimit:'
 };
 
@@ -109,13 +110,16 @@ function getTodayKey() {
 /**
  * Check and increment rate limit for a user
  * Returns { allowed: boolean, remaining: number, used: number }
+ * @param {string} userId
+ * @param {number} [dailyLimit] - Override daily limit (defaults to RATE_LIMIT.DAILY_REQUESTS)
  */
-async function checkRateLimit(userId) {
+async function checkRateLimit(userId, dailyLimit) {
+    const limit = dailyLimit || RATE_LIMIT.DAILY_REQUESTS;
     // If Redis not configured, allow all requests
     if (!redis) {
         return {
             allowed: true,
-            remaining: RATE_LIMIT.DAILY_REQUESTS,
+            remaining: limit,
             used: 0,
             error: true
         };
@@ -129,7 +133,7 @@ async function checkRateLimit(userId) {
         let count = await redis.get(key) || 0;
         count = parseInt(count) || 0;
 
-        if (count >= RATE_LIMIT.DAILY_REQUESTS) {
+        if (count >= limit) {
             return {
                 allowed: false,
                 remaining: 0,
@@ -147,7 +151,7 @@ async function checkRateLimit(userId) {
 
         return {
             allowed: true,
-            remaining: Math.max(0, RATE_LIMIT.DAILY_REQUESTS - count),
+            remaining: Math.max(0, limit - count),
             used: count
         };
     } catch (error) {
@@ -155,7 +159,7 @@ async function checkRateLimit(userId) {
         // If Redis fails, allow the request but log it
         return {
             allowed: true,
-            remaining: RATE_LIMIT.DAILY_REQUESTS,
+            remaining: limit,
             used: 0,
             error: true
         };
@@ -164,14 +168,17 @@ async function checkRateLimit(userId) {
 
 /**
  * Get current rate limit status without incrementing
+ * @param {string} userId
+ * @param {number} [dailyLimit] - Override daily limit (defaults to RATE_LIMIT.DAILY_REQUESTS)
  */
-async function getRateLimitStatus(userId) {
+async function getRateLimitStatus(userId, dailyLimit) {
+    const limit = dailyLimit || RATE_LIMIT.DAILY_REQUESTS;
     // If Redis not configured, return defaults
     if (!redis) {
         return {
-            remaining: RATE_LIMIT.DAILY_REQUESTS,
+            remaining: limit,
             used: 0,
-            limit: RATE_LIMIT.DAILY_REQUESTS
+            limit: limit
         };
     }
 
@@ -182,16 +189,16 @@ async function getRateLimitStatus(userId) {
         let count = await redis.get(key) || 0;
         count = parseInt(count) || 0;
         return {
-            remaining: Math.max(0, RATE_LIMIT.DAILY_REQUESTS - count),
+            remaining: Math.max(0, limit - count),
             used: count,
-            limit: RATE_LIMIT.DAILY_REQUESTS
+            limit: limit
         };
     } catch (error) {
         console.error('Rate limit status check failed:', error.message);
         return {
-            remaining: RATE_LIMIT.DAILY_REQUESTS,
+            remaining: limit,
             used: 0,
-            limit: RATE_LIMIT.DAILY_REQUESTS
+            limit: limit
         };
     }
 }
@@ -1161,8 +1168,102 @@ app.post('/discord/community-webhook', async (req, res) => {
 // =============================================================================
 
 /**
+ * POST /v2/ai/chat
+ * Proxies chat requests to OpenRouter using V2 unified auth (any user with cloud identity).
+ * No Patreon tier check — free for all authenticated users.
+ * Requires: unified_id in body, X-Auth-Token header
+ */
+app.post('/v2/ai/chat', async (req, res) => {
+    try {
+        const { unified_id, messages, max_tokens = 100, temperature = 0.95 } = req.body;
+
+        if (!unified_id) {
+            return res.status(400).json({ error: 'unified_id required' });
+        }
+        if (!redis) return res.status(503).json({ error: 'Redis not available' });
+
+        // Look up user
+        const userData = await redis.get(`user:${unified_id}`);
+        if (!userData) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+
+        // Auth token validation
+        const authCheck = validateAuthToken(req, user);
+        if (!authCheck.valid) {
+            return res.status(401).json({ error: 'Invalid or missing auth token' });
+        }
+        if (authCheck.legacy) {
+            console.log(`[AUTH] ${authCheck.missing ? 'Old client (token not sent)' : 'Legacy user (no token hash)'} for ${unified_id} on /v2/ai/chat`);
+        }
+
+        // Determine daily limit based on user tier
+        const hasPremium = (user.patreon_tier >= 1) || user.patreon_is_whitelisted;
+        const userDailyLimit = hasPremium ? RATE_LIMIT.DAILY_REQUESTS : RATE_LIMIT.FREE_DAILY_REQUESTS;
+
+        // Rate limit by unified_id
+        const rateLimit = await checkRateLimit(unified_id, userDailyLimit);
+        if (!rateLimit.allowed) {
+            console.log(`Rate limit exceeded for V2 AI chat user ${unified_id}: ${rateLimit.used}/${userDailyLimit} (premium=${hasPremium})`);
+            return res.status(429).json({
+                error: 'Daily request limit exceeded',
+                requests_remaining: 0,
+                requests_used: rateLimit.used,
+                limit: userDailyLimit
+            });
+        }
+
+        // Validate OpenRouter is configured
+        if (!CONFIG.OPENROUTER_API_KEY) {
+            return res.status(503).json({ error: 'AI service not configured' });
+        }
+
+        if (!messages || !Array.isArray(messages)) {
+            return res.status(400).json({ error: 'messages array is required' });
+        }
+
+        // Call OpenRouter (same as legacy endpoint)
+        const openRouterResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${CONFIG.OPENROUTER_API_KEY}`,
+                'Content-Type': 'application/json',
+                'HTTP-Referer': 'https://github.com/ConditioningControlPanel',
+                'X-Title': 'Conditioning Control Panel'
+            },
+            body: JSON.stringify({
+                model: CONFIG.AI_MODEL,
+                messages,
+                max_tokens,
+                temperature
+            })
+        });
+
+        if (!openRouterResponse.ok) {
+            const errorText = await openRouterResponse.text();
+            console.error('OpenRouter error (V2):', errorText);
+            return res.status(502).json({ error: 'AI service error' });
+        }
+
+        const completion = await openRouterResponse.json();
+        const content = completion.choices?.[0]?.message?.content || '';
+
+        res.json({
+            content,
+            requests_remaining: rateLimit.remaining,
+            requests_used: rateLimit.used,
+            limit: userDailyLimit
+        });
+    } catch (error) {
+        console.error('V2 AI chat error:', error.message);
+        res.status(500).json({ error: 'AI request failed' });
+    }
+});
+
+/**
  * POST /ai/chat
- * Proxies chat requests to OpenRouter after validating Patreon subscription
+ * Legacy: Proxies chat requests to OpenRouter after validating Patreon subscription
  * Requires: Authorization: Bearer <patreon_access_token>
  */
 app.post('/ai/chat', async (req, res) => {
@@ -5459,10 +5560,6 @@ app.post('/v2/auth/discord', async (req, res) => {
                 if (!user.unlocks) {
                     user.unlocks = calculateUnlocks(user.highest_level_ever || 0);
                 }
-                if (!user.is_season0_og && user.achievements?.length > 0) {
-                    user.is_season0_og = true;
-                    console.log(`[V2] Auto-flagged OG for ${existingUnifiedId} (has ${user.achievements.length} achievements)`);
-                }
 
                 // Issue auth token
                 const { token: authToken, hash: authTokenHash } = generateAuthToken();
@@ -5845,10 +5942,6 @@ app.post('/v2/auth/patreon', async (req, res) => {
                 }
                 if (!user.unlocks) {
                     user.unlocks = calculateUnlocks(user.highest_level_ever || 0);
-                }
-                if (!user.is_season0_og && user.achievements?.length > 0) {
-                    user.is_season0_og = true;
-                    console.log(`[V2] Auto-flagged OG for ${existingUnifiedId} (has ${user.achievements.length} achievements)`);
                 }
 
                 // Issue auth token
@@ -6321,10 +6414,15 @@ app.post('/v2/auth/restore-session', async (req, res) => {
 
         const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
 
-        // Update last_seen
+        // Update last_seen + auto-fix missing fields
         user.last_seen = new Date().toISOString();
         if (client_version) {
             user.last_client_version = client_version;
+        }
+        const currentSeason = getCurrentSeason();
+        if (!user.current_season) {
+            user.current_season = currentSeason;
+            console.log(`[V2] Auto-fixed missing current_season for ${unified_id}`);
         }
 
         // Re-check whitelist on every session restore so Discord-only users get flagged
@@ -8252,12 +8350,6 @@ app.post('/v2/user/sync', async (req, res) => {
 
         // Capture AFTER clearing so the ack response doesn't echo back true
         const pendingForceSkillsReset = user.force_skills_reset === true;
-
-        // Auto-flag OG if user has achievements but isn't flagged yet
-        if (!user.is_season0_og && user.achievements?.length > 0) {
-            user.is_season0_og = true;
-            console.log(`[V2 Sync] Auto-flagged OG for ${unified_id} (has ${user.achievements.length} achievements)`);
-        }
 
         // Save updated user
         await redis.set(`user:${unified_id}`, JSON.stringify(user));
