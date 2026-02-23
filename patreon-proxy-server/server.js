@@ -343,7 +343,9 @@ function isWhitelisted(email, name, displayName = null) {
     const emailMatch = email && whitelistEmails.has(email.toLowerCase());
     const nameMatch = name && whitelistNames.has(name.toLowerCase());
     const displayNameMatch = displayName && whitelistNames.has(displayName.toLowerCase());
-    console.log(`[WHITELIST CHECK] email="${email}" (match=${emailMatch}), name="${name}" (match=${nameMatch}), displayName="${displayName}" (match=${displayNameMatch})`);
+    if (emailMatch || nameMatch || displayNameMatch) {
+        console.log(`[WHITELIST CHECK] match found (email=${emailMatch}, name=${nameMatch}, displayName=${displayNameMatch})`);
+    }
     if (emailMatch) return true;
     if (nameMatch) return true;
     if (displayNameMatch) return true;
@@ -365,15 +367,11 @@ app.get('/debug/whitelist', (req, res) => {
     const nameInSet = whitelistNames.has(nameLower);
     const result = isWhitelisted(email, name, null);
     res.json({
-        email,
-        name,
-        email_lowercase: emailLower,
-        name_lowercase: nameLower,
         email_in_whitelist: emailInSet,
         name_in_whitelist: nameInSet,
         is_whitelisted: result,
-        whitelisted_emails_sample: Array.from(whitelistEmails).slice(0, 5),
-        whitelisted_names_sample: Array.from(whitelistNames).slice(0, 5)
+        whitelist_emails_count: whitelistEmails.size,
+        whitelist_names_count: whitelistNames.size
     });
 });
 
@@ -679,12 +677,11 @@ function determineTier(identityData) {
         }
     }
 
-    console.log(`FINAL RESULT for ${patronName}: active=${isActive}, pledge=${activePledgeCents}c, tier=${tier}`);
+    console.log(`[TIER] active=${isActive}, pledge=${activePledgeCents}c, tier=${tier}`);
 
     return {
         is_active: isActive,
         tier,
-        patron_name: patronName,
         patron_email: patronEmail,
         pledge_cents: activePledgeCents,
         patreon_user_id: user?.id
@@ -949,7 +946,7 @@ app.get('/patreon/validate', async (req, res) => {
             if (tierInfo.tier < 2) {
                 tierInfo.tier = 2;
             }
-            console.log(`Whitelisted user validated: ${displayName} (${tierInfo.patron_email})`);
+            console.log(`Whitelisted user validated: ${displayName}`);
         }
 
         // Update unified user's Patreon status if they exist
@@ -1525,7 +1522,7 @@ app.post('/ai/chat', async (req, res) => {
         }
 
         if (whitelisted) {
-            console.log(`Whitelisted user: ${userId} (${tierInfo.patron_email}) - ${rateLimit.used}/${RATE_LIMIT.DAILY_REQUESTS} requests`);
+            console.log(`Whitelisted user: ${userId} - ${rateLimit.used}/${RATE_LIMIT.DAILY_REQUESTS} requests`);
         }
 
         // Validate OpenRouter is configured
@@ -5705,7 +5702,7 @@ app.post('/v2/auth/discord', async (req, res) => {
                 user.updated_at = new Date().toISOString();
                 await redis.set(`user:${existingUnifiedId}`, JSON.stringify(user));
                 await redis.set(indexKey, existingUnifiedId);
-                console.log(`[V2] AUTO-LINKED Discord ${discordId} (${discordUser.username}) to existing account ${existingUnifiedId} (${user.display_name}) via email match (${discordUser.email})`);
+                console.log(`[V2] AUTO-LINKED Discord ${discordId} to existing account ${existingUnifiedId} (${user.display_name}) via email match`);
             }
         }
 
@@ -6083,7 +6080,7 @@ app.post('/v2/auth/patreon', async (req, res) => {
                 user.updated_at = new Date().toISOString();
                 await redis.set(`user:${existingUnifiedId}`, JSON.stringify(user));
                 await redis.set(indexKey, existingUnifiedId);
-                console.log(`[V2] AUTO-LINKED Patreon ${patreonId} (${patronName}) to existing account ${existingUnifiedId} (${user.display_name}) via email match (${patronEmail})`);
+                console.log(`[V2] AUTO-LINKED Patreon ${patreonId} to existing account ${existingUnifiedId} (${user.display_name}) via email match`);
             }
         }
 
@@ -6156,13 +6153,10 @@ app.post('/v2/auth/patreon', async (req, res) => {
 
         // Fallback: If not in Season 0 capture but IS whitelisted, treat as OG supporter
         // (They were Patreon members before v5.5 but may not have logged into the app)
-        console.log(`[V2 DEBUG] Checking whitelist for: email="${patronEmail}", name="${patronName}"`);
-        console.log(`[V2 DEBUG] Email in whitelist: ${whitelistEmails.has((patronEmail || '').toLowerCase())}`);
-        console.log(`[V2 DEBUG] Name in whitelist: ${whitelistNames.has((patronName || '').toLowerCase())}`);
         const whitelistedForLegacy = isWhitelisted(patronEmail, patronName, null);
         console.log(`[V2 DEBUG] isWhitelisted result: ${whitelistedForLegacy}`);
         if (!legacyData && whitelistedForLegacy) {
-            console.log(`[V2] User ${patronName} not in Season 0 but IS whitelisted - treating as OG`);
+            console.log(`[V2] Whitelisted user not in Season 0 - treating as OG`);
 
             // Try to find their old profile from existing data to restore their display_name
             let oldDisplayName = null;
@@ -6190,7 +6184,7 @@ app.post('/v2/auth/patreon', async (req, res) => {
                                 oldDisplayName = profile.display_name || null;
                                 oldHighestLevel = profile.level || 0;
                                 oldAchievements = profile.achievements || [];
-                                console.log(`[V2] Found old profile for ${patronName}: display_name="${oldDisplayName}", level=${oldHighestLevel}`);
+                                console.log(`[V2] Found old profile: display_name="${oldDisplayName}", level=${oldHighestLevel}`);
                                 break outer;
                             }
                         }
@@ -6224,8 +6218,6 @@ app.post('/v2/auth/patreon', async (req, res) => {
                 } : null,
                 patreon: {
                     id: patreonId,
-                    name: patronName,
-                    email: patronEmail,
                     tier: tierInfo.tier,
                     is_active: tierInfo.is_active
                 }
@@ -6550,8 +6542,6 @@ app.post('/v2/auth/link', async (req, res) => {
                 auth_token: linkAuthToken2,
                 patreon: {
                     id: patreonId,
-                    name: patronName,
-                    email: patronEmail,
                     tier: tierInfo.tier,
                     is_active: tierInfo.is_active
                 }
