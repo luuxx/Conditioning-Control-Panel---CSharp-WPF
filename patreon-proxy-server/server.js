@@ -19,6 +19,67 @@ app.use(cors());
 app.use(express.json());
 
 // =============================================================================
+// REQUEST LOGGING MIDDLEWARE
+// =============================================================================
+
+// Track request counts per IP for anomaly detection
+const requestCounts = new Map();
+const RATE_WINDOW_MS = 60000; // 1 minute window
+
+// Clean up old entries every 5 minutes
+setInterval(() => {
+    const cutoff = Date.now() - RATE_WINDOW_MS * 5;
+    for (const [key, entry] of requestCounts) {
+        if (entry.firstSeen < cutoff) requestCounts.delete(key);
+    }
+}, 300000);
+
+app.use((req, res, next) => {
+    const start = Date.now();
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
+    const ua = req.headers['user-agent'] || 'none';
+    const unifiedId = req.body?.unified_id || req.query?.unified_id || null;
+    const hasAuthToken = !!req.headers['x-auth-token'];
+
+    // Track per-IP request rate
+    const ipKey = ip;
+    if (!requestCounts.has(ipKey)) {
+        requestCounts.set(ipKey, { count: 0, firstSeen: Date.now(), lastPath: '' });
+    }
+    const ipEntry = requestCounts.get(ipKey);
+    ipEntry.count++;
+    ipEntry.lastPath = req.path;
+
+    // Log on response finish
+    res.on('finish', () => {
+        const duration = Date.now() - start;
+        const logEntry = `[REQ] ${req.method} ${req.path} ${res.statusCode} ${duration}ms | ip=${ip} uid=${unifiedId || '-'} auth=${hasAuthToken} ua=${ua.substring(0, 80)}`;
+
+        // Always log non-GET requests and errors
+        if (req.method !== 'GET' || res.statusCode >= 400) {
+            console.log(logEntry);
+        }
+
+        // Alert on suspicious patterns
+        if (res.statusCode === 401 || res.statusCode === 403) {
+            console.warn(`[SECURITY] Auth failure: ${req.method} ${req.path} ${res.statusCode} | ip=${ip} uid=${unifiedId || '-'} auth=${hasAuthToken}`);
+        }
+
+        // Alert on high request rate from single IP (>100/min)
+        if (ipEntry.count > 100 && ipEntry.count % 50 === 0) {
+            console.warn(`[SECURITY] High request rate: ip=${ip} count=${ipEntry.count}/min path=${req.path}`);
+        }
+
+        // Alert on 404 scans (someone probing endpoints)
+        if (res.statusCode === 404 && !req.path.startsWith('/v2/remote/') && !req.path.startsWith('/user/')) {
+            console.warn(`[SECURITY] 404 probe: ${req.method} ${req.path} | ip=${ip}`);
+        }
+    });
+
+    next();
+});
+
+// =============================================================================
 // RATE LIMITING CONFIGURATION (using Upstash Redis)
 // =============================================================================
 
@@ -6263,6 +6324,12 @@ app.post('/v2/auth/link', async (req, res) => {
         }
         const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
 
+        // Validate auth token
+        const authCheck = validateAuthToken(req, user);
+        if (!authCheck.valid) {
+            return res.status(401).json({ error: 'Invalid or missing auth token' });
+        }
+
         if (provider === 'discord') {
             // Check if already has Discord linked
             if (user.discord_id) {
@@ -11584,11 +11651,16 @@ app.post('/v2/remote/start', async (req, res) => {
         }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
 
-        // Verify user exists
+        // Verify user exists and validate auth
         const userData = await redis.get(`user:${unified_id}`);
         if (!userData) return res.status(404).json({ error: 'User not found' });
 
         const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+
+        const authCheck = validateAuthToken(req, user);
+        if (!authCheck.valid) {
+            return res.status(401).json({ error: 'Invalid or missing auth token' });
+        }
 
         // Check for existing session and clean it up
         const existingCode = await redis.get(`remote:lookup:${unified_id}`);
@@ -11659,6 +11731,15 @@ app.post('/v2/remote/stop', async (req, res) => {
         if (!unified_id) return res.status(400).json({ error: 'unified_id required' });
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
 
+        // Validate auth token
+        const userData = await redis.get(`user:${unified_id}`);
+        if (!userData) return res.status(404).json({ error: 'User not found' });
+        const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+        const authCheck = validateAuthToken(req, user);
+        if (!authCheck.valid) {
+            return res.status(401).json({ error: 'Invalid or missing auth token' });
+        }
+
         const code = await redis.get(`remote:lookup:${unified_id}`);
         if (!code) return res.status(404).json({ error: 'No active session' });
 
@@ -11686,6 +11767,15 @@ app.post('/v2/remote/poll', async (req, res) => {
         const { unified_id } = req.body;
         if (!unified_id) return res.status(400).json({ error: 'unified_id required' });
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
+
+        // Validate auth token
+        const userData = await redis.get(`user:${unified_id}`);
+        if (!userData) return res.status(404).json({ error: 'User not found' });
+        const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+        const authCheck = validateAuthToken(req, user);
+        if (!authCheck.valid) {
+            return res.status(401).json({ error: 'Invalid or missing auth token' });
+        }
 
         const code = await redis.get(`remote:lookup:${unified_id}`);
         if (!code) return res.status(404).json({ error: 'No active session' });
@@ -11742,6 +11832,15 @@ app.post('/v2/remote/status', async (req, res) => {
         const { unified_id, active_services, level, last_executed, available_sessions, session_info } = req.body;
         if (!unified_id) return res.status(400).json({ error: 'unified_id required' });
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
+
+        // Validate auth token
+        const userData = await redis.get(`user:${unified_id}`);
+        if (!userData) return res.status(404).json({ error: 'User not found' });
+        const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+        const authCheck = validateAuthToken(req, user);
+        if (!authCheck.valid) {
+            return res.status(401).json({ error: 'Invalid or missing auth token' });
+        }
 
         const code = await redis.get(`remote:lookup:${unified_id}`);
         if (!code) return res.status(404).json({ error: 'No active session' });
