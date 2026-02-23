@@ -85,11 +85,7 @@ function validateAuthToken(req, user) {
         return { valid: true, legacy: true };
     }
     if (!token) {
-        // SOFT MODE: User has a token hash but client didn't send a token.
-        // This happens when old clients auth after server deploy (server sets hash,
-        // old client ignores the auth_token in the response). Allow through with warning.
-        // HARD MODE (future): return { valid: false, legacy: false };
-        return { valid: true, legacy: true, missing: true };
+        return { valid: false, legacy: false };
     }
     const hash = crypto.createHash('sha256').update(token).digest('hex');
     if (hash !== user.auth_token_hash) {
@@ -249,8 +245,8 @@ const WHITELISTED_EMAILS = new Set([
     'twinkletheyoungllamacorn@gmail.com',
     'connorwest07@gmail.com', // Ceejay
     'thewama2014@gmail.com', // wefnetjegne
-    'dillonford2000@gmail.com', // Bambi Dina / ding_dong568
     'temuelonmuskupgrade@gmail.com', // CodeBambi
+    'dillonford2000@gmail.com', // Bambi Dina / ding_dong568
     'failedserpent1999@gmail.com', // Bimdyskies / Wind of the Skies
 ].map(e => e.toLowerCase()));
 
@@ -281,8 +277,8 @@ const WHITELISTED_NAMES = new Set([
     'Karbon',
     'HarleyVader',
     'Robyn',
-    'TemuElonMuskUpgrade',
     'CodeBambi',
+    // 'TemuElonMuskUpgrade', // Temporarily removed for testing
     'DrowsyKing',
     'Fifu',
     'Rawrbmb1',
@@ -772,8 +768,7 @@ app.get('/patreon/validate', async (req, res) => {
             await updateUnifiedUserPatreonStatus(unifiedLookup.unified_id, {
                 tier: tierInfo.tier,
                 is_active: tierInfo.is_active,
-                is_whitelisted: whitelisted,
-                patron_name: tierInfo.patron_name
+                is_whitelisted: whitelisted
             });
         }
 
@@ -1002,7 +997,7 @@ app.get('/discord/validate', async (req, res) => {
             if (unifiedLookup.user) {
                 const whitelisted = isWhitelisted(
                     unifiedLookup.user.email,
-                    unifiedLookup.user.patron_name,
+                    null,
                     unifiedLookup.display_name
                 );
                 response.is_whitelisted = whitelisted;
@@ -1607,7 +1602,6 @@ async function migratePatreonToUnified(patreonId, legacyProfile) {
         last_session: legacyProfile.last_session || null,
 
         // Patreon-specific
-        patron_name: legacyProfile.patron_name || null,
         patreon_tier: legacyProfile.patreon_tier || 0,
         patreon_is_active: legacyProfile.patreon_is_active || false,
         patreon_is_whitelisted: legacyProfile.patreon_is_whitelisted || false,
@@ -1711,7 +1705,6 @@ async function migrateDiscordToUnified(discordId, legacyProfile) {
         last_session: legacyProfile.last_session || null,
 
         // Patreon-specific (will be filled when linked)
-        patron_name: null,
         patreon_tier: 0,
         patreon_is_active: false,
         patreon_is_whitelisted: false,
@@ -1794,7 +1787,6 @@ async function registerUnifiedUser(displayName, provider, providerId, providerDa
         last_session: new Date().toISOString(),
 
         // Patreon-specific
-        patron_name: providerData.patron_name || null,
         patreon_tier: providerData.tier || 0,
         patreon_is_active: providerData.is_active || false,
         patreon_is_whitelisted: providerData.is_whitelisted || false,
@@ -1809,7 +1801,7 @@ async function registerUnifiedUser(displayName, provider, providerId, providerDa
     };
 
     // Check whitelist by display name
-    if (isWhitelisted(unifiedUser.email, unifiedUser.patron_name, normalizedName)) {
+    if (isWhitelisted(unifiedUser.email, null, normalizedName)) {
         unifiedUser.patreon_is_whitelisted = true;
         unifiedUser.patreon_tier = Math.max(unifiedUser.patreon_tier, 2);
     }
@@ -1858,7 +1850,6 @@ async function linkProviderToUser(unifiedId, provider, providerId, providerData)
     // Update user with new provider
     if (provider === 'patreon') {
         user.patreon_id = providerId;
-        user.patron_name = providerData.patron_name || user.patron_name;
         user.patreon_tier = providerData.tier || user.patreon_tier;
         user.patreon_is_active = providerData.is_active ?? user.patreon_is_active;
         user.patreon_is_whitelisted = providerData.is_whitelisted ?? user.patreon_is_whitelisted;
@@ -1878,7 +1869,7 @@ async function linkProviderToUser(unifiedId, provider, providerId, providerData)
     user.updated_at = new Date().toISOString();
 
     // Re-check whitelist with new data
-    if (isWhitelisted(user.email, user.patron_name, user.display_name)) {
+    if (isWhitelisted(user.email, null, user.display_name)) {
         user.patreon_is_whitelisted = true;
         user.patreon_tier = Math.max(user.patreon_tier, 2);
     }
@@ -1904,7 +1895,6 @@ async function updateUnifiedUserPatreonStatus(unifiedId, patreonData) {
     user.patreon_tier = patreonData.tier ?? user.patreon_tier;
     user.patreon_is_active = patreonData.is_active ?? user.patreon_is_active;
     user.patreon_is_whitelisted = patreonData.is_whitelisted ?? user.patreon_is_whitelisted;
-    user.patron_name = patreonData.patron_name || user.patron_name;
     user.updated_at = new Date().toISOString();
 
     await redis.set(userKey, JSON.stringify(user));
@@ -2273,7 +2263,6 @@ app.get('/user/profile', async (req, res) => {
                 return res.json({
                     exists: true,
                     user_id: userId,
-                    patron_name: tierInfo.patron_name,
                     unified_user_id: unifiedUserId,
                     profile: {
                         display_name: unifiedUser.display_name,
@@ -2299,8 +2288,7 @@ app.get('/user/profile', async (req, res) => {
             console.log(`No profile found for user ${userId} (${tierInfo.patron_name})`);
             return res.json({
                 exists: false,
-                user_id: userId,
-                patron_name: tierInfo.patron_name
+                user_id: userId
             });
         }
 
@@ -2312,7 +2300,6 @@ app.get('/user/profile', async (req, res) => {
         res.json({
             exists: true,
             user_id: userId,
-            patron_name: tierInfo.patron_name,
             profile: profileData
         });
     } catch (error) {
@@ -2415,7 +2402,6 @@ app.post('/user/sync', async (req, res) => {
             stats: mergedStats,
             last_session: last_session || new Date().toISOString(),
             updated_at: new Date().toISOString(),
-            patron_name: tierInfo.patron_name,
             // Preserve display_name if already set — never auto-populate from patron_name (privacy)
             display_name: existing?.display_name || null,
             display_name_set_at: existing?.display_name_set_at || null,
@@ -2498,7 +2484,6 @@ app.post('/user/heartbeat', async (req, res) => {
             // Note: display_name is NOT auto-set - user must choose their own name to appear on leaderboard
             const newProfile = {
                 patreon_user_id: userId,
-                patron_name: tierInfo.patron_name,
                 xp: 0,
                 level: 1,
                 achievements: [],
@@ -3911,7 +3896,6 @@ app.post('/admin/reset-progress', async (req, res) => {
             },
             last_session: null,
             updated_at: new Date().toISOString(),
-            patron_name: oldProfile.patron_name,
             display_name: oldProfile.display_name,
             display_name_set_at: oldProfile.display_name_set_at
         };
@@ -4196,7 +4180,7 @@ app.post('/admin/fix-display-name', async (req, res) => {
         profile.updated_at = new Date().toISOString();
 
         // Check whitelist and update status
-        const whitelistedByDisplayName = isWhitelisted(profile.email, profile.patron_name, trimmedName);
+        const whitelistedByDisplayName = isWhitelisted(profile.email, null, trimmedName);
         if (whitelistedByDisplayName) {
             profile.patreon_is_whitelisted = true;
             profile.patreon_tier = Math.max(profile.patreon_tier || 0, 2);
@@ -4263,7 +4247,7 @@ app.post('/admin/fix-patreon-tier', async (req, res) => {
         const oldTier = user.patreon_tier || 0;
 
         // Check if user is whitelisted
-        const isWhitelistedUser = isWhitelisted(user.email, user.patron_name, user.display_name);
+        const isWhitelistedUser = isWhitelisted(user.email, null, user.display_name);
 
         // Set tier: use provided tier, or 2 if whitelisted, or keep existing
         const newTier = tier !== undefined ? tier : (isWhitelistedUser ? Math.max(oldTier, 2) : oldTier);
@@ -4434,7 +4418,7 @@ app.post('/admin/delete-profile', async (req, res) => {
 /**
  * POST /admin/batch-restore
  * Batch restore user profiles from backup data - recreates ALL necessary records
- * Body: { profiles: [{unified_id, level, xp, achievements, stats, display_name, patron_name, patreon_id, discord_id}], admin_token: string }
+ * Body: { profiles: [{unified_id, level, xp, achievements, stats, display_name, patreon_id, discord_id}], admin_token: string }
  */
 app.post('/admin/batch-restore', async (req, res) => {
     try {
@@ -4453,7 +4437,7 @@ app.post('/admin/batch-restore', async (req, res) => {
         const results = [];
         for (const profile of profiles) {
             try {
-                const { unified_id, level, xp, achievements, stats, display_name, patron_name, patreon_id, discord_id } = profile;
+                const { unified_id, level, xp, achievements, stats, display_name, patreon_id, discord_id } = profile;
                 if (!unified_id) {
                     results.push({ unified_id: 'unknown', success: false, error: 'missing unified_id' });
                     continue;
@@ -4498,7 +4482,6 @@ app.post('/admin/batch-restore', async (req, res) => {
                     xp: xp || 0,
                     achievements: achievements || [],
                     stats: stats || {},
-                    patron_name: patron_name || null,
                     patreon_id: patreon_id || user.patreon_id || null,
                     discord_id: discord_id || user.discord_id || null,
                     created_at: new Date().toISOString(),
@@ -6414,6 +6397,18 @@ app.post('/v2/auth/restore-session', async (req, res) => {
 
         const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
 
+        // Validate auth token if the user has one (legacy users without hash get through)
+        const clientToken = req.headers['x-auth-token'];
+        if (user.auth_token_hash) {
+            if (!clientToken) {
+                return res.status(401).json({ success: false, error: 'auth_token_required' });
+            }
+            const clientHash = crypto.createHash('sha256').update(clientToken).digest('hex');
+            if (clientHash !== user.auth_token_hash) {
+                return res.status(401).json({ success: false, error: 'invalid_auth_token' });
+            }
+        }
+
         // Update last_seen + auto-fix missing fields
         user.last_seen = new Date().toISOString();
         if (client_version) {
@@ -6426,7 +6421,7 @@ app.post('/v2/auth/restore-session', async (req, res) => {
         }
 
         // Re-check whitelist on every session restore so Discord-only users get flagged
-        if (!user.patreon_is_whitelisted && isWhitelisted(user.email, user.patron_name, user.display_name)) {
+        if (!user.patreon_is_whitelisted && isWhitelisted(user.email, null, user.display_name)) {
             user.patreon_is_whitelisted = true;
             user.patreon_tier = Math.max(user.patreon_tier || 0, 2);
             console.log(`Whitelist applied via restore-session for ${unified_id} (${user.display_name})`);
@@ -7239,7 +7234,7 @@ app.post('/v2/user/change-display-name', async (req, res) => {
         user.updated_at = new Date().toISOString();
 
         // Check whitelist with new name
-        const whitelisted = isWhitelisted(user.email || null, user.patron_name || null, trimmed);
+        const whitelisted = isWhitelisted(user.email || null, null, trimmed);
         user.is_whitelisted = whitelisted;
 
         await redis.set(`user:${unified_id}`, JSON.stringify(user));
@@ -10798,7 +10793,6 @@ app.post('/admin/merge-accounts', async (req, res) => {
 
         if (source.patreon_id && !target.patreon_id) {
             target.patreon_id = source.patreon_id;
-            target.patron_name = source.patron_name || target.patron_name;
             target.patreon_tier = source.patreon_tier || target.patreon_tier;
             target.patreon_is_active = source.patreon_is_active || target.patreon_is_active;
             // Update patreon index to point to target
@@ -11067,6 +11061,77 @@ app.post('/admin/clear-patron-display-names', async (req, res) => {
     } catch (error) {
         console.error('Admin clear-patron-display-names error:', error.message);
         res.status(500).json({ error: 'Failed to clear patron display names' });
+    }
+});
+
+/**
+ * POST /admin/purge-patron-names
+ * Remove patron_name field from ALL user records.
+ * If a user's display_name matches their patron_name (and was never explicitly set),
+ * clear display_name too so they get prompted to pick a new one.
+ * Body: { admin_token: string, dry_run?: boolean }
+ */
+app.post('/admin/purge-patron-names', async (req, res) => {
+    try {
+        const { admin_token, dry_run = true } = req.body;
+        const expectedToken = process.env.ADMIN_TOKEN;
+        if (!expectedToken || admin_token !== expectedToken) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        if (!redis) return res.status(503).json({ error: 'Redis not available' });
+
+        let purgedCount = 0;
+        let displayNameClearedCount = 0;
+        const errors = [];
+
+        let cursor = "0";
+        do {
+            const result = await redis.scan(cursor, { match: 'user:*', count: 100 });
+            cursor = String(result[0]);
+            for (const key of (result[1] || [])) {
+                try {
+                    const data = await redis.get(key);
+                    if (!data) continue;
+                    const user = typeof data === 'string' ? JSON.parse(data) : data;
+                    if (!user.patron_name) continue;
+
+                    // If display_name matches patron_name and was never explicitly set, clear it
+                    if (user.display_name && !user.display_name_set_at &&
+                        user.display_name.toLowerCase().trim() === user.patron_name.toLowerCase().trim()) {
+                        if (!dry_run) {
+                            // Clean up display_name index before clearing
+                            const indexKey = `display_name_index:${user.display_name.toLowerCase().trim()}`;
+                            await redis.del(indexKey);
+                            user.display_name = null;
+                        }
+                        displayNameClearedCount++;
+                    }
+
+                    if (!dry_run) {
+                        delete user.patron_name;
+                        user.updated_at = new Date().toISOString();
+                        await redis.set(key, JSON.stringify(user));
+                    }
+                    purgedCount++;
+                } catch (e) {
+                    errors.push({ key, error: e.message });
+                }
+            }
+        } while (cursor !== "0");
+
+        console.log(`[ADMIN] purge-patron-names: ${purgedCount} purged, ${displayNameClearedCount} display_names cleared (dry_run=${dry_run})`);
+
+        res.json({
+            success: true,
+            dry_run,
+            purged_count: purgedCount,
+            display_name_cleared_count: displayNameClearedCount,
+            error_count: errors.length,
+            errors: errors.slice(0, 20)
+        });
+    } catch (error) {
+        console.error('Admin purge-patron-names error:', error.message);
+        res.status(500).json({ error: 'Failed to purge patron names' });
     }
 });
 
@@ -11543,7 +11608,7 @@ app.post('/v2/remote/start', async (req, res) => {
 
         // Privacy: never expose display_name if it matches the real patron_name
         let safeName = user.display_name || null;
-        if (safeName && user.patron_name &&
+        if (safeName && user.patron_name && !user.display_name_set_at &&
             safeName.toLowerCase().trim() === user.patron_name.toLowerCase().trim()) {
             safeName = null;
         }
