@@ -760,7 +760,7 @@ app.get('/patreon/validate', async (req, res) => {
             if (tierInfo.tier < 2) {
                 tierInfo.tier = 2;
             }
-            console.log(`Whitelisted user validated: ${tierInfo.patron_name} / ${displayName} (${tierInfo.patron_email})`);
+            console.log(`Whitelisted user validated: ${displayName} (${tierInfo.patron_email})`);
         }
 
         // Update unified user's Patreon status if they exist
@@ -1310,7 +1310,7 @@ app.post('/ai/chat', async (req, res) => {
         const effectiveTier = tierInfo.is_active && tierInfo.tier < 1 ? 1 : tierInfo.tier;
 
         if (effectiveTier < 1 && !whitelisted) {
-            console.log(`Access denied for ${tierInfo.patron_name}: active=${tierInfo.is_active}, tier=${tierInfo.tier}, pledge=${tierInfo.pledge_cents}c`);
+            console.log(`Access denied for user ${userId}: active=${tierInfo.is_active}, tier=${tierInfo.tier}, pledge=${tierInfo.pledge_cents}c`);
             return res.status(403).json({
                 error: 'Patreon Level 1 subscription required',
                 tier: tierInfo.tier
@@ -1319,14 +1319,14 @@ app.post('/ai/chat', async (req, res) => {
 
         // Log for debugging active patrons with tier issues
         if (tierInfo.is_active && tierInfo.tier < 1) {
-            console.log(`Active patron ${tierInfo.patron_name} has tier=${tierInfo.tier}, pledge=${tierInfo.pledge_cents}c - granting Level 1 access`);
+            console.log(`Active patron ${userId} has tier=${tierInfo.tier}, pledge=${tierInfo.pledge_cents}c - granting Level 1 access`);
         }
 
         // Check rate limit using Patreon user ID (userId already defined above)
         const rateLimit = await checkRateLimit(userId);
 
         if (!rateLimit.allowed) {
-            console.log(`Rate limit exceeded for user ${userId} (${tierInfo.patron_name}): ${rateLimit.used}/${RATE_LIMIT.DAILY_REQUESTS}`);
+            console.log(`Rate limit exceeded for user ${userId}: ${rateLimit.used}/${RATE_LIMIT.DAILY_REQUESTS}`);
             return res.status(429).json({
                 error: 'Daily request limit exceeded',
                 requests_remaining: 0,
@@ -1336,7 +1336,7 @@ app.post('/ai/chat', async (req, res) => {
         }
 
         if (whitelisted) {
-            console.log(`Whitelisted user: ${tierInfo.patron_name} (${tierInfo.patron_email}) - ${rateLimit.used}/${RATE_LIMIT.DAILY_REQUESTS} requests`);
+            console.log(`Whitelisted user: ${userId} (${tierInfo.patron_email}) - ${rateLimit.used}/${RATE_LIMIT.DAILY_REQUESTS} requests`);
         }
 
         // Validate OpenRouter is configured
@@ -1934,7 +1934,6 @@ app.post('/auth/lookup', async (req, res) => {
 
             result = await lookupUserByPatreon(providerId);
             result.provider_data = {
-                patron_name: tierInfo.patron_name,
                 email: email,
                 tier: tierInfo.tier,
                 is_active: tierInfo.is_active,
@@ -2005,7 +2004,6 @@ app.post('/auth/register', async (req, res) => {
             const tierInfo = determineTier(identity);
             providerId = tierInfo.patreon_user_id;
             providerData = {
-                patron_name: tierInfo.patron_name,
                 email: tierInfo.patron_email,
                 tier: tierInfo.tier,
                 is_active: tierInfo.is_active,
@@ -2078,7 +2076,6 @@ app.post('/auth/link-provider', async (req, res) => {
             providerId = tierInfo.patreon_user_id;
             detectedProvider = 'patreon';
             providerData = {
-                patron_name: tierInfo.patron_name,
                 email: tierInfo.patron_email,
                 tier: tierInfo.tier,
                 is_active: tierInfo.is_active,
@@ -2167,7 +2164,6 @@ app.post('/auth/claim', async (req, res) => {
             const tierInfo = determineTier(identity);
             providerId = tierInfo.patreon_user_id;
             providerData = {
-                patron_name: tierInfo.patron_name,
                 email: tierInfo.patron_email,
                 tier: tierInfo.tier,
                 is_active: tierInfo.is_active,
@@ -2285,14 +2281,14 @@ app.get('/user/profile', async (req, res) => {
 
         if (!profile) {
             // No profile found - return empty/default
-            console.log(`No profile found for user ${userId} (${tierInfo.patron_name})`);
+            console.log(`No profile found for user ${userId}`);
             return res.json({
                 exists: false,
                 user_id: userId
             });
         }
 
-        console.log(`Loaded profile for user ${userId} (${tierInfo.patron_name})`);
+        console.log(`Loaded profile for user ${userId}`);
 
         // Profile is stored as JSON string
         const profileData = typeof profile === 'string' ? JSON.parse(profile) : profile;
@@ -2369,7 +2365,7 @@ app.post('/user/sync', async (req, res) => {
         const finalXp = existing ? Math.max(xp, existing.xp || 0) : xp;
         const finalLevel = existing ? Math.max(level, existing.level || 0) : level;
 
-        console.log(`Sync for ${tierInfo.patron_name}: incoming level=${level}, existing level=${existing?.level || 0}, final level=${finalLevel}`);
+        console.log(`Sync for user ${userId}: incoming level=${level}, existing level=${existing?.level || 0}, final level=${finalLevel}`);
 
         // Stats keys controlled by force_streak_override
         const STREAK_STAT_KEYS_LEGACY = new Set([
@@ -2431,7 +2427,7 @@ app.post('/user/sync', async (req, res) => {
         // Store profile (no expiry - permanent storage)
         await redis.set(key, JSON.stringify(profile));
 
-        console.log(`Synced profile for user ${userId} (${tierInfo.patron_name}): Level ${finalLevel}, ${finalXp} XP, ${mergedAchievements.length} achievements`);
+        console.log(`Synced profile for user ${userId}: Level ${finalLevel}, ${finalXp} XP, ${mergedAchievements.length} achievements`);
 
         res.json({
             success: true,
@@ -2492,7 +2488,7 @@ app.post('/user/heartbeat', async (req, res) => {
                 updated_at: new Date().toISOString()
             };
             await redis.set(key, JSON.stringify(newProfile));
-            console.log(`Heartbeat created new profile for ${tierInfo.patron_name} (${userId})`);
+            console.log(`Heartbeat created new profile for user ${userId}`);
         }
 
         // Also update unified profile if one exists (for migrated users on older clients)
@@ -8110,8 +8106,8 @@ app.post('/v2/user/sync', async (req, res) => {
         }
 
         // --- Anti-cheat: Level/XP consistency check (Phase 1B) ---
-        // Skip when XP was clamped — the mismatch is expected and level will catch up on future syncs
-        if (newLevel > 1 && !xpWasClamped) {
+        // Always validate level against (possibly clamped) XP to prevent level spoofing
+        if (newLevel > 1) {
             const cumulativeForPrevLevel = getCumulativeXPForLevel(newLevel - 1);
             const cumulativeForLevel = getCumulativeXPForLevel(newLevel);
             if (newXp < cumulativeForPrevLevel || newXp > cumulativeForLevel) {
@@ -8124,7 +8120,7 @@ app.post('/v2/user/sync', async (req, res) => {
                     recalcLevel++;
                 }
                 if (recalcLevel !== newLevel) {
-                    console.log(`[Anti-cheat] Level/XP mismatch for ${unified_id}: level=${newLevel} xp=${newXp}, recalculated level=${recalcLevel}`);
+                    console.log(`[Anti-cheat] Level/XP mismatch for ${unified_id}: level=${newLevel} xp=${newXp}, recalculated level=${recalcLevel}${xpWasClamped ? ' (XP was clamped)' : ''}`);
                     if (!user.anti_cheat_flags) user.anti_cheat_flags = [];
                     user.anti_cheat_flags.push({
                         type: 'level_xp_mismatch',
@@ -11066,7 +11062,7 @@ app.post('/admin/clear-patron-display-names', async (req, res) => {
 
 /**
  * POST /admin/purge-patron-names
- * Remove patron_name field from ALL user records.
+ * Remove patron_name field from ALL records (user:*, profile:*, discord_profile:*).
  * If a user's display_name matches their patron_name (and was never explicitly set),
  * clear display_name too so they get prompted to pick a new one.
  * Body: { admin_token: string, dry_run?: boolean }
@@ -11083,49 +11079,58 @@ app.post('/admin/purge-patron-names', async (req, res) => {
         let purgedCount = 0;
         let displayNameClearedCount = 0;
         const errors = [];
+        const byPrefix = {};
 
-        let cursor = "0";
-        do {
-            const result = await redis.scan(cursor, { match: 'user:*', count: 100 });
-            cursor = String(result[0]);
-            for (const key of (result[1] || [])) {
-                try {
-                    const data = await redis.get(key);
-                    if (!data) continue;
-                    const user = typeof data === 'string' ? JSON.parse(data) : data;
-                    if (!user.patron_name) continue;
+        // Scan all three key patterns that may contain patron_name
+        const patterns = ['user:*', 'profile:*', 'discord_profile:*'];
+        for (const pattern of patterns) {
+            let prefixCount = 0;
+            let cursor = "0";
+            do {
+                const result = await redis.scan(cursor, { match: pattern, count: 100 });
+                cursor = String(result[0]);
+                for (const key of (result[1] || [])) {
+                    try {
+                        const data = await redis.get(key);
+                        if (!data) continue;
+                        const record = typeof data === 'string' ? JSON.parse(data) : data;
+                        if (!record.patron_name) continue;
 
-                    // If display_name matches patron_name and was never explicitly set, clear it
-                    if (user.display_name && !user.display_name_set_at &&
-                        user.display_name.toLowerCase().trim() === user.patron_name.toLowerCase().trim()) {
-                        if (!dry_run) {
-                            // Clean up display_name index before clearing
-                            const indexKey = `display_name_index:${user.display_name.toLowerCase().trim()}`;
-                            await redis.del(indexKey);
-                            user.display_name = null;
+                        // If display_name matches patron_name and was never explicitly set, clear it
+                        if (record.display_name && !record.display_name_set_at &&
+                            record.display_name.toLowerCase().trim() === record.patron_name.toLowerCase().trim()) {
+                            if (!dry_run) {
+                                // Clean up display_name index before clearing
+                                const indexKey = `display_name_index:${record.display_name.toLowerCase().trim()}`;
+                                await redis.del(indexKey);
+                                record.display_name = null;
+                            }
+                            displayNameClearedCount++;
                         }
-                        displayNameClearedCount++;
-                    }
 
-                    if (!dry_run) {
-                        delete user.patron_name;
-                        user.updated_at = new Date().toISOString();
-                        await redis.set(key, JSON.stringify(user));
+                        if (!dry_run) {
+                            delete record.patron_name;
+                            record.updated_at = new Date().toISOString();
+                            await redis.set(key, JSON.stringify(record));
+                        }
+                        purgedCount++;
+                        prefixCount++;
+                    } catch (e) {
+                        errors.push({ key, error: e.message });
                     }
-                    purgedCount++;
-                } catch (e) {
-                    errors.push({ key, error: e.message });
                 }
-            }
-        } while (cursor !== "0");
+            } while (cursor !== "0");
+            byPrefix[pattern] = prefixCount;
+        }
 
-        console.log(`[ADMIN] purge-patron-names: ${purgedCount} purged, ${displayNameClearedCount} display_names cleared (dry_run=${dry_run})`);
+        console.log(`[ADMIN] purge-patron-names: ${purgedCount} purged, ${displayNameClearedCount} display_names cleared (dry_run=${dry_run}), by prefix: ${JSON.stringify(byPrefix)}`);
 
         res.json({
             success: true,
             dry_run,
             purged_count: purgedCount,
             display_name_cleared_count: displayNameClearedCount,
+            by_prefix: byPrefix,
             error_count: errors.length,
             errors: errors.slice(0, 20)
         });
