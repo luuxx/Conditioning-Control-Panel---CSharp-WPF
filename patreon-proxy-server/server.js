@@ -121,6 +121,18 @@ try {
     console.error('Failed to initialize Redis:', error.message);
 }
 
+// Whitelist loading middleware — ensures in-memory cache is populated from Redis
+// before any request handler runs. Promise deduplication prevents concurrent loads.
+app.use(async (req, res, next) => {
+    if (!whitelistLoaded && !whitelistLoadPromise) {
+        whitelistLoadPromise = loadWhitelistFromRedis();
+    }
+    if (whitelistLoadPromise) {
+        await whitelistLoadPromise;
+    }
+    next();
+});
+
 // =============================================================================
 // AUTH TOKEN HELPERS
 // =============================================================================
@@ -294,9 +306,13 @@ const CONFIG = {
 
 // =============================================================================
 // WHITELIST - Users who get Tier 1 access regardless of subscription
+// Loaded from Redis (keys: whitelist:emails, whitelist:names) into in-memory Sets.
+// isWhitelisted() stays synchronous — middleware ensures cache is loaded before requests.
 // =============================================================================
 
-const WHITELISTED_EMAILS = new Set([
+// Phase 1 fallback: hardcoded values used until Redis is seeded and confirmed.
+// REMOVE these after calling /admin/whitelist/seed and verifying with /admin/whitelist/list.
+let whitelistEmails = new Set([
     'softembrace9602@gmail.com',
     'fvmg4jvbnk@privaterelay.appleid.com',
     'scardamagliorosa@gmail.com',
@@ -304,88 +320,110 @@ const WHITELISTED_EMAILS = new Set([
     'whimmywhimwhamwhozzle@gmail.com',
     'medcalfw@gmail.com',
     'twinkletheyoungllamacorn@gmail.com',
-    'connorwest07@gmail.com', // Ceejay
-    'thewama2014@gmail.com', // wefnetjegne
-    'temuelonmuskupgrade@gmail.com', // CodeBambi
-    'dillonford2000@gmail.com', // Bambi Dina / ding_dong568
-    'failedserpent1999@gmail.com', // Bimdyskies / Wind of the Skies
-].map(e => e.toLowerCase()));
-
-const WHITELISTED_NAMES = new Set([
-    'Gino Pippo',
-    'AnyGirl57',
+    'connorwest07@gmail.com',
+    'thewama2014@gmail.com',
+    'temuelonmuskupgrade@gmail.com',
+    'dillonford2000@gmail.com',
+    'failedserpent1999@gmail.com',
+]);
+let whitelistNames = new Set([
+    'gino pippo',
+    'anygirl57',
     'hose',
-    'Koalegy',
+    'koalegy',
     'leuda',
     'pyet',
-    'Twinkle The Young Llamacorn',
-    'rdyPreContact',
-    'Ceejay',
-    'Connor West',
+    'twinkle the young llamacorn',
+    'rdyprecontact',
+    'ceejay',
+    'connor west',
     'wefnetjegne',
-    'Maya',
-    'Steveo',
+    'maya',
+    'steveo',
     'austin webb',
-    'Ashie',
-    'DitzyTitz',
-    'Katzenhaft',
-    'Bambi Dina',
-    'Bimbo Dina',
+    'ashie',
+    'ditzytitz',
+    'katzenhaft',
+    'bambi dina',
+    'bimbo dina',
     'ding_dong568',
-    'Dillon Ford',
-    'Ari',
+    'dillon ford',
+    'ari',
     'desiree',
-    'Karbon',
-    'HarleyVader',
-    'Robyn',
-    'CodeBambi',
-    // 'TemuElonMuskUpgrade', // Temporarily removed for testing
-    'DrowsyKing',
-    'Fifu',
-    'Rawrbmb1',
-    'Turnoes',
-    'AnyaSissy',
-    'Natalie',
-    'Tired Slutty Magpie',
-    'Floe',
-    'Floe_xPink',
+    'karbon',
+    'harleyvader',
+    'robyn',
+    'codebambi',
+    'drowsyking',
+    'fifu',
+    'rawrbmb1',
+    'turnoes',
+    'anyasissy',
+    'natalie',
+    'tired slutty magpie',
+    'floe',
+    'floe_xpink',
     'den545a2',
     'den545a',
     'den545a1',
     'den545a3',
-    'Bimdyskies',
-    'Wind of the Skies',
-    'Bambi_Mandi',
+    'bimdyskies',
+    'wind of the skies',
+    'bambi_mandi',
     'bendi',
     'layla',
-    'layla 🤍',
-    'layla ❤',
-    'Mimi Mi',
-    'Mimi  Mi',
-    'BBPuppyDoll',
-    'Issa',
+    'layla \u{1F90D}',
+    'layla \u{2764}',
+    'mimi mi',
+    'mimi  mi',
+    'bbpuppydoll',
+    'issa',
     'teaseplease',
-    'desiree',
     'jessissi',
     'zenec41',
-    'Bimbo Dina',
     'y0na',
-    'BimboBunnyDeer',
-    'Mckenzi',
-    'Umi',
-    'Ego',
+    'bimbobunnydeer',
+    'mckenzi',
+    'umi',
+    'ego',
     'yourlover0168',
-    'Neaveah',
+    'neaveah',
     'regal_bambi',
-    'Jpoilol',
-    'SissyElisa',
-    'Perly',
-].map(n => n.toLowerCase()));
+    'jpoilol',
+    'sissyelisa',
+    'perly',
+]);
+let whitelistLoaded = false;
+let whitelistLoadPromise = null;
+
+async function loadWhitelistFromRedis() {
+    try {
+        if (!redis) {
+            console.warn('[WHITELIST] Redis not available, skipping load');
+            return;
+        }
+        const [emails, names] = await Promise.all([
+            redis.smembers('whitelist:emails'),
+            redis.smembers('whitelist:names')
+        ]);
+        if (emails && emails.length > 0) {
+            whitelistEmails = new Set(emails.map(e => e.toLowerCase()));
+        }
+        if (names && names.length > 0) {
+            whitelistNames = new Set(names.map(n => n.toLowerCase()));
+        }
+        whitelistLoaded = true;
+        console.log(`[WHITELIST] Loaded from Redis: ${whitelistEmails.size} emails, ${whitelistNames.size} names`);
+    } catch (err) {
+        console.error('[WHITELIST] Failed to load from Redis:', err.message);
+        whitelistLoadPromise = null; // Allow retry on next request
+    }
+}
 
 function isWhitelisted(email, name, displayName = null) {
-    const emailMatch = email && WHITELISTED_EMAILS.has(email.toLowerCase());
-    const nameMatch = name && WHITELISTED_NAMES.has(name.toLowerCase());
-    const displayNameMatch = displayName && WHITELISTED_NAMES.has(displayName.toLowerCase());
+    const emailMatch = email && whitelistEmails.has(email.toLowerCase());
+    const nameMatch = name && whitelistNames.has(name.toLowerCase());
+    const displayNameMatch = displayName && whitelistNames.has(displayName.toLowerCase());
     console.log(`[WHITELIST CHECK] email="${email}" (match=${emailMatch}), name="${name}" (match=${nameMatch}), displayName="${displayName}" (match=${displayNameMatch})`);
     if (emailMatch) return true;
     if (nameMatch) return true;
@@ -404,8 +442,8 @@ app.get('/debug/whitelist', (req, res) => {
     const { email, name } = req.query;
     const emailLower = (email || '').toLowerCase();
     const nameLower = (name || '').toLowerCase();
-    const emailInSet = WHITELISTED_EMAILS.has(emailLower);
-    const nameInSet = WHITELISTED_NAMES.has(nameLower);
+    const emailInSet = whitelistEmails.has(emailLower);
+    const nameInSet = whitelistNames.has(nameLower);
     const result = isWhitelisted(email, name, null);
     res.json({
         email,
@@ -415,9 +453,180 @@ app.get('/debug/whitelist', (req, res) => {
         email_in_whitelist: emailInSet,
         name_in_whitelist: nameInSet,
         is_whitelisted: result,
-        whitelisted_emails_sample: Array.from(WHITELISTED_EMAILS).slice(0, 5),
-        whitelisted_names_sample: Array.from(WHITELISTED_NAMES).slice(0, 5)
+        whitelisted_emails_sample: Array.from(whitelistEmails).slice(0, 5),
+        whitelisted_names_sample: Array.from(whitelistNames).slice(0, 5)
     });
+});
+
+// =============================================================================
+// ADMIN WHITELIST MANAGEMENT ENDPOINTS
+// =============================================================================
+
+// Seed Redis with whitelist data (one-time migration)
+app.post('/admin/whitelist/seed', async (req, res) => {
+    try {
+        const { admin_token, emails, names } = req.body;
+        const expectedToken = process.env.ADMIN_TOKEN;
+        if (!expectedToken || admin_token !== expectedToken) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        if (!redis) return res.status(503).json({ error: 'Redis not available' });
+        if (!emails || !names || !Array.isArray(emails) || !Array.isArray(names)) {
+            return res.status(400).json({ error: 'emails and names arrays required' });
+        }
+
+        // Clear existing keys first
+        await Promise.all([
+            redis.del('whitelist:emails'),
+            redis.del('whitelist:names')
+        ]);
+
+        // Add all entries (lowercased)
+        const emailsLower = emails.map(e => e.toLowerCase());
+        const namesLower = names.map(n => n.toLowerCase());
+
+        if (emailsLower.length > 0) {
+            await redis.sadd('whitelist:emails', ...emailsLower);
+        }
+        if (namesLower.length > 0) {
+            await redis.sadd('whitelist:names', ...namesLower);
+        }
+
+        // Refresh in-memory cache
+        whitelistEmails = new Set(emailsLower);
+        whitelistNames = new Set(namesLower);
+        whitelistLoaded = true;
+
+        console.log(`[WHITELIST] Seeded: ${emailsLower.length} emails, ${namesLower.length} names`);
+        res.json({
+            success: true,
+            emails_count: emailsLower.length,
+            names_count: namesLower.length
+        });
+    } catch (error) {
+        console.error('Admin whitelist/seed error:', error.message);
+        res.status(500).json({ error: 'Failed to seed whitelist' });
+    }
+});
+
+// Add a whitelist entry
+app.post('/admin/whitelist/add', async (req, res) => {
+    try {
+        const { admin_token, type, value } = req.body;
+        const expectedToken = process.env.ADMIN_TOKEN;
+        if (!expectedToken || admin_token !== expectedToken) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        if (!redis) return res.status(503).json({ error: 'Redis not available' });
+        if (!type || !value || !['email', 'name'].includes(type)) {
+            return res.status(400).json({ error: 'type ("email" or "name") and value required' });
+        }
+
+        const lower = value.toLowerCase();
+        const key = type === 'email' ? 'whitelist:emails' : 'whitelist:names';
+        await redis.sadd(key, lower);
+
+        // Update in-memory cache
+        if (type === 'email') {
+            whitelistEmails.add(lower);
+        } else {
+            whitelistNames.add(lower);
+        }
+
+        console.log(`[WHITELIST] Added ${type}: ${lower}`);
+        res.json({ success: true, type, value: lower });
+    } catch (error) {
+        console.error('Admin whitelist/add error:', error.message);
+        res.status(500).json({ error: 'Failed to add whitelist entry' });
+    }
+});
+
+// Remove a whitelist entry
+app.post('/admin/whitelist/remove', async (req, res) => {
+    try {
+        const { admin_token, type, value } = req.body;
+        const expectedToken = process.env.ADMIN_TOKEN;
+        if (!expectedToken || admin_token !== expectedToken) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        if (!redis) return res.status(503).json({ error: 'Redis not available' });
+        if (!type || !value || !['email', 'name'].includes(type)) {
+            return res.status(400).json({ error: 'type ("email" or "name") and value required' });
+        }
+
+        const lower = value.toLowerCase();
+        const key = type === 'email' ? 'whitelist:emails' : 'whitelist:names';
+        await redis.srem(key, lower);
+
+        // Update in-memory cache
+        if (type === 'email') {
+            whitelistEmails.delete(lower);
+        } else {
+            whitelistNames.delete(lower);
+        }
+
+        console.log(`[WHITELIST] Removed ${type}: ${lower}`);
+        res.json({ success: true, type, value: lower });
+    } catch (error) {
+        console.error('Admin whitelist/remove error:', error.message);
+        res.status(500).json({ error: 'Failed to remove whitelist entry' });
+    }
+});
+
+// List all whitelist entries (from Redis — authoritative)
+app.get('/admin/whitelist/list', async (req, res) => {
+    try {
+        const adminToken = req.query.admin_token || req.headers['x-admin-token'];
+        const expectedToken = process.env.ADMIN_TOKEN;
+        if (!expectedToken || adminToken !== expectedToken) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        if (!redis) return res.status(503).json({ error: 'Redis not available' });
+
+        const [emails, names] = await Promise.all([
+            redis.smembers('whitelist:emails'),
+            redis.smembers('whitelist:names')
+        ]);
+
+        res.json({
+            emails: emails || [],
+            names: names || [],
+            emails_count: (emails || []).length,
+            names_count: (names || []).length,
+            cache_loaded: whitelistLoaded,
+            cache_emails_count: whitelistEmails.size,
+            cache_names_count: whitelistNames.size
+        });
+    } catch (error) {
+        console.error('Admin whitelist/list error:', error.message);
+        res.status(500).json({ error: 'Failed to list whitelist' });
+    }
+});
+
+// Force-refresh in-memory cache from Redis
+app.post('/admin/whitelist/reload', async (req, res) => {
+    try {
+        const { admin_token } = req.body;
+        const expectedToken = process.env.ADMIN_TOKEN;
+        if (!expectedToken || admin_token !== expectedToken) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        if (!redis) return res.status(503).json({ error: 'Redis not available' });
+
+        // Reset and reload
+        whitelistLoaded = false;
+        whitelistLoadPromise = null;
+        await loadWhitelistFromRedis();
+
+        res.json({
+            success: true,
+            emails_count: whitelistEmails.size,
+            names_count: whitelistNames.size
+        });
+    } catch (error) {
+        console.error('Admin whitelist/reload error:', error.message);
+        res.status(500).json({ error: 'Failed to reload whitelist' });
+    }
 });
 
 // =============================================================================
@@ -6029,8 +6238,8 @@ app.post('/v2/auth/patreon', async (req, res) => {
         // Fallback: If not in Season 0 capture but IS whitelisted, treat as OG supporter
         // (They were Patreon members before v5.5 but may not have logged into the app)
         console.log(`[V2 DEBUG] Checking whitelist for: email="${patronEmail}", name="${patronName}"`);
-        console.log(`[V2 DEBUG] Email in whitelist: ${WHITELISTED_EMAILS.has((patronEmail || '').toLowerCase())}`);
-        console.log(`[V2 DEBUG] Name in whitelist: ${WHITELISTED_NAMES.has((patronName || '').toLowerCase())}`);
+        console.log(`[V2 DEBUG] Email in whitelist: ${whitelistEmails.has((patronEmail || '').toLowerCase())}`);
+        console.log(`[V2 DEBUG] Name in whitelist: ${whitelistNames.has((patronName || '').toLowerCase())}`);
         const whitelistedForLegacy = isWhitelisted(patronEmail, patronName, null);
         console.log(`[V2 DEBUG] isWhitelisted result: ${whitelistedForLegacy}`);
         if (!legacyData && whitelistedForLegacy) {
