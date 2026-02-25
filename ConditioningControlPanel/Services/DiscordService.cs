@@ -60,11 +60,6 @@ namespace ConditioningControlPanel.Services
         public string? Avatar { get; private set; }
 
         /// <summary>
-        /// Discord email (if scope granted)
-        /// </summary>
-        public string? Email { get; private set; }
-
-        /// <summary>
         /// Whether the user is authenticated with Discord
         /// </summary>
         public bool IsAuthenticated => _tokenStorage.HasValidTokens();
@@ -451,7 +446,6 @@ namespace ConditioningControlPanel.Services
                 Username = user.Username;
                 DisplayName = user.DisplayName;
                 Avatar = user.Avatar;
-                Email = user.Email;
                 NeedsRegistration = user.NeedsRegistration;
 
                 // Cache result for 24 hours
@@ -461,12 +455,11 @@ namespace ConditioningControlPanel.Services
                     Username = user.Username,
                     GlobalName = user.GlobalName,
                     Avatar = user.Avatar,
-                    Email = user.Email,
                     LastVerified = DateTime.UtcNow,
                     CacheExpiresAt = DateTime.UtcNow.AddHours(CacheHours)
                 });
 
-                App.Logger?.Information("Discord user validated: {Username} ({Id}), NeedsRegistration={NeedsReg}", Username, UserId, user.NeedsRegistration);
+                App.Logger?.Information("Discord user validated: {Id}, NeedsRegistration={NeedsReg}", UserId, user.NeedsRegistration);
             }
             catch (Exception ex)
             {
@@ -522,7 +515,6 @@ namespace ConditioningControlPanel.Services
             Username = cachedState.Username;
             DisplayName = cachedState.DisplayName;
             Avatar = cachedState.Avatar;
-            Email = cachedState.Email;
             CustomDisplayName = cachedState.CustomDisplayName;
         }
 
@@ -532,7 +524,6 @@ namespace ConditioningControlPanel.Services
             Username = null;
             DisplayName = null;
             Avatar = null;
-            Email = null;
             CustomDisplayName = null;
         }
 
@@ -562,16 +553,28 @@ namespace ConditioningControlPanel.Services
                 // Use display name setting
                 var name = displayName ?? App.Patreon?.DisplayName ?? App.Discord?.DisplayName ?? "Someone";
 
+                var unifiedId = App.EffectiveUserId;
+                if (string.IsNullOrEmpty(unifiedId)) return false;
+
                 var payload = new
                 {
                     type = "achievement",
                     display_name = name,
+                    unified_id = unifiedId,
                     achievement_name = achievement.Name,
                     achievement_requirement = achievement.Requirement,
-                image_name = achievement.ImageName
+                    image_name = achievement.ImageName
                 };
 
-                var response = await _httpClient.PostAsJsonAsync("/discord/community-webhook", payload);
+                var request = new HttpRequestMessage(HttpMethod.Post, "/discord/community-webhook")
+                {
+                    Content = JsonContent.Create(payload)
+                };
+                var authToken = App.Settings?.Current?.AuthToken;
+                if (!string.IsNullOrEmpty(authToken))
+                    request.Headers.Add("X-Auth-Token", authToken);
+
+                var response = await _httpClient.SendAsync(request);
                 var responseText = await response.Content.ReadAsStringAsync();
 
                 if (response.IsSuccessStatusCode)
@@ -613,15 +616,27 @@ namespace ConditioningControlPanel.Services
                     _ => null
                 };
 
+                var unifiedId = App.EffectiveUserId;
+                if (string.IsNullOrEmpty(unifiedId)) return false;
+
                 var payload = new
                 {
                     type = "level_up",
                     display_name = name,
+                    unified_id = unifiedId,
                     level = level,
                     image_name = imageName
                 };
 
-                var response = await _httpClient.PostAsJsonAsync("/discord/community-webhook", payload);
+                var request = new HttpRequestMessage(HttpMethod.Post, "/discord/community-webhook")
+                {
+                    Content = JsonContent.Create(payload)
+                };
+                var authToken = App.Settings?.Current?.AuthToken;
+                if (!string.IsNullOrEmpty(authToken))
+                    request.Headers.Add("X-Auth-Token", authToken);
+
+                var response = await _httpClient.SendAsync(request);
                 var responseText = await response.Content.ReadAsStringAsync();
 
                 if (response.IsSuccessStatusCode)

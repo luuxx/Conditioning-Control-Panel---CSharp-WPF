@@ -44,6 +44,9 @@ namespace ConditioningControlPanel
         private static Mutex? _mutex;
         private static bool _mutexOwned = false;
         private const string MutexName = "ConditioningControlPanel_SingleInstance_Mutex";
+        private const string ShowSignalName = "ConditioningControlPanel_ShowWindow_Signal";
+        private static EventWaitHandle? _showSignal;
+        private static Thread? _showSignalThread;
 
         /// <summary>
         /// User data folder path in LocalAppData - persists across updates
@@ -206,6 +209,7 @@ namespace ConditioningControlPanel
         public static ActivityTracker ActivityTracker { get; private set; } = null!;
         public static RemoteControlService RemoteControl { get; private set; } = null!;
         public static CompanionPhraseService CompanionPhrases { get; private set; } = null!;
+        public static LockdownService Lockdown { get; private set; } = null!;
 
         /// <summary>
         /// Whether user is logged in with either Patreon or Discord (required for progression tracking)
@@ -363,6 +367,9 @@ namespace ConditioningControlPanel
                 // Stop autonomy mode
                 Autonomy?.Stop();
 
+                // Stop avatar voice lines
+                AvatarWindow?.StopVoiceLineAudio();
+
                 // Reset audio ducking - CRITICAL for clean exit
                 Audio?.ForceUnduck();
 
@@ -390,24 +397,69 @@ namespace ConditioningControlPanel
             _mutexOwned = createdNew; // Track if we actually own the mutex
             if (!createdNew)
             {
-                // Another instance is already running
+                // Another instance is already running - signal it to show its window
+                try
+                {
+                    var signal = EventWaitHandle.OpenExisting(ShowSignalName);
+                    signal.Set();
+                    signal.Dispose();
+                }
+                catch { }
+
                 splash.Close();
-                MessageBox.Show(
-                    "Conditioning Control Panel is already running.\n\nCheck your system tray if the window is minimized.",
-                    "Already Running",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
                 Shutdown();
                 return;
             }
+
+            // Create signal for other instances to request showing our window
+            _showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowSignalName);
+            _showSignalThread = new Thread(() =>
+            {
+                while (_showSignal != null)
+                {
+                    try
+                    {
+                        if (_showSignal.WaitOne(1000))
+                        {
+                            Dispatcher.BeginInvoke(() =>
+                            {
+                                var mainWin = MainWindow as MainWindow;
+                                if (mainWin != null)
+                                {
+                                    mainWin.ShowFromTray();
+                                }
+                            });
+                        }
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        break;
+                    }
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "ShowWindowSignalListener"
+            };
+            _showSignalThread.Start();
 
             base.OnStartup(e);
 
             splash.SetProgress(0.05, "Initializing logging...");
 
-            // Setup logging
-            var logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
-            Directory.CreateDirectory(logPath);
+            // Setup logging - use UserDataPath (writable) instead of BaseDirectory (may be in Program Files)
+            string logPath;
+            try
+            {
+                logPath = Path.Combine(UserDataPath, "logs");
+                Directory.CreateDirectory(logPath);
+            }
+            catch
+            {
+                // Last resort fallback to temp directory if even UserDataPath fails
+                logPath = Path.Combine(Path.GetTempPath(), "ConditioningControlPanel", "logs");
+                try { Directory.CreateDirectory(logPath); } catch { }
+            }
 
             Logger = new LoggerConfiguration()
                 .MinimumLevel.Information() // Security: Changed from Debug to avoid exposing sensitive data in logs
@@ -601,6 +653,9 @@ namespace ConditioningControlPanel
             // Initialize content packs service
             ContentPacks = new ContentPackService();
 
+            // Initialize lockdown service (ephemeral — not persisted)
+            Lockdown = new LockdownService();
+
             // Initialize Patreon (validate subscription in background)
             // Then load cloud profile if authenticated
             _ = InitializePatreonAndSyncAsync();
@@ -724,7 +779,7 @@ namespace ConditioningControlPanel
 
                 if (Discord.IsAuthenticated)
                 {
-                    Logger?.Information("Discord authenticated: {Username} ({Id})", Discord.Username, Discord.UserId);
+                    Logger?.Information("Discord authenticated: {Id}", Discord.UserId);
 
                     // If not already syncing via Patreon, load cloud profile and start heartbeat for Discord-only users
                     if (Patreon?.IsAuthenticated != true && ProfileSync != null)
@@ -765,6 +820,9 @@ namespace ConditioningControlPanel
                 Logger?.Information("Validating restored session for {Id}...", UnifiedUserId);
 
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                var storedToken = Settings?.Current?.AuthToken;
+                if (!string.IsNullOrEmpty(storedToken))
+                    http.DefaultRequestHeaders.Add("X-Auth-Token", storedToken);
                 var body = new Newtonsoft.Json.Linq.JObject
                 {
                     ["unified_id"] = UnifiedUserId,
@@ -803,6 +861,15 @@ namespace ConditioningControlPanel
                         Logger?.Debug("Failed to parse restore-session auth token: {Error}", parseEx.Message);
                     }
                     Logger?.Information("Restored session validated successfully.");
+                }
+                else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                {
+                    Logger?.Warning("Restored session rejected (invalid token). Clearing auth token.");
+                    if (Settings?.Current != null)
+                    {
+                        Settings.Current.AuthToken = null;
+                        Settings.Save();
+                    }
                 }
                 else
                 {
@@ -1655,7 +1722,7 @@ namespace ConditioningControlPanel
                 Logger?.Error(ex, "UNHANDLED {Source} EXCEPTION: {Message}", source, ex.Message);
 
                 // Also write to dedicated crash log with full details
-                var crashLogPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs", "crash.log");
+                var crashLogPath = Path.Combine(UserDataPath, "logs", "crash.log");
                 var crashInfo = $@"
 ================================================================================
 CRASH REPORT - {DateTime.Now:yyyy-MM-dd HH:mm:ss}
@@ -1911,6 +1978,12 @@ Application State:
 
             // Close and flush the logger
             Log.CloseAndFlush();
+
+            // Dispose show-window signal
+            var signal = _showSignal;
+            _showSignal = null;
+            signal?.Set(); // Unblock the listener thread
+            signal?.Dispose();
 
             // Release single instance mutex (only if we own it)
             if (_mutexOwned && _mutex != null)

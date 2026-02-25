@@ -83,6 +83,12 @@ namespace ConditioningControlPanel
         private bool _isCapturingPanicKey = false;
         private bool _exitRequested = false;
         private int _panicPressCount = 0;
+
+        // Lockdown mode
+        private int _lockdownTimerClickCount = 0;
+        private DateTime _lockdownTimerLastClick = DateTime.MinValue;
+        private Brush? _preLockdownWindowBg;
+        private Brush? _preLockdownTitleBarBg;
         private bool _isStreakFixMode = false;
         private DispatcherTimer? _remoteNotificationTimer;
         private DispatcherTimer? _remoteSessionInfoTimer;
@@ -214,6 +220,8 @@ namespace ConditioningControlPanel
             _trayIcon = new TrayIconService(this);
             _trayIcon.OnExitRequested += () =>
             {
+                if (App.Lockdown?.IsActive == true) return;
+
                 _exitRequested = true;
                 if (_isRunning) StopEngine();
 
@@ -250,7 +258,10 @@ namespace ConditioningControlPanel
             {
                 _keyboardHook.Start();
             }
-            
+
+            // Initialize lockdown mode event handlers
+            InitializeLockdown();
+
             // Subscribe to progression events for real-time XP updates
             App.Progression.XPChanged += OnXPChanged;
             App.Progression.LevelUp += OnLevelUp;
@@ -568,6 +579,10 @@ namespace ConditioningControlPanel
 
         private void OnGlobalKeyPressed(Key key)
         {
+            // Lockdown mode: block all key handling (panic key, etc.)
+            if (App.Lockdown?.IsActive == true)
+                return;
+
             // Track Alt+Tab for achievement (Player 2 Disconnected)
             if (key == Key.Tab && (Keyboard.IsKeyDown(Key.LeftAlt) || Keyboard.IsKeyDown(Key.RightAlt)))
             {
@@ -1443,6 +1458,12 @@ namespace ConditioningControlPanel
             {
                 _avatarTubeWindow = new AvatarTubeWindow(this);
                 App.AvatarWindow = _avatarTubeWindow; // Set global reference for services
+
+                // Restore saved mute state
+                if (App.Settings?.Current?.AvatarMuted == true)
+                {
+                    _avatarTubeWindow.SetMuteAvatar(true);
+                }
 
                 // Only show if main window is visible and not minimized
                 if (IsVisible && WindowState != WindowState.Minimized)
@@ -2705,8 +2726,22 @@ namespace ConditioningControlPanel
                     await Task.Delay(500); // Let auth tokens settle
                     if (App.ProfileSync != null)
                     {
-                        await App.ProfileSync.SyncProfileAsync();
-                        await App.ProfileSync.LoadProfileAsync();
+                        // Suppress achievement popups during post-login sync
+                        // (achievements were just cleared and will be restored from cloud)
+                        if (App.Achievements != null) App.Achievements.SuppressPopups = true;
+                        try
+                        {
+                            // IMPORTANT: Load FIRST, then sync. ClearProgressionData() zeroed local data,
+                            // so we must restore from cloud before syncing UP — otherwise we'd push
+                            // level=1/xp=0 to the server, which can permanently erase progress if the
+                            // server also has low values (e.g. right after migration/season reset).
+                            await App.ProfileSync.LoadProfileAsync();
+                            await App.ProfileSync.SyncProfileAsync();
+                        }
+                        finally
+                        {
+                            if (App.Achievements != null) App.Achievements.SuppressPopups = false;
+                        }
 
                         // Refresh UI on the dispatcher thread after sync completes
                         Application.Current?.Dispatcher?.Invoke(() =>
@@ -2881,11 +2916,19 @@ namespace ConditioningControlPanel
                 // Logout
                 App.ProfileSync?.StopHeartbeat();
                 App.Patreon.Logout();
-                App.Patreon.UnifiedUserId = null;
-                App.UnifiedUserId = null;
-                UpdateQuickPatreonUI();
-                UpdatePatreonUI();
-                UpdateBannerWelcomeMessage();
+                if (App.Discord?.IsAuthenticated != true)
+                {
+                    // No provider left — full logout
+                    ClearAccountData();
+                }
+                else
+                {
+                    // Discord still active — just update Patreon UI
+                    App.Patreon.UnifiedUserId = null;
+                    UpdateQuickPatreonUI();
+                    UpdatePatreonUI();
+                    UpdateBannerWelcomeMessage();
+                }
             }
             else
             {
@@ -2950,10 +2993,18 @@ namespace ConditioningControlPanel
             {
                 // Logout
                 App.Discord.Logout();
-                App.Discord.UnifiedUserId = null;
-                App.UnifiedUserId = null;
-                UpdateQuickDiscordUI();
-                UpdateBannerWelcomeMessage();
+                if (App.Patreon?.IsAuthenticated != true)
+                {
+                    // No provider left — full logout
+                    ClearAccountData();
+                }
+                else
+                {
+                    // Patreon still active — just update Discord UI
+                    App.Discord.UnifiedUserId = null;
+                    UpdateQuickDiscordUI();
+                    UpdateBannerWelcomeMessage();
+                }
             }
             else
             {
@@ -3309,6 +3360,344 @@ namespace ConditioningControlPanel
             }
         }
 
+        #region Lab
+
+        private void InitializeLockdown()
+        {
+            if (App.Lockdown == null) return;
+
+            App.Lockdown.LockdownActivated += OnLockdownActivated;
+            App.Lockdown.LockdownDeactivated += OnLockdownDeactivated;
+            App.Lockdown.CountdownTick += OnLockdownTick;
+        }
+
+        private void BtnActivateLockdown_Click(object sender, RoutedEventArgs e)
+        {
+            if (App.Lockdown == null) return;
+
+            // Get duration from combo box
+            var selectedItem = CmbLockdownDuration.SelectedItem as ComboBoxItem;
+            if (selectedItem?.Tag is not string minutesStr || !int.TryParse(minutesStr, out var minutes))
+                return;
+
+            var duration = TimeSpan.FromMinutes(minutes);
+
+            // Show double warning with clear consequences
+            var confirmed = WarningDialog.ShowDoubleWarning(this, "Lockdown Mode",
+                "- You will be LOCKED IN for " + minutes + " minutes\n" +
+                "- Strict Lock will be FORCED ON\n" +
+                "- Panic Key will be DISABLED\n" +
+                "- Alt+F4, Alt+Tab, Windows key, and Escape will be BLOCKED\n" +
+                "- You CANNOT close or minimize the application\n" +
+                "- The only escape is waiting for the timer to expire\n" +
+                "  (or Ctrl+Alt+Del → Task Manager as a safety valve)");
+
+            if (!confirmed) return;
+
+            App.Lockdown.Activate(duration);
+        }
+
+        private void OnLockdownActivated()
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    // Enable system key suppression on the keyboard hook
+                    if (_keyboardHook != null)
+                        _keyboardHook.SuppressSystemKeys = true;
+
+                    // Gray out strict lock and panic key toggles
+                    if (ChkStrictLock != null)
+                    {
+                        ChkStrictLock.IsEnabled = false;
+                        ChkStrictLock.Opacity = 0.4;
+                        ChkStrictLock.ToolTip = "YOU ARE IN LOCKDOWN MODE, THERE IS NO ESCAPE!";
+                    }
+                    if (ChkNoPanic != null)
+                    {
+                        ChkNoPanic.IsEnabled = false;
+                        ChkNoPanic.Opacity = 0.4;
+                        ChkNoPanic.ToolTip = "YOU ARE IN LOCKDOWN MODE, THERE IS NO ESCAPE!";
+                    }
+
+                    // Swap UI panels
+                    if (LockdownSetupPanel != null) LockdownSetupPanel.Visibility = Visibility.Collapsed;
+                    if (LockdownActivePanel != null) LockdownActivePanel.Visibility = Visibility.Visible;
+
+                    // Reset secret exit state
+                    _lockdownTimerClickCount = 0;
+                    if (TxtLockdownExit != null)
+                    {
+                        TxtLockdownExit.Visibility = Visibility.Collapsed;
+                        TxtLockdownExit.Text = "";
+                    }
+
+                    // Apply blood-red theme
+                    ApplyLockdownTheme();
+
+                    // Play activation flash animation
+                    PlayLockdownActivationAnimation();
+
+                    App.Logger?.Information("Lockdown UI activated");
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Error(ex, "Error activating lockdown UI");
+                }
+            });
+        }
+
+        private void OnLockdownDeactivated()
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    // Disable system key suppression
+                    if (_keyboardHook != null)
+                        _keyboardHook.SuppressSystemKeys = false;
+
+                    // Restore strict lock and panic key toggles
+                    if (ChkStrictLock != null)
+                    {
+                        ChkStrictLock.IsEnabled = true;
+                        ChkStrictLock.Opacity = 1.0;
+                        ChkStrictLock.ToolTip = null;
+                    }
+                    if (ChkNoPanic != null)
+                    {
+                        ChkNoPanic.IsEnabled = true;
+                        ChkNoPanic.Opacity = 1.0;
+                        ChkNoPanic.ToolTip = null;
+                    }
+
+                    // Swap UI panels back
+                    if (LockdownSetupPanel != null) LockdownSetupPanel.Visibility = Visibility.Visible;
+                    if (LockdownActivePanel != null) LockdownActivePanel.Visibility = Visibility.Collapsed;
+
+                    // Hide secret exit
+                    if (TxtLockdownExit != null)
+                        TxtLockdownExit.Visibility = Visibility.Collapsed;
+
+                    // Restore normal theme
+                    RestoreLockdownTheme();
+
+                    App.Logger?.Information("Lockdown UI deactivated");
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Error(ex, "Error deactivating lockdown UI");
+                }
+            });
+        }
+
+        private void OnLockdownTick(TimeSpan remaining)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (TxtLockdownTimer != null)
+                {
+                    if (remaining.TotalHours >= 1)
+                        TxtLockdownTimer.Text = remaining.ToString(@"h\:mm\:ss");
+                    else
+                        TxtLockdownTimer.Text = remaining.ToString(@"mm\:ss");
+                }
+            });
+        }
+
+        private void TxtLockdownTimer_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            var now = DateTime.Now;
+
+            // Reset click count if more than 1 second since last click
+            if ((now - _lockdownTimerLastClick).TotalMilliseconds > 1000)
+                _lockdownTimerClickCount = 0;
+
+            _lockdownTimerLastClick = now;
+            _lockdownTimerClickCount++;
+
+            if (_lockdownTimerClickCount >= 5 && TxtLockdownExit != null)
+            {
+                TxtLockdownExit.Visibility = Visibility.Visible;
+                TxtLockdownExit.Focus();
+                _lockdownTimerClickCount = 0;
+            }
+        }
+
+        private void TxtLockdownExit_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            if (e.Key != Key.Enter) return;
+
+            if (TxtLockdownExit != null)
+            {
+                var phrase = TxtLockdownExit.Text;
+                var success = App.Lockdown?.TryExitWithPhrase(phrase) ?? false;
+
+                if (!success)
+                {
+                    // Wrong phrase — clear and hide
+                    TxtLockdownExit.Text = "";
+                    TxtLockdownExit.Visibility = Visibility.Collapsed;
+                }
+            }
+        }
+
+        // --- Lockdown Theme ---
+
+        private static readonly Color LockdownCrimson = (Color)ColorConverter.ConvertFromString("#DC143C");
+        private static readonly Color LockdownDarkRed = (Color)ColorConverter.ConvertFromString("#8B0000");
+        private static readonly Color LockdownPanelBg = (Color)ColorConverter.ConvertFromString("#1A0A0A");
+        private static readonly Color LockdownWindowBg = (Color)ColorConverter.ConvertFromString("#100505");
+
+        private void ApplyLockdownTheme()
+        {
+            try
+            {
+                // Save current values for restoration
+                _preLockdownWindowBg = Background;
+                _preLockdownTitleBarBg = TitleBarBorder?.Background;
+
+                // Window background
+                Background = new SolidColorBrush(LockdownWindowBg);
+
+                // Title bar
+                if (TitleBarBorder != null)
+                    TitleBarBorder.Background = new SolidColorBrush(LockdownDarkRed);
+
+                // Player title and glow
+                if (TxtPlayerTitle != null)
+                {
+                    TxtPlayerTitle.Foreground = new SolidColorBrush(LockdownCrimson);
+                    if (TxtPlayerTitle.Effect is DropShadowEffect glow)
+                        glow.Color = LockdownCrimson;
+                }
+
+                // Header version
+                if (TxtHeaderVersion != null)
+                    TxtHeaderVersion.Foreground = new SolidColorBrush(LockdownCrimson);
+
+                // Level label
+                if (TxtLevelLabel != null)
+                    TxtLevelLabel.Foreground = new SolidColorBrush(LockdownCrimson);
+
+                // XP bar
+                if (XPBar != null)
+                    XPBar.Background = new SolidColorBrush(LockdownCrimson);
+
+                // Banner texts
+                if (TxtBannerPrimary != null)
+                    TxtBannerPrimary.Foreground = new SolidColorBrush(LockdownCrimson);
+                if (TxtBannerSecondary != null)
+                    TxtBannerSecondary.Foreground = new SolidColorBrush(LockdownCrimson);
+                if (TxtBannerTertiary != null)
+                    TxtBannerTertiary.Foreground = new SolidColorBrush(LockdownCrimson);
+
+                // Lockdown card border → red glow
+                if (LockdownCardBorder != null)
+                {
+                    LockdownCardBorder.BorderBrush = new SolidColorBrush(LockdownCrimson);
+                    LockdownCardBorder.Background = new SolidColorBrush(LockdownPanelBg);
+                }
+
+                // Update Application-level resource brushes (affects styled controls)
+                var res = Application.Current.Resources;
+                res["PinkBrush"] = new SolidColorBrush(LockdownCrimson);
+                res["DarkPinkBrush"] = new SolidColorBrush(LockdownDarkRed);
+                res["TransparentPinkBrush"] = new SolidColorBrush(Color.FromArgb(0x30, 0xDC, 0x14, 0x3C));
+                res["PinkButtonHoveredBrush"] = new SolidColorBrush(LockdownCrimson);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Failed to apply lockdown theme");
+            }
+        }
+
+        private void RestoreLockdownTheme()
+        {
+            try
+            {
+                // Restore saved values
+                if (_preLockdownWindowBg != null)
+                    Background = _preLockdownWindowBg;
+                if (_preLockdownTitleBarBg != null && TitleBarBorder != null)
+                    TitleBarBorder.Background = _preLockdownTitleBarBg;
+
+                // Restore resource brushes from theme
+                var res = Application.Current.Resources;
+                res["PinkBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4"));
+                res["DarkPinkBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF1493"));
+                res["TransparentPinkBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#30FF69B4"));
+                res["PinkButtonHoveredBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF8FAF"));
+
+                // Restore lockdown card to normal gradient border
+                if (LockdownCardBorder != null)
+                {
+                    var borderBrush = new LinearGradientBrush
+                    {
+                        StartPoint = new System.Windows.Point(0, 0),
+                        EndPoint = new System.Windows.Point(1, 1)
+                    };
+                    borderBrush.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#FF69B4"), 0));
+                    borderBrush.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#9B59B6"), 1));
+                    LockdownCardBorder.BorderBrush = borderBrush;
+
+                    var bgBrush = new LinearGradientBrush
+                    {
+                        StartPoint = new System.Windows.Point(0, 0),
+                        EndPoint = new System.Windows.Point(1, 1)
+                    };
+                    bgBrush.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#1A1A32"), 0));
+                    bgBrush.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#201A38"), 1));
+                    LockdownCardBorder.Background = bgBrush;
+                }
+
+                // Re-apply mode-aware theme colors
+                RefreshThemeAwareElements();
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Failed to restore lockdown theme");
+            }
+        }
+
+        private void PlayLockdownActivationAnimation()
+        {
+            try
+            {
+                // Create a full-screen red flash overlay
+                var flash = new System.Windows.Controls.Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(180, 220, 20, 60)), // semi-transparent crimson
+                    IsHitTestVisible = false
+                };
+
+                RootGrid.Children.Add(flash);
+
+                // Fade out over 600ms
+                var fadeOut = new System.Windows.Media.Animation.DoubleAnimation
+                {
+                    From = 1.0,
+                    To = 0.0,
+                    Duration = TimeSpan.FromMilliseconds(600),
+                    EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut }
+                };
+
+                fadeOut.Completed += (_, _) =>
+                {
+                    try { RootGrid.Children.Remove(flash); } catch { }
+                };
+
+                flash.BeginAnimation(OpacityProperty, fadeOut);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Failed to play lockdown animation");
+            }
+        }
+
+        #endregion
+
         #region Leaderboard
 
         private async void LeaderboardColumnHeader_Click(object sender, RoutedEventArgs e)
@@ -3333,8 +3722,9 @@ namespace ConditioningControlPanel
 
                 if (sortField != null)
                 {
-                    // Server-side sort
+                    // Fetch fresh data then sort client-side (server always returns XP order)
                     await RefreshLeaderboardAsync(sortField);
+                    ApplyLeaderboardSort(sortField);
                 }
                 else if (headerText == "Name")
                 {
@@ -3444,7 +3834,8 @@ namespace ConditioningControlPanel
 
                 if (success)
                 {
-                    LstLeaderboard.ItemsSource = App.Leaderboard.Entries;
+                    // Apply client-side sort (server always returns XP order from sorted set)
+                    ApplyLeaderboardSort(sortBy ?? App.Leaderboard.CurrentSortBy);
                     TxtLeaderboardStatus.Text = $"{App.Leaderboard.OnlineUsers} online / {App.Leaderboard.TotalUsers} users";
 
                     // Update season flavour text
@@ -3469,6 +3860,25 @@ namespace ConditioningControlPanel
             {
                 BtnRefreshLeaderboard.IsEnabled = true;
             }
+        }
+
+        private void ApplyLeaderboardSort(string sortBy)
+        {
+            if (App.Leaderboard?.Entries == null || LstLeaderboard == null) return;
+
+            var sorted = sortBy switch
+            {
+                "level" => App.Leaderboard.Entries.OrderByDescending(x => x.Level).ThenByDescending(x => x.Xp).ToList(),
+                "xp" => App.Leaderboard.Entries.OrderByDescending(x => x.Xp).ToList(),
+                "is_patreon" => App.Leaderboard.Entries.OrderByDescending(x => x.PatreonTier).ThenByDescending(x => x.Level).ToList(),
+                _ => App.Leaderboard.Entries.OrderByDescending(x => x.Xp).ToList()
+            };
+
+            // Re-number ranks
+            for (int i = 0; i < sorted.Count; i++)
+                sorted[i].Rank = i + 1;
+
+            LstLeaderboard.ItemsSource = sorted;
         }
 
         /// <summary>
@@ -4098,20 +4508,14 @@ namespace ConditioningControlPanel
             // Update login status
             if (isAuthenticated)
             {
-                var patronName = App.Patreon?.PatronName;
-                var patronEmail = App.Patreon?.PatronEmail;
                 var isWhitelisted = App.Patreon?.IsWhitelisted == true;
 
                 // Use unified display name first (what user chose), then fall back to Patreon-specific
                 var unifiedDisplayName = App.Settings?.Current?.UserDisplayName;
                 var patreonDisplayName = App.Patreon?.DisplayName;
 
-                // Debug: Log what we're getting
-                App.Logger?.Debug("Patreon UI Update: UnifiedName={UnifiedName}, PatreonName={PatreonName}, Email={Email}, Tier={Tier}, Whitelisted={Whitelisted}",
-                    unifiedDisplayName, patronName, patronEmail, tier, isWhitelisted);
-
-                // Show unified DisplayName if available, otherwise Patreon display name, otherwise patron name
-                var nameToShow = unifiedDisplayName ?? patreonDisplayName ?? patronName;
+                // Show unified DisplayName if available, otherwise Patreon display name
+                var nameToShow = unifiedDisplayName ?? patreonDisplayName;
                 TxtPatreonStatus.Text = string.IsNullOrEmpty(nameToShow) ? "Connected to Patreon" : $"Welcome, {nameToShow}!";
                 TxtPatreonTier.Text = tier switch
                 {
@@ -4134,6 +4538,9 @@ namespace ConditioningControlPanel
                 BtnPatreonLogin.Content = hasUnifiedId ? "Link Patreon" : "Login";
             }
 
+            // AI Features lock overlay - hide when user is logged in (any provider)
+            AiFeaturesLockOverlay.Visibility = App.HasCloudIdentity ? Visibility.Collapsed : Visibility.Visible;
+
             // Update feature lockboxes
             // All features are now Tier 1 (or whitelisted)
             var hasPremiumAccess = App.Patreon?.HasPremiumAccess == true;
@@ -4142,12 +4549,6 @@ namespace ConditioningControlPanel
 
             // Master overlay for the entire features grid
             PatreonFeaturesOverlay.Visibility = hasPremiumAccess ? Visibility.Collapsed : Visibility.Visible;
-
-            AiChatLocked.Visibility = level1Unlocked ? Visibility.Collapsed : Visibility.Visible;
-            AiChatUnlocked.Visibility = level1Unlocked ? Visibility.Visible : Visibility.Collapsed;
-
-            AwarenessLocked.Visibility = level2Unlocked ? Visibility.Collapsed : Visibility.Visible;
-            AwarenessUnlocked.Visibility = level2Unlocked ? Visibility.Visible : Visibility.Collapsed;
 
             // Haptics - unlock for all Patreon supporters
             var hasHapticsAccess = hasPremiumAccess;
@@ -4165,24 +4566,16 @@ namespace ConditioningControlPanel
             if (AutonomyLocked != null) AutonomyLocked.Visibility = hasPremiumAccess ? Visibility.Collapsed : Visibility.Visible;
             if (AutonomyUnlocked != null) AutonomyUnlocked.Visibility = hasPremiumAccess ? Visibility.Visible : Visibility.Collapsed;
 
-            // Update connection status
+            // Update AI connection status
             if (TxtAiStatus != null)
             {
-                if (!isAuthenticated)
-                {
-                    TxtAiStatus.Text = "Login with Patreon to access AI features";
-                }
-                else if (hasPremiumAccess && App.Ai?.IsAvailable == true)
+                if (App.Ai?.IsAvailable == true)
                 {
                     TxtAiStatus.Text = $"AI Ready - {App.Ai.DailyRequestsRemaining} requests remaining today";
                 }
-                else if (hasPremiumAccess)
-                {
-                    TxtAiStatus.Text = "Patreon verified - AI service ready";
-                }
                 else
                 {
-                    TxtAiStatus.Text = "Subscribe to Level 1 ($5/mo) to unlock AI Chat";
+                    TxtAiStatus.Text = "AI initializing...";
                 }
             }
 
@@ -4218,10 +4611,18 @@ namespace ConditioningControlPanel
                 // Logout
                 App.ProfileSync?.StopHeartbeat();
                 App.Patreon.Logout();
-                App.Patreon.UnifiedUserId = null;
-                App.UnifiedUserId = null;
-                UpdatePatreonUI();
-                UpdateBannerWelcomeMessage();
+                if (App.Discord?.IsAuthenticated != true)
+                {
+                    // No provider left — full logout
+                    ClearAccountData();
+                }
+                else
+                {
+                    // Discord still active — just update Patreon UI
+                    App.Patreon.UnifiedUserId = null;
+                    UpdatePatreonUI();
+                    UpdateBannerWelcomeMessage();
+                }
             }
             else
             {
@@ -4280,10 +4681,18 @@ namespace ConditioningControlPanel
             {
                 // Logout
                 App.Discord.Logout();
-                App.Discord.UnifiedUserId = null;
-                App.UnifiedUserId = null;
-                UpdateDiscordUI();
-                UpdateBannerWelcomeMessage();
+                if (App.Patreon?.IsAuthenticated != true)
+                {
+                    // No provider left — full logout
+                    ClearAccountData();
+                }
+                else
+                {
+                    // Patreon still active — just update Discord UI
+                    App.Discord.UnifiedUserId = null;
+                    UpdateDiscordUI();
+                    UpdateBannerWelcomeMessage();
+                }
             }
             else
             {
@@ -4815,7 +5224,11 @@ namespace ConditioningControlPanel
 
         private void OnPatreonTierChanged(object? sender, PatreonTier tier)
         {
-            Dispatcher.Invoke(() => UpdatePatreonUI());
+            Dispatcher.Invoke(() =>
+            {
+                UpdatePatreonUI();
+                UpdateUnlockablesVisibility(App.Settings?.Current?.PlayerLevel ?? 1);
+            });
         }
 
         private void InitializePatreonTab()
@@ -4833,13 +5246,15 @@ namespace ConditioningControlPanel
 
             // Initialize companion settings
             ChkAvatarEnabledCompanion.IsChecked = settings.AvatarEnabled;
+            ChkMuteAvatarCompanion.IsChecked = settings.AvatarMuted;
+            ChkMuteWhispersCompanion.IsChecked = !settings.SubAudioEnabled;
             ChkAiChat.IsChecked = settings.AiChatEnabled;
             SliderIdleIntervalCompanion.Value = settings.IdleGiggleIntervalSeconds;
             TxtIdleIntervalCompanion.Text = $"{settings.IdleGiggleIntervalSeconds}s";
 
-            // Awareness Mode settings (now Tier 1 / whitelisted)
-            var awarenessAvailable = App.Patreon?.HasPremiumAccess == true;
-            ChkAwarenessMode.IsChecked = awarenessAvailable && settings.AwarenessModeEnabled && settings.AwarenessConsentGiven;
+            // Awareness Mode settings (free for all users)
+            var awarenessAvailable = true;
+            ChkAwarenessMode.IsChecked = settings.AwarenessModeEnabled && settings.AwarenessConsentGiven;
             SliderAwarenessCooldown.Value = settings.AwarenessReactionCooldownSeconds;
             TxtAwarenessCooldown.Text = $"{settings.AwarenessReactionCooldownSeconds}s";
 
@@ -5034,18 +5449,6 @@ namespace ConditioningControlPanel
             if (_isLoading) return;
 
             var isEnabled = ChkAwarenessMode.IsChecked == true;
-
-            // Check Patreon access (Tier 1+ or whitelisted)
-            if (isEnabled && App.Patreon?.HasPremiumAccess != true)
-            {
-                ChkAwarenessMode.IsChecked = false;
-                MessageBox.Show(
-                    "Window Awareness requires Patreon subscription.",
-                    "Patreon Only",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-                return;
-            }
 
             // Show/hide awareness settings panel
             AwarenessSettingsPanel.Visibility = isEnabled ? Visibility.Visible : Visibility.Collapsed;
@@ -6139,6 +6542,7 @@ namespace ConditioningControlPanel
 
                 // Listen for controller connection changes
                 App.RemoteControl.ControllerConnectedChanged += OnRemoteControllerChanged;
+                App.RemoteControl.ControllerIdleChanged += OnRemoteControllerIdleChanged;
                 App.RemoteControl.CommandReceived += OnRemoteCommandReceived;
                 App.RemoteControl.SessionEnded += OnRemoteSessionEnded;
 
@@ -6226,6 +6630,7 @@ namespace ConditioningControlPanel
 
                 // Re-subscribe after restart
                 App.RemoteControl.ControllerConnectedChanged += OnRemoteControllerChanged;
+                App.RemoteControl.ControllerIdleChanged += OnRemoteControllerIdleChanged;
                 App.RemoteControl.CommandReceived += OnRemoteCommandReceived;
                 App.RemoteControl.SessionEnded += OnRemoteSessionEnded;
             }
@@ -6315,6 +6720,20 @@ namespace ConditioningControlPanel
             });
         }
 
+        private void OnRemoteControllerIdleChanged(object? sender, EventArgs e)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                var idle = App.RemoteControl?.ControllerIdle ?? false;
+                TxtRemoteOverlaySubtitle.Text = idle
+                    ? "Controller may be idle..."
+                    : "Someone else is controlling your app";
+                TxtRemoteOverlaySubtitle.Foreground = new System.Windows.Media.SolidColorBrush(
+                    idle ? System.Windows.Media.Color.FromRgb(0xFF, 0xA5, 0x00)  // orange
+                         : System.Windows.Media.Color.FromRgb(0xA0, 0xA0, 0xA0)); // gray
+            });
+        }
+
         private void OnRemoteSessionEnded(object? sender, EventArgs e)
         {
             Dispatcher.Invoke(() =>
@@ -6357,6 +6776,9 @@ namespace ConditioningControlPanel
             TxtOverlaySessionCode.Text = !string.IsNullOrEmpty(code)
                 ? $"Session: {string.Join(" ", code.ToCharArray())}"
                 : "";
+
+            // Hide browser to avoid WebView2 airspace issue (renders on top of WPF overlays)
+            BrowserContainer.Visibility = System.Windows.Visibility.Hidden;
             RemoteControlOverlay.Visibility = System.Windows.Visibility.Visible;
 
             var fadeIn = new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(300));
@@ -6373,6 +6795,8 @@ namespace ConditioningControlPanel
             fadeOut.Completed += (s, _) =>
             {
                 RemoteControlOverlay.Visibility = System.Windows.Visibility.Collapsed;
+                // Restore browser visibility now that overlay is gone
+                BrowserContainer.Visibility = System.Windows.Visibility.Visible;
             };
             RemoteControlOverlay.BeginAnimation(OpacityProperty, fadeOut);
             _remoteNotificationTimer?.Stop();
@@ -6626,6 +7050,9 @@ namespace ConditioningControlPanel
             {
                 App.Logger?.Information("[RemoteControl] Panic triggered from remote");
 
+                // Track panic press for Relapse achievement
+                App.Achievements?.TrackPanicPressed();
+
                 // Kill all audio immediately
                 App.KillAllAudio();
                 App.Autonomy?.CancelActivePulses();
@@ -6681,6 +7108,14 @@ namespace ConditioningControlPanel
             _trayIcon?.ShowWindow();
         }
 
+        /// <summary>
+        /// Called when a second instance signals this instance to show itself.
+        /// </summary>
+        public void ShowFromTray()
+        {
+            _trayIcon?.ShowWindow();
+        }
+
         #endregion
 
         private void ChkMuteAvatar_Changed(object sender, RoutedEventArgs e)
@@ -6689,6 +7124,12 @@ namespace ConditioningControlPanel
             var checkbox = sender as CheckBox;
             var isEnabled = checkbox?.IsChecked == true;
             _avatarTubeWindow?.SetMuteAvatar(isEnabled);
+
+            if (App.Settings?.Current != null)
+            {
+                App.Settings.Current.AvatarMuted = isEnabled;
+                App.Settings.Save();
+            }
         }
 
         private void ChkMuteWhispers_Changed(object sender, RoutedEventArgs e)
@@ -11304,8 +11745,17 @@ namespace ConditioningControlPanel
             if (App.Discord.IsAuthenticated)
             {
                 App.Discord.Logout();
-                UpdateDiscordTabUI();
-                UpdateDiscordUI();
+                if (App.Patreon?.IsAuthenticated != true)
+                {
+                    // No provider left — full logout
+                    ClearAccountData();
+                }
+                else
+                {
+                    // Patreon still active — just update Discord UI
+                    UpdateDiscordTabUI();
+                    UpdateDiscordUI();
+                }
             }
             else
             {
@@ -12719,6 +13169,9 @@ namespace ConditioningControlPanel
                     }
                 }
                 
+                // Track panic press for Relapse achievement
+                App.Achievements?.TrackPanicPressed();
+
                 // User manually stopping
                 if (App.Settings.Current.SchedulerEnabled && IsInScheduledTimeWindow())
                 {
@@ -13482,6 +13935,7 @@ namespace ConditioningControlPanel
             SliderPinkOpacity.Value = s.PinkFilterOpacity;
             ChkBubblesEnabled.IsChecked = s.BubblesEnabled;
             SliderBubbleFreq.Value = s.BubblesFrequency;
+            SliderBubbleVolume.Value = s.BubblesVolume;
             ChkLockCardEnabled.IsChecked = s.LockCardEnabled;
             SliderLockCardFreq.Value = s.LockCardFrequency;
             SliderLockCardRepeats.Value = s.LockCardRepeats;
@@ -13710,6 +14164,7 @@ namespace ConditioningControlPanel
             if (TxtSpiralOpacity != null) TxtSpiralOpacity.Text = $"{(int)SliderSpiralOpacity.Value}%";
             if (TxtPinkOpacity != null) TxtPinkOpacity.Text = $"{(int)SliderPinkOpacity.Value}%";
             if (TxtBubbleFreq != null) TxtBubbleFreq.Text = ((int)SliderBubbleFreq.Value).ToString();
+            if (TxtBubbleVolume != null) TxtBubbleVolume.Text = $"{(int)SliderBubbleVolume.Value}%";
             if (TxtLockCardFreq != null) TxtLockCardFreq.Text = ((int)SliderLockCardFreq.Value).ToString();
             if (TxtLockCardRepeats != null) TxtLockCardRepeats.Text = $"{(int)SliderLockCardRepeats.Value}x";
             if (TxtBouncingTextSize != null) TxtBouncingTextSize.Text = $"{(int)SliderBouncingTextSize.Value}%";
@@ -13909,6 +14364,13 @@ namespace ConditioningControlPanel
 
         private void BtnExit_Click(object sender, RoutedEventArgs e)
         {
+            if (App.Lockdown?.IsActive == true)
+            {
+                MessageBox.Show("YOU ARE IN LOCKDOWN MODE.\nTHERE IS NO ESCAPE!", "LOCKDOWN",
+                    MessageBoxButton.OK, MessageBoxImage.Stop);
+                return;
+            }
+
             if (_isRunning)
             {
                 var result = MessageBox.Show("Engine is running. Stop and exit?", "Confirm Exit",
@@ -14271,7 +14733,8 @@ namespace ConditioningControlPanel
                     Background = new SolidColorBrush(Color.FromRgb(42, 42, 74)), // #2A2A4A - matches stat pills
                     CornerRadius = new CornerRadius(10),
                     Padding = new Thickness(6, 3, 6, 3),
-                    Margin = new Thickness(0, 0, 8, 0)
+                    Margin = new Thickness(0, 0, 8, 0),
+                    ToolTip = GetBonusChipTooltip(source)
                 };
 
                 chip.Child = new TextBlock
@@ -14284,6 +14747,21 @@ namespace ConditioningControlPanel
 
                 XPBarBonusList.Children.Add(chip);
             }
+        }
+
+        private static string? GetBonusChipTooltip(string source)
+        {
+            if (source.StartsWith("Streak Power")) return "Skill tree bonus: +0.5% XP per day of consecutive use (max 15%)";
+            return source switch
+            {
+                "Sparkle Boost" => "Skill tree bonus: +10% XP from Sparkle Boost",
+                "Extra Sparkly" => "Skill tree bonus: +15% XP from Extra Sparkly (stacks with Sparkle Boost)",
+                "Maximum Sparkle" => "Skill tree bonus: +20% XP from Maximum Sparkle (stacks with other Sparkle skills)",
+                "Night Shift" => "Skill tree bonus: +50% XP for conditioning between 11 PM and 5 AM",
+                "Early Bird Bimbo" => "Skill tree bonus: +50% XP for conditioning between 5 AM and 8 AM",
+                "PINK RUSH ACTIVE!" => "Skill tree bonus: 3x XP multiplier! Random 60-second windows of boosted XP",
+                _ => null
+            };
         }
 
         /// <summary>
@@ -14513,6 +14991,10 @@ namespace ConditioningControlPanel
                 if (BrainDrainLocked != null) BrainDrainLocked.Visibility = level70Unlocked ? Visibility.Collapsed : Visibility.Visible;
                 if (BrainDrainUnlocked != null) BrainDrainUnlocked.Visibility = level70Unlocked ? Visibility.Visible : Visibility.Collapsed;
                 if (BrainDrainFeatureImage != null) SetFeatureImageBlur(BrainDrainFeatureImage, !level70Unlocked);
+
+                // Lab Tab: Requires Patreon T2 / whitelist
+                var labUnlocked = App.Patreon?.CurrentTier >= PatreonTier.Level2;
+                if (LabSmokescreen != null) LabSmokescreen.Visibility = labUnlocked ? Visibility.Collapsed : Visibility.Visible;
 
                 // Bambi Takeover: Requires Patreon (any tier)
                 var autonomyUnlocked = App.Patreon?.HasPremiumAccess == true;
@@ -14791,6 +15273,14 @@ namespace ConditioningControlPanel
                 App.Bubbles.RefreshFrequency();
             }
 
+            App.Settings.Save();
+        }
+
+        private void SliderBubbleVolume_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_isLoading || TxtBubbleVolume == null) return;
+            TxtBubbleVolume.Text = $"{(int)e.NewValue}%";
+            App.Settings.Current.BubblesVolume = (int)e.NewValue;
             App.Settings.Save();
         }
 
@@ -18405,7 +18895,7 @@ namespace ConditioningControlPanel
 
         private void BtnViewLog_Click(object sender, RoutedEventArgs e)
         {
-            var logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
+            var logPath = Path.Combine(App.UserDataPath, "logs");
             if (Directory.Exists(logPath))
             {
                 Process.Start("explorer.exe", logPath);
@@ -18805,6 +19295,13 @@ namespace ConditioningControlPanel
 
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
+            // Lockdown mode: block all close attempts
+            if (App.Lockdown?.IsActive == true)
+            {
+                e.Cancel = true;
+                return;
+            }
+
             // Only allow actual close if exit was explicitly requested
             if (_exitRequested)
             {

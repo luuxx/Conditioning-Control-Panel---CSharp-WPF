@@ -664,11 +664,6 @@
             <Setter Property="CornerRadius" Value="10"/>
             <Setter Property="Padding" Value="9"/>
             <Setter Property="Margin" Value="0,0,0,6"/>
-            <Setter Property="Effect">
-                <Setter.Value>
-                    <DropShadowEffect Color="#0A0A1E" BlurRadius="8" ShadowDepth="1" Opacity="0.25"/>
-                </Setter.Value>
-            </Setter>
         </Style>
 
         <!-- TextBox Focus Glow Style -->
@@ -1743,8 +1738,8 @@
                             </Style>
                         </ComboBox.ItemContainerStyle>
                     </ComboBox>
-                    <Button x:Name="BtnUpdateAvailable" Content="💖 v5.6.3 IS OUT! 💖"
-                            Click="BtnUpdateAvailable_Click" ToolTip="v5.5.22 - Overlay &amp; Focus Fixes"
+                    <Button x:Name="BtnUpdateAvailable" Content="💖 v5.6.8 IS OUT! 💖"
+                            Click="BtnUpdateAvailable_Click" ToolTip="v5.6.8 - Security Transparency Update"
                             FontSize="11" FontWeight="Bold" Cursor="Hand">
                         <Button.Style>
                             <Style TargetType="Button">
@@ -3749,6 +3744,19 @@
                                             ToolTip="Bubble spawn rate"/>
                                     <TextBlock x:Name="TxtBubbleFreq" Grid.Column="2" Style="{StaticResource ValueLabel}" Text="5"/>
                                 </Grid>
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="60"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="40"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource SettingLabel}" Text="Volume"
+                                               ToolTip="Volume of bubble pop sounds"/>
+                                    <Slider Grid.Column="1" x:Name="SliderBubbleVolume" Minimum="0" Maximum="100" Value="50"
+                                            Margin="10,0" ValueChanged="SliderBubbleVolume_Changed"
+                                            ToolTip="Bubble pop sound volume"/>
+                                    <TextBlock x:Name="TxtBubbleVolume" Grid.Column="2" Style="{StaticResource ValueLabel}" Text="50%"/>
+                                </Grid>
                             </StackPanel>
                             </Grid>
                             
@@ -3951,7 +3959,7 @@
 
                     <!-- Bouncing Text - Lvl 60 -->
                     <Border Background="#1E1E3A" CornerRadius="8" Padding="12" Margin="0,5"
-                            ToolTip="DVD screensaver-style bouncing text!&#x0a;Customizable phrases bounce across screen.&#x0a;Unlocks at Level 60.">
+                            ToolTip="DVD screensaver-style bouncing text!&#x0a;Customizable phrases bounce across screen.&#x0a;+25 XP per bounce (max 150 XP/min).&#x0a;Unlocks at Level 60.">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -5009,6 +5017,124 @@
                             </StackPanel>
                         </Grid>
 
+                        <!-- AI Features Section (free for all users, requires login) -->
+                        <Grid Margin="0,0,0,15">
+                        <Border Background="#1E1E3A" CornerRadius="12" Padding="15">
+                            <Border.BorderBrush>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#FF69B4" Offset="0"/>
+                                    <GradientStop Color="#9B59B6" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.BorderBrush>
+                            <Border.BorderThickness>
+                                <Thickness>1</Thickness>
+                            </Border.BorderThickness>
+                            <Border.Effect>
+                                <DropShadowEffect Color="#FF69B4" BlurRadius="15" ShadowDepth="0" Opacity="0.2"/>
+                            </Border.Effect>
+                            <StackPanel>
+                                <Grid Margin="0,0,0,10">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="AI FEATURES" Foreground="#FF69B4" FontSize="14" FontWeight="Bold" VerticalAlignment="Center"/>
+                                        <Border Background="#2A1A3A" CornerRadius="4" Padding="6,2" Margin="8,0,0,0" BorderBrush="#FF69B4" BorderThickness="1">
+                                            <TextBlock Text="Free for all users" Foreground="#FF69B4" FontSize="9"/>
+                                        </Border>
+                                    </StackPanel>
+                                    <Button x:Name="HelpBtnAiChat" Style="{StaticResource HelpButtonStyle}" HorizontalAlignment="Right" VerticalAlignment="Center" Tag="AiChat" Panel.ZIndex="1"/>
+                                </Grid>
+
+                                <!-- AI Status -->
+                                <TextBlock x:Name="TxtAiStatus" Text="AI initializing..." Foreground="#808080" FontSize="11" Margin="0,0,0,10"/>
+
+                                <!-- AI Chat Toggle -->
+                                <Grid Margin="0,0,0,8">
+                                    <StackPanel>
+                                        <TextBlock Text="Enable AI Chat" Foreground="White" FontSize="12"/>
+                                        <TextBlock Text="Double-click avatar to chat" Foreground="#808080" FontSize="10"/>
+                                    </StackPanel>
+                                    <CheckBox x:Name="ChkAiChat" Style="{StaticResource ToggleStyle}"
+                                              HorizontalAlignment="Right" VerticalAlignment="Center"
+                                              IsChecked="True"
+                                              Checked="ChkAiChat_Changed" Unchecked="ChkAiChat_Changed"/>
+                                </Grid>
+
+                                <!-- Window Awareness -->
+                                <Border BorderBrush="#353550" BorderThickness="0,1,0,0" Margin="0,4,0,0" Padding="0,10,0,0">
+                                    <StackPanel>
+                                        <Grid>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="Window Awareness" Foreground="White" FontWeight="Bold" FontSize="13"/>
+                                                <Button x:Name="HelpBtnAwareness" Style="{StaticResource HelpButtonStyle}" VerticalAlignment="Center" Margin="8,0,0,0" Tag="WindowAwareness" Panel.ZIndex="1"/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- Awareness Mode Toggle -->
+                                        <Grid Margin="0,8,0,0">
+                                            <StackPanel>
+                                                <TextBlock Text="Enable Awareness" Foreground="White" FontSize="12"/>
+                                                <TextBlock Text="Reacts to your activity" Foreground="#808080" FontSize="10"/>
+                                            </StackPanel>
+                                            <CheckBox x:Name="ChkAwarenessMode" Style="{StaticResource ToggleStyle}"
+                                                      HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                      IsChecked="False"
+                                                      Checked="ChkAwarenessMode_Changed" Unchecked="ChkAwarenessMode_Changed"/>
+                                        </Grid>
+
+                                        <!-- Privacy Warning -->
+                                        <Border Background="#2A1A1A" CornerRadius="6" Padding="8" Margin="0,8,0,0" BorderBrush="#FF6B6B" BorderThickness="1">
+                                            <StackPanel>
+                                                <Grid>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="⚠️" FontSize="12" VerticalAlignment="Center"/>
+                                                        <TextBlock Text=" Privacy Notice" Foreground="#FF6B6B" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                    <Button x:Name="BtnPrivacySpoiler" Content="▶ Click to reveal"
+                                                            Background="Transparent" Foreground="#808080" BorderThickness="0"
+                                                            HorizontalAlignment="Right" FontSize="10" Cursor="Hand"
+                                                            Click="BtnPrivacySpoiler_Click"/>
+                                                </Grid>
+                                                <TextBlock x:Name="TxtPrivacyDetails" Visibility="Collapsed"
+                                                           TextWrapping="Wrap" Foreground="#CCCCCC" FontSize="10" Margin="0,8,0,0"
+                                                           Text="This feature reads the name of the active window and browser tab, tracks how long you've been on that window, and uses this information to generate AI responses. Data is sent to our secure proxy server for processing. No data is stored permanently."/>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Awareness Settings (shown when enabled) -->
+                                <Border x:Name="AwarenessSettingsPanel" Background="#1A1A32" CornerRadius="6" Padding="10" Margin="0,8,0,0" Visibility="Collapsed">
+                                    <StackPanel>
+                                        <TextBlock Text="Awareness Settings" Foreground="#FF69B4" FontSize="12" FontWeight="Bold" Margin="0,0,0,8"/>
+                                        <Grid>
+                                            <TextBlock Text="Reaction Cooldown" Foreground="White" FontSize="11"/>
+                                            <TextBlock x:Name="TxtAwarenessCooldown" Text="90s" Foreground="#FF69B4"
+                                                       HorizontalAlignment="Right" FontSize="11" FontWeight="Bold"/>
+                                        </Grid>
+                                        <Slider x:Name="SliderAwarenessCooldown"
+                                                Style="{StaticResource PinkSlider}"
+                                                Minimum="10" Maximum="300" Value="90"
+                                                Margin="0,6,0,0"
+                                                ValueChanged="SliderAwarenessCooldown_ValueChanged"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- AI Features Lock Overlay (shown when not logged in) -->
+                        <Border x:Name="AiFeaturesLockOverlay" Background="#CC1A1A2E" CornerRadius="12" Panel.ZIndex="100">
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="0,15">
+                                <TextBlock Text="🔒" FontSize="32" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                                <TextBlock Text="Login Required" Foreground="#FF69B4" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center">
+                                    <TextBlock.Effect>
+                                        <DropShadowEffect Color="#FF69B4" BlurRadius="15" ShadowDepth="0" Opacity="0.5"/>
+                                    </TextBlock.Effect>
+                                </TextBlock>
+                                <TextBlock Text="Login with Discord or Patreon to use AI features"
+                                           Foreground="#AAAAAA" FontSize="12" HorizontalAlignment="Center" Margin="0,6,0,0" TextWrapping="Wrap" TextAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                        </Grid>
+
                         <!-- ROW 1: Companions + Community Prompts -->
                         <Grid Margin="0,0,0,10">
                             <Grid.ColumnDefinitions>
@@ -5776,7 +5902,7 @@
                                         <DropShadowEffect Color="#FF69B4" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
                                     </TextBlock.Effect>
                                 </TextBlock>
-                                <TextBlock Text="Support on Patreon to unlock AI Companion, Window Awareness, Haptics, and more"
+                                <TextBlock Text="Support on Patreon to unlock Autonomy, Remote Control, Keyword Triggers, Haptics, and more"
                                            Foreground="#AAAAAA" FontSize="13" HorizontalAlignment="Center" Margin="0,10,0,0" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="400"/>
                                 <Button Content="Visit Patreon" Background="#FF424D" Foreground="White"
                                         BorderThickness="0" Padding="20,10" Margin="0,18,0,0"
@@ -5810,121 +5936,8 @@
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
 
-                            <!-- Row 0, Col 0: AI Companion -->
+                            <!-- Row 0, Col 0: Bambi Takeover -->
                             <Expander Grid.Row="0" Grid.Column="0" Style="{StaticResource ExclusivesSectionExpander}">
-                                <Expander.Header>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="🤖 AI Companion" Foreground="White" FontSize="14" FontWeight="Bold"/>
-                                    </StackPanel>
-                                </Expander.Header>
-                                <StackPanel>
-                                    <Grid>
-                                        <Button x:Name="HelpBtnAiChat" Style="{StaticResource HelpButtonStyle}" HorizontalAlignment="Right" VerticalAlignment="Top" Tag="AiChat" Panel.ZIndex="1"/>
-                                    </Grid>
-                                    <!-- Locked State -->
-                                    <StackPanel x:Name="AiChatLocked" Visibility="Collapsed">
-                                        <Grid>
-                                            <TextBlock Text="AI Companion Chat" Foreground="#666666" FontWeight="Bold" FontSize="13"/>
-                                            <TextBlock Text="🔒 Patreon" Foreground="#9B59B6" HorizontalAlignment="Right" FontSize="11"/>
-                                        </Grid>
-                                        <TextBlock Text="Support on Patreon to unlock AI-powered conversations"
-                                                   Foreground="{StaticResource PinkBrush}" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>
-                                    </StackPanel>
-
-                                    <!-- Unlocked State -->
-                                    <StackPanel x:Name="AiChatUnlocked" Visibility="Visible">
-                                        <Grid>
-                                            <TextBlock Text="AI Companion Chat" Foreground="White" FontWeight="Bold" FontSize="13"/>
-                                            <TextBlock Text="Unlocked" Foreground="#00E676" HorizontalAlignment="Right" FontSize="11"/>
-                                        </Grid>
-
-                                        <!-- AI Chat Toggle -->
-                                        <Grid Margin="0,10,0,0">
-                                            <StackPanel>
-                                                <TextBlock Text="Enable AI Chat" Foreground="White" FontSize="12"/>
-                                                <TextBlock Text="Double-click avatar to chat" Foreground="#808080" FontSize="10"/>
-                                            </StackPanel>
-                                            <CheckBox x:Name="ChkAiChat" Style="{StaticResource ToggleStyle}"
-                                                      HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                      IsChecked="True"
-                                                      Checked="ChkAiChat_Changed" Unchecked="ChkAiChat_Changed"/>
-                                        </Grid>
-                                    </StackPanel>
-
-                                    <!-- Window Awareness -->
-                                    <Border BorderBrush="#353550" BorderThickness="0,1,0,0" Margin="0,12,0,0" Padding="0,10,0,0">
-                                        <!-- Locked State -->
-                                        <StackPanel x:Name="AwarenessLocked" Visibility="Collapsed">
-                                            <Grid>
-                                                <TextBlock Text="Window Awareness" Foreground="#666666" FontWeight="Bold" FontSize="13"/>
-                                                <TextBlock Text="🔒 Patreon" Foreground="#9B59B6" HorizontalAlignment="Right" FontSize="11"/>
-                                            </Grid>
-                                            <TextBlock Text="Support on Patreon to unlock smart activity detection"
-                                                       Foreground="{StaticResource PinkBrush}" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>
-                                        </StackPanel>
-                                    </Border>
-                                    <StackPanel x:Name="AwarenessUnlocked" Visibility="Visible">
-                                        <Grid>
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="Window Awareness" Foreground="White" FontWeight="Bold" FontSize="13"/>
-                                                <Button x:Name="HelpBtnAwareness" Style="{StaticResource HelpButtonStyle}" VerticalAlignment="Center" Margin="8,0,0,0" Tag="WindowAwareness" Panel.ZIndex="1"/>
-                                            </StackPanel>
-                                            <TextBlock Text="Unlocked" Foreground="#00E676" HorizontalAlignment="Right" FontSize="11"/>
-                                        </Grid>
-
-                                        <!-- Awareness Mode Toggle -->
-                                        <Grid Margin="0,8,0,0">
-                                            <StackPanel>
-                                                <TextBlock Text="Enable Awareness" Foreground="White" FontSize="12"/>
-                                                <TextBlock Text="Reacts to your activity" Foreground="#808080" FontSize="10"/>
-                                            </StackPanel>
-                                            <CheckBox x:Name="ChkAwarenessMode" Style="{StaticResource ToggleStyle}"
-                                                      HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                      IsChecked="False"
-                                                      Checked="ChkAwarenessMode_Changed" Unchecked="ChkAwarenessMode_Changed"/>
-                                        </Grid>
-
-                                        <!-- Privacy Warning -->
-                                        <Border Background="#2A1A1A" CornerRadius="6" Padding="8" Margin="0,8,0,0" BorderBrush="#FF6B6B" BorderThickness="1">
-                                            <StackPanel>
-                                                <Grid>
-                                                    <StackPanel Orientation="Horizontal">
-                                                        <TextBlock Text="⚠️" FontSize="12" VerticalAlignment="Center"/>
-                                                        <TextBlock Text=" Privacy Notice" Foreground="#FF6B6B" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
-                                                    </StackPanel>
-                                                    <Button x:Name="BtnPrivacySpoiler" Content="▶ Click to reveal"
-                                                            Background="Transparent" Foreground="#808080" BorderThickness="0"
-                                                            HorizontalAlignment="Right" FontSize="10" Cursor="Hand"
-                                                            Click="BtnPrivacySpoiler_Click"/>
-                                                </Grid>
-                                                <TextBlock x:Name="TxtPrivacyDetails" Visibility="Collapsed"
-                                                           TextWrapping="Wrap" Foreground="#CCCCCC" FontSize="10" Margin="0,8,0,0"
-                                                           Text="This feature reads the name of the active window and browser tab, tracks how long you've been on that window, and uses this information to generate AI responses. Data is sent to our secure proxy server for processing. No data is stored permanently."/>
-                                            </StackPanel>
-                                        </Border>
-                                    </StackPanel>
-
-                                    <!-- Awareness Settings (shown when enabled) -->
-                                    <Border x:Name="AwarenessSettingsPanel" Background="#1A1A32" CornerRadius="6" Padding="10" Margin="0,8,0,0" Visibility="Collapsed">
-                                        <StackPanel>
-                                            <TextBlock Text="Awareness Settings" Foreground="#FF69B4" FontSize="12" FontWeight="Bold" Margin="0,0,0,8"/>
-                                            <Grid>
-                                                <TextBlock Text="Reaction Cooldown" Foreground="White" FontSize="11"/>
-                                                <TextBlock x:Name="TxtAwarenessCooldown" Text="90s" Foreground="#FF69B4"
-                                                           HorizontalAlignment="Right" FontSize="11" FontWeight="Bold"/>
-                                            </Grid>
-                                            <Slider x:Name="SliderAwarenessCooldown"
-                                                    Style="{StaticResource PinkSlider}"
-                                                    Minimum="10" Maximum="300" Value="90"
-                                                    Margin="0,6,0,0"
-                                                    ValueChanged="SliderAwarenessCooldown_ValueChanged"/>
-                                        </StackPanel>
-                                    </Border>
-                                </StackPanel>
-                            </Expander>
-
-                            <!-- Row 0, Col 2: Bambi Takeover -->
-                            <Expander Grid.Row="0" Grid.Column="2" Style="{StaticResource ExclusivesSectionExpander}">
                                 <Expander.Header>
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock x:Name="TxtTakeoverHeader" Text="🤖 Bambi Takeover" Foreground="White" FontSize="14" FontWeight="Bold"/>
@@ -6056,8 +6069,8 @@
                                 </StackPanel>
                             </Expander>
 
-                            <!-- Row 1, Col 0: Remote Control -->
-                            <Expander Grid.Row="1" Grid.Column="0" Style="{StaticResource ExclusivesSectionExpander}">
+                            <!-- Row 0, Col 2: Remote Control -->
+                            <Expander Grid.Row="0" Grid.Column="2" Style="{StaticResource ExclusivesSectionExpander}">
                                 <Expander.Header>
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="🎮 Remote Control" Foreground="White" FontSize="14" FontWeight="Bold"/>
@@ -6066,8 +6079,9 @@
                                 <StackPanel>
                                     <!-- Header row with toggle -->
                                     <Grid Margin="0,0,0,10">
-                                        <TextBlock Text="Allow another person to remotely trigger actions on your app via a mobile-friendly webpage."
-                                                   Foreground="#808080" FontSize="11" TextWrapping="Wrap"/>
+                                        <TextBlock Foreground="#808080" FontSize="11" TextWrapping="Wrap">
+                                            <Run Text="Hand over control to someone you trust. They get a mobile-friendly control panel to trigger flashes, videos, overlays, haptics, and more on your screen in real time. Choose a permission tier to set boundaries. You always keep the panic button."/>
+                                        </TextBlock>
                                     </Grid>
                                     <Grid Margin="0,0,0,10">
                                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
@@ -6146,8 +6160,8 @@
                                 </StackPanel>
                             </Expander>
 
-                            <!-- Row 1, Col 2: Keyword Triggers -->
-                            <Expander Grid.Row="1" Grid.Column="2" Style="{StaticResource ExclusivesSectionExpander}">
+                            <!-- Row 1, Col 0: Keyword Triggers -->
+                            <Expander Grid.Row="1" Grid.Column="0" Style="{StaticResource ExclusivesSectionExpander}">
                                 <Expander.Header>
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="⌨️ Keyword Triggers" Foreground="White" FontSize="14" FontWeight="Bold"/>
@@ -6172,8 +6186,9 @@
                                         </StackPanel>
                                     </Grid>
 
-                                    <TextBlock Text="Type keywords anywhere on your computer to trigger audio, visuals, and haptics"
-                                               Foreground="#808080" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                    <TextBlock Foreground="#808080" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap">
+                                            <Run Text="Your everyday typing becomes part of your conditioning. Add trigger words that fire audio, visuals, or haptic responses whenever you type them — anywhere on your computer. Enable Screen OCR to react to words you see on screen too."/>
+                                        </TextBlock>
 
                                     <!-- Settings panel -->
                                     <StackPanel x:Name="KeywordTriggersSettingsPanel" Margin="0,10,0,0">
@@ -6305,7 +6320,7 @@
                                 </StackPanel>
                             </Expander>
 
-                            <!-- Row 2, Col 0-2: Haptic Feedback (full width) -->
+                            <!-- Row 2, Full Width: Haptic Feedback -->
                             <Expander Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Style="{StaticResource ExclusivesSectionExpander}">
                                 <Expander.Header>
                                     <StackPanel Orientation="Horizontal">
@@ -6970,22 +6985,6 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Patreon Status -->
-                        <Border CornerRadius="10" Padding="15" Margin="0,10,0,0">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                    <GradientStop Color="#1A1A2E" Offset="0"/>
-                                    <GradientStop Color="#1E1E3A" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
-                            <Border.Effect>
-                                <DropShadowEffect Color="#FF69B4" BlurRadius="15" ShadowDepth="0" Opacity="0.2"/>
-                            </Border.Effect>
-                            <StackPanel>
-                                <TextBlock Text="Connection Status" Foreground="#FF69B4" FontSize="14" FontWeight="Bold"/>
-                                <TextBlock x:Name="TxtAiStatus" Text="Not connected" Foreground="#808080" FontSize="12" Margin="0,5,0,0"/>
-                            </StackPanel>
-                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </Border>
@@ -7325,25 +7324,157 @@
         </ContentControl>
         <!-- Lab Tab -->
         <ContentControl x:Name="LabTab" Grid.Row="4" Margin="10,5,10,10" Visibility="Collapsed" Template="{StaticResource AnimatedTabBackground}">
-            <Border Style="{StaticResource SectionPanel}">
-                <Grid VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="40">
-                        <TextBlock Text="🧪" FontSize="48" HorizontalAlignment="Center" Margin="0,0,0,15"/>
-                        <TextBlock Text="The Lab" Foreground="White" FontSize="26" FontWeight="Bold" HorizontalAlignment="Center">
-                            <TextBlock.Effect>
-                                <DropShadowEffect Color="#00FF88" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
-                            </TextBlock.Effect>
-                        </TextBlock>
-                        <TextBlock Text="new testing features coming soon :3" Foreground="#666680" FontSize="14"
-                                   HorizontalAlignment="Center" Margin="0,8,0,0" FontStyle="Italic"/>
-                        <Border Background="#1E1E3A" CornerRadius="10" Padding="20,12" Margin="0,25,0,0"
-                                BorderBrush="#00FF88" BorderThickness="1" Opacity="0.6">
-                            <TextBlock Text="This is where experimental features will live before they graduate to the main app."
-                                       Foreground="#808080" FontSize="11" TextWrapping="Wrap" HorizontalAlignment="Center" TextAlignment="Center"/>
+            <Grid>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="20">
+                    <!-- Header -->
+                    <TextBlock Text="The Lab" Foreground="White" FontSize="24" FontWeight="Bold" Margin="0,0,0,4">
+                        <TextBlock.Effect>
+                            <DropShadowEffect Color="#00FF88" BlurRadius="20" ShadowDepth="0" Opacity="0.5"/>
+                        </TextBlock.Effect>
+                    </TextBlock>
+                    <TextBlock Text="Experimental features and special modes" Foreground="#666680" FontSize="12" Margin="0,0,0,16"/>
+
+                    <!-- 2x2 Modes Grid -->
+                    <UniformGrid Rows="2" Columns="2">
+                        <!-- Lockdown Mode Card -->
+                        <Border x:Name="LockdownCardBorder" CornerRadius="12" Margin="6" Padding="15">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#1A1A32" Offset="0"/>
+                                    <GradientStop Color="#201A38" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <Border.BorderBrush>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#FF69B4" Offset="0"/>
+                                    <GradientStop Color="#9B59B6" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.BorderBrush>
+                            <Border.BorderThickness>
+                                <Thickness>2</Thickness>
+                            </Border.BorderThickness>
+                            <StackPanel>
+                                <Border x:Name="LockdownImageBorder" CornerRadius="10" Margin="0,0,0,12"
+                                        BorderThickness="2" ClipToBounds="True">
+                                    <Border.Background>
+                                        <SolidColorBrush Color="#12FFFFFF"/>
+                                    </Border.Background>
+                                    <Border.BorderBrush>
+                                        <SolidColorBrush x:Name="LockdownImageBorderBrush" Color="#FF1493"/>
+                                    </Border.BorderBrush>
+                                    <Border.Effect>
+                                        <DropShadowEffect x:Name="LockdownImageGlow" Color="#FF1493" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
+                                    </Border.Effect>
+                                    <Border.Triggers>
+                                        <EventTrigger RoutedEvent="Border.Loaded">
+                                            <BeginStoryboard>
+                                                <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                    <ColorAnimation Storyboard.TargetName="LockdownImageBorderBrush"
+                                                                    Storyboard.TargetProperty="Color"
+                                                                    From="#FF1493" To="#FF69B4" Duration="0:0:1.5"/>
+                                                    <DoubleAnimation Storyboard.TargetName="LockdownImageGlow"
+                                                                     Storyboard.TargetProperty="BlurRadius"
+                                                                     From="12" To="22" Duration="0:0:1.5"/>
+                                                    <DoubleAnimation Storyboard.TargetName="LockdownImageGlow"
+                                                                     Storyboard.TargetProperty="Opacity"
+                                                                     From="0.7" To="1.0" Duration="0:0:1.5"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </EventTrigger>
+                                    </Border.Triggers>
+                                    <Image Source="Resources/lockdown_icon.png" Stretch="Uniform"
+                                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                                </Border>
+                                <TextBlock Text="Lockdown Mode" Foreground="White" FontWeight="Bold" FontSize="16" Margin="0,0,0,6"/>
+                                <TextBlock Text="Lock yourself into a timed conditioning session. No escape until the timer runs out."
+                                           Foreground="#808090" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                                <!-- Setup Panel (visible when lockdown is NOT active) -->
+                                <StackPanel x:Name="LockdownSetupPanel">
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                        <TextBlock Text="Duration:" Foreground="#808090" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <ComboBox x:Name="CmbLockdownDuration" Width="120" SelectedIndex="1"
+                                                  Background="#1A1A2E" Foreground="Black" FontSize="12" BorderBrush="#404060">
+                                            <ComboBoxItem Content="5 minutes" Tag="5" Foreground="Black"/>
+                                            <ComboBoxItem Content="10 minutes" Tag="10" Foreground="Black"/>
+                                            <ComboBoxItem Content="15 minutes" Tag="15" Foreground="Black"/>
+                                            <ComboBoxItem Content="30 minutes" Tag="30" Foreground="Black"/>
+                                            <ComboBoxItem Content="60 minutes" Tag="60" Foreground="Black"/>
+                                            <ComboBoxItem Content="2 hours" Tag="120" Foreground="Black"/>
+                                            <ComboBoxItem Content="4 hours" Tag="240" Foreground="Black"/>
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <Button x:Name="BtnActivateLockdown" Content="Activate" Cursor="Hand"
+                                            Background="#FF69B4" Foreground="White" FontWeight="Bold" FontSize="12"
+                                            BorderThickness="0" Padding="12,8" HorizontalAlignment="Left"
+                                            Click="BtnActivateLockdown_Click">
+                                        <Button.Resources>
+                                            <Style TargetType="Border">
+                                                <Setter Property="CornerRadius" Value="8"/>
+                                            </Style>
+                                        </Button.Resources>
+                                    </Button>
+                                </StackPanel>
+
+                                <!-- Active Panel (visible when lockdown IS active) -->
+                                <StackPanel x:Name="LockdownActivePanel" Visibility="Collapsed">
+                                    <TextBlock Text="LOCKDOWN ACTIVE" Foreground="#DC143C" FontWeight="Bold" FontSize="14" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="TxtLockdownTimer" Text="00:00" Foreground="#DC143C" FontWeight="Bold" FontSize="28"
+                                               Margin="0,0,0,6" Cursor="Hand" MouseLeftButtonDown="TxtLockdownTimer_Click"/>
+                                    <TextBox x:Name="TxtLockdownExit" Visibility="Collapsed"
+                                             Background="#1A0A0A" Foreground="#DC143C" BorderBrush="#DC143C" BorderThickness="1"
+                                             FontSize="12" Padding="6,4" Margin="0,6,0,0"
+                                             KeyDown="TxtLockdownExit_KeyDown"/>
+                                </StackPanel>
+                            </StackPanel>
                         </Border>
+
+                        <!-- Placeholder Card 2 -->
+                        <Border Background="#12FFFFFF" CornerRadius="12" Margin="6" BorderBrush="#404060" BorderThickness="1">
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock Text="🔒" FontSize="32" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                                <TextBlock Text="Coming Soon" Foreground="#505070" FontSize="14" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Placeholder Card 3 -->
+                        <Border Background="#12FFFFFF" CornerRadius="12" Margin="6" BorderBrush="#404060" BorderThickness="1">
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock Text="🔒" FontSize="32" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                                <TextBlock Text="Coming Soon" Foreground="#505070" FontSize="14" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Placeholder Card 4 -->
+                        <Border Background="#12FFFFFF" CornerRadius="12" Margin="6" BorderBrush="#404060" BorderThickness="1">
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock Text="🔒" FontSize="32" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                                <TextBlock Text="Coming Soon" Foreground="#505070" FontSize="14" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Lab Smokescreen Overlay (Patreon T2 / Whitelist gate) -->
+            <Border x:Name="LabSmokescreen" Background="#CC1A1A2E" IsHitTestVisible="True" Visibility="Visible">
+                <Border Background="#20FFFFFF" CornerRadius="16" Padding="32,28" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        MaxWidth="360" BorderBrush="#60FF69B4" BorderThickness="1.5">
+                    <Border.Effect>
+                        <DropShadowEffect Color="#FF69B4" BlurRadius="30" ShadowDepth="0" Opacity="0.3"/>
+                    </Border.Effect>
+                    <StackPanel HorizontalAlignment="Center">
+                        <TextBlock Text="&#x1F512;" FontSize="36" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                        <Border Background="#30FF69B4" CornerRadius="8" Padding="12,4" HorizontalAlignment="Center" Margin="0,0,0,12">
+                            <TextBlock Text="Beta Testing" Foreground="#FF69B4" FontWeight="Bold" FontSize="14"/>
+                        </Border>
+                        <TextBlock Text="These experimental features are currently being tested by Patreon supporters."
+                                   Foreground="#B0B0C8" FontSize="13" TextWrapping="Wrap" TextAlignment="Center" LineHeight="20" Margin="0,0,0,4"/>
                     </StackPanel>
-                </Grid>
+                </Border>
             </Border>
+            </Grid>
         </ContentControl>
 
         <!-- Leaderboard Tab -->
@@ -8288,7 +8419,7 @@
                     <TextBlock x:Name="TxtOverlaySessionCode" Text="" Foreground="#808080" FontSize="18"
                                FontFamily="Consolas" HorizontalAlignment="Center" Margin="0,0,0,16"/>
 
-                    <TextBlock Text="Someone else is controlling your app" Foreground="#A0A0A0" FontSize="14"
+                    <TextBlock x:Name="TxtRemoteOverlaySubtitle" Text="Someone else is controlling your app" Foreground="#A0A0A0" FontSize="14"
                                HorizontalAlignment="Center" Margin="0,0,0,24"/>
 
                     <!-- Session info card — always visible -->

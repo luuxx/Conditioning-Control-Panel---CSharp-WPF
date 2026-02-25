@@ -22,18 +22,43 @@ namespace ConditioningControlPanel.Services
         /// <summary>
         /// Current application version - UPDATE THIS WHEN BUMPING VERSION
         /// </summary>
-        public const string AppVersion = "5.6.3";
+        public const string AppVersion = "5.6.8";
 
         /// <summary>
         /// Patch notes for the current version - UPDATE THIS WHEN BUMPING VERSION
         /// These are shown in the update dialog and can be used when GitHub release notes are unavailable.
         /// </summary>
-        public const string CurrentPatchNotes = @"v5.6.3 - Privacy & Data Export
+        public const string CurrentPatchNotes = @"v5.6.8 - Security Transparency Update
 
-🔒 PRIVACY
-• Added in-app Data Export button (download all your cloud data as JSON)
-• Added in-app Privacy Policy link
-• Account deletion now cleans up all associated data including settings backups";
+🛡️ SECURITY FIXES
+• All server endpoints now require authenticated sessions
+• Remote session endpoints secured with full auth validation
+• Admin endpoints hardened with timing-safe token verification
+• Rate limiting and request monitoring on all routes
+• CORS restricted to known origins
+• Request body size limits enforced
+
+🔒 DATA PRIVACY
+• All stored email addresses replaced with secure hashes
+• Whitelist migrated from source code to encrypted database
+• Git history scrubbed of any accidentally committed data
+• All server credentials rotated
+• Added Terms of Service page
+
+🛠️ FIXES & IMPROVEMENTS
+• Bubble pop volume slider added
+• Session subliminal phrases now respect content mode
+• Flash/video windows no longer steal focus
+• Fixed Knowledge Link dialog buttons being cut off
+• Fixed progress reset on login (cloud profile now loads before syncing)
+• Fixed remote control sessions failing (missing auth token after security hardening)
+• Restored server.js after git history cleanup
+
+📝 A security researcher publicly disclosed several vulnerabilities
+in CCP. The concerns were valid — endpoints lacked proper auth,
+some data was committed to git history, and admin access wasn't
+properly secured. Everything was patched within 24 hours. Full
+details in the Discord announcement and on our website.";
 
         private const string GitHubOwner = "CodeBambi";
         private const string GitHubRepo = "Conditioning-Control-Panel---CSharp-WPF";

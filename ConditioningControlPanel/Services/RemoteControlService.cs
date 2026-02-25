@@ -39,8 +39,10 @@ namespace ConditioningControlPanel.Services
         public string? SessionCode { get; private set; }
         public string? Tier { get; private set; }
         public bool ControllerConnected { get; private set; }
+        public bool ControllerIdle { get; private set; }
 
         public event EventHandler? ControllerConnectedChanged;
+        public event EventHandler? ControllerIdleChanged;
         public event EventHandler<string>? CommandReceived;
         public event EventHandler? SessionStarted;
         public event EventHandler? SessionEnded;
@@ -61,6 +63,22 @@ namespace ConditioningControlPanel.Services
         }
 
         /// <summary>
+        /// Creates a POST request with the X-Auth-Token header attached.
+        /// All V2 endpoints require authentication.
+        /// </summary>
+        private async Task<HttpResponseMessage> AuthPostAsync(string url, string jsonBody)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(jsonBody, Encoding.UTF8, "application/json")
+            };
+            var token = App.Settings?.Current?.AuthToken;
+            if (!string.IsNullOrEmpty(token))
+                request.Headers.Add("X-Auth-Token", token);
+            return await _httpClient.SendAsync(request);
+        }
+
+        /// <summary>
         /// Starts a remote control session with the given tier.
         /// </summary>
         public async Task<string?> StartSessionAsync(string tier)
@@ -75,9 +93,7 @@ namespace ConditioningControlPanel.Services
             try
             {
                 var body = JsonConvert.SerializeObject(new { unified_id = unifiedId, tier });
-                var response = await _httpClient.PostAsync(
-                    $"{ProxyBaseUrl}/v2/remote/start",
-                    new StringContent(body, Encoding.UTF8, "application/json"));
+                var response = await AuthPostAsync($"{ProxyBaseUrl}/v2/remote/start", body);
 
                 var json = await response.Content.ReadAsStringAsync();
                 if (!response.IsSuccessStatusCode)
@@ -124,9 +140,7 @@ namespace ConditioningControlPanel.Services
                 try
                 {
                     var body = JsonConvert.SerializeObject(new { unified_id = unifiedId });
-                    await _httpClient.PostAsync(
-                        $"{ProxyBaseUrl}/v2/remote/stop",
-                        new StringContent(body, Encoding.UTF8, "application/json"));
+                    await AuthPostAsync($"{ProxyBaseUrl}/v2/remote/stop", body);
                 }
                 catch (Exception ex)
                 {
@@ -145,6 +159,7 @@ namespace ConditioningControlPanel.Services
             IsActive = false;
             SessionCode = null;
             Tier = null;
+            ControllerIdle = false;
 
             // Stop all effects that were triggered by the remote controller
             if (System.Windows.Application.Current?.Dispatcher != null)
@@ -175,9 +190,7 @@ namespace ConditioningControlPanel.Services
             try
             {
                 var body = JsonConvert.SerializeObject(new { unified_id = unifiedId });
-                var response = await _httpClient.PostAsync(
-                    $"{ProxyBaseUrl}/v2/remote/poll",
-                    new StringContent(body, Encoding.UTF8, "application/json"));
+                var response = await AuthPostAsync($"{ProxyBaseUrl}/v2/remote/poll", body);
 
                 if (!response.IsSuccessStatusCode)
                 {
@@ -193,7 +206,11 @@ namespace ConditioningControlPanel.Services
                 var json = await response.Content.ReadAsStringAsync();
                 var result = JObject.Parse(json);
 
-                // Update controller connection status
+                // Update controller connection status.
+                // The server only sets controller_connected=false on explicit disconnect
+                // (POST /remote/disconnect), NOT on ping staleness. This means the controller
+                // stays "connected" even if idle for long periods — which is correct for
+                // sessions that last hours with 10-20+ min idle stretches.
                 var connected = result["controller_connected"]?.Value<bool>() ?? false;
                 if (connected != ControllerConnected)
                 {
@@ -209,10 +226,18 @@ namespace ConditioningControlPanel.Services
                     }
                     else
                     {
-                        // Controller disconnected — stop all effects they triggered
+                        // Controller explicitly disconnected — stop all effects
                         StopAllRemoteEffects();
                     }
                     ControllerConnectedChanged?.Invoke(this, EventArgs.Empty);
+                }
+
+                // Track idle status for UI purposes (controller still connected but not actively pinging)
+                var idle = result["controller_idle"]?.Value<bool>() ?? false;
+                if (idle != ControllerIdle)
+                {
+                    ControllerIdle = idle;
+                    ControllerIdleChanged?.Invoke(this, EventArgs.Empty);
                 }
 
                 // Execute commands
@@ -285,9 +310,7 @@ namespace ConditioningControlPanel.Services
                     session_info = sessionInfo
                 });
 
-                await _httpClient.PostAsync(
-                    $"{ProxyBaseUrl}/v2/remote/status",
-                    new StringContent(body, Encoding.UTF8, "application/json"));
+                await AuthPostAsync($"{ProxyBaseUrl}/v2/remote/status", body);
             }
             catch (Exception ex)
             {

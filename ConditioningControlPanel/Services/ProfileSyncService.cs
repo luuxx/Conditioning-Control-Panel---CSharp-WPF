@@ -1406,6 +1406,8 @@ namespace ConditioningControlPanel.Services
             nameof(AppSettings.PatreonPremiumValidUntil),
             nameof(AppSettings.LastPatreonVerification),
             nameof(AppSettings.AuthToken),
+            nameof(AppSettings.CustomAssetsPath),
+            nameof(AppSettings.DiscordWebhookUrl),
         };
 
         /// <summary>
@@ -1620,9 +1622,6 @@ namespace ConditioningControlPanel.Services
 
             [JsonProperty("user_id")]
             public string? UserId { get; set; }
-
-            [JsonProperty("patron_name")]
-            public string? PatronName { get; set; }
 
             [JsonProperty("profile")]
             public CloudProfile? Profile { get; set; }

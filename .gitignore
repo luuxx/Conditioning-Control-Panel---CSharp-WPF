@@ -84,3 +84,31 @@ installer-output/
 
 # Admin reference (local only)
 ADMIN_ENDPOINTS.md
+
+# Sensitive files (admin tokens, config payloads)
+marquee.json
+banner.json
+update-marquee.ps1
+
+# Backup files (contain user data)
+backup_*.json
+*leaderboard*.json
+lb_*.json
+
+# Temp scripts and data dumps (often contain tokens/PII)
+tmp_*
+find_*.js
+merge_*.js
+fix_*.js
+scan_*.js
+bulk_*.js
+cleanup_*.js
+investigate_*.js
+check_*.js
+reset_*.js
+set_force_*.js
+
+# Environment and secrets
+*.env
+*.env.*
+nul

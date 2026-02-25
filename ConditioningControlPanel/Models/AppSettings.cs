@@ -1825,6 +1825,13 @@ namespace ConditioningControlPanel.Models
             set { _slutModeEnabled = value; OnPropertyChanged(); }
         }
 
+        private bool _avatarMuted = false;
+        public bool AvatarMuted
+        {
+            get => _avatarMuted;
+            set { _avatarMuted = value; OnPropertyChanged(); }
+        }
+
         private CompanionPromptSettings _companionPrompt = new();
         /// <summary>
         /// Custom AI companion prompt settings. Allows users to customize personality,
@@ -2328,15 +2335,15 @@ namespace ConditioningControlPanel.Models
             set { _unifiedId = value; OnPropertyChanged(); }
         }
 
-        private string? _authToken = null;
         /// <summary>
         /// Server-issued auth token for V2 API requests. Rotated on each auth event.
+        /// Stored in DPAPI-encrypted file, NOT in settings.json.
         /// </summary>
-        [JsonProperty("auth_token")]
+        [JsonIgnore]
         public string? AuthToken
         {
-            get => _authToken;
-            set { _authToken = value; OnPropertyChanged(); }
+            get => Services.SecureAuthTokenStore.Retrieve();
+            set { Services.SecureAuthTokenStore.Store(value); OnPropertyChanged(); }
         }
 
         private string? _userDisplayName = null;
@@ -2463,8 +2470,9 @@ namespace ConditioningControlPanel.Models
         private bool _keywordTriggersEnabled = false;
         /// <summary>
         /// Enable keyword trigger system — intercepts typed text and fires multi-modal responses.
-        /// Requires Patreon access.
+        /// Requires Patreon access. Not persisted — must be started each session.
         /// </summary>
+        [JsonIgnore]
         public bool KeywordTriggersEnabled
         {
             get => _keywordTriggersEnabled;
