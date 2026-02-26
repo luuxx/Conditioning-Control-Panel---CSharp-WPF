@@ -177,6 +177,19 @@ function filterUserForResponse(user) {
 }
 
 /**
+ * Filter a user object for admin API responses — includes most fields but strips
+ * password_hash, auth_token_hash, and xp_rate (security-sensitive internal data).
+ */
+function filterUserForAdmin(user) {
+    if (!user || typeof user !== 'object') return user;
+    const filtered = { ...user };
+    delete filtered.password_hash;
+    delete filtered.auth_token_hash;
+    delete filtered.xp_rate;
+    return filtered;
+}
+
+/**
  * Filter a legacy profile object for safe API response (strip email_hash, internal metadata).
  * Used by V1 profile/sync endpoints.
  */
@@ -274,8 +287,8 @@ setInterval(() => {
 
 app.use(async (req, res, next) => {
     const start = Date.now();
-    // Use x-real-ip (set by Vercel) or rightmost x-forwarded-for (appended by proxy, not client-controllable)
-    const ip = req.headers['x-real-ip']?.trim() || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
+    // Use req.ip which respects trust proxy setting (Vercel appends real client IP)
+    const ip = req.ip || 'unknown';
     const ua = sanitizeForLog((req.headers['user-agent'] || 'none'));
     const unifiedId = sanitizeForLog(req.body?.unified_id || req.query?.unified_id || '-');
     const hasAuthToken = !!req.headers['x-auth-token'];
@@ -288,6 +301,11 @@ app.use(async (req, res, next) => {
     if (AUTH_EXEMPT_PATHS.has(req.path)) {
         if (redis) {
             try {
+                // Check if IP is globally blocked (shared with main rate limiter)
+                const blocked = await redis.ttl(`blocked_ip:${ip}`);
+                if (blocked > 0) {
+                    return res.status(429).json({ error: 'Too many requests. Please wait.', retry_after: blocked });
+                }
                 const authRateKey = `auth_rate:${ip}`;
                 // Ensure key has TTL even if server crashes between INCR and EXPIRE
                 await redis.set(authRateKey, 0, { nx: true, ex: 30 });
@@ -1624,6 +1642,14 @@ app.post('/discord/community-webhook', async (req, res) => {
             return res.status(401).json({ error: 'Invalid or missing auth token' });
         }
 
+        // Per-user webhook cooldown: max 1 post per 10 seconds
+        const webhookCooldownKey = `webhook_cooldown:${unified_id}`;
+        const onWebhookCooldown = await redis.get(webhookCooldownKey);
+        if (onWebhookCooldown) {
+            return res.status(429).json({ error: 'Webhook cooldown active', retry_after: 10 });
+        }
+        await redis.set(webhookCooldownKey, '1', { ex: 10 });
+
         // Use display_name from stored user record, not from request body
         // Sanitize to prevent Discord markdown/mention injection (@everyone, @here, <@id>, **bold**, etc.)
         const rawName = user.display_name;
@@ -1868,7 +1894,7 @@ app.post('/ai/chat', async (req, res) => {
         }
 
         // Per-IP cooldown to prevent Patreon API amplification (5s between V1 AI calls)
-        const chatIp = req.headers['x-real-ip'] || req.ip || 'unknown';
+        const chatIp = req.ip || 'unknown';
         if (redis) {
             const v1ChatCooldownKey = `v1_chat_cooldown:${chatIp}`;
             const onCooldown = await redis.get(v1ChatCooldownKey);
@@ -2878,7 +2904,7 @@ app.get('/user/profile', async (req, res) => {
         }
 
         // Per-IP cooldown to prevent Patreon API amplification
-        const profileIp = req.headers['x-real-ip'] || req.ip || 'unknown';
+        const profileIp = req.ip || 'unknown';
         if (redis) {
             const v1ProfileCooldownKey = `v1_profile_cooldown:${profileIp}`;
             const onCooldown = await redis.get(v1ProfileCooldownKey);
@@ -2981,7 +3007,7 @@ app.post('/user/sync', async (req, res) => {
         }
 
         // Per-IP cooldown to prevent Patreon API amplification
-        const syncIp = req.headers['x-real-ip'] || req.ip || 'unknown';
+        const syncIp = req.ip || 'unknown';
         if (redis) {
             const v1SyncCooldownKey = `v1_sync_cooldown:${syncIp}`;
             const onCooldown = await redis.get(v1SyncCooldownKey);
@@ -3028,16 +3054,45 @@ app.post('/user/sync', async (req, res) => {
         const hasActivePledge = tierInfo.is_active && tierInfo.pledge_cents >= 5;
         const effectiveTier = (isWhitelistedUser || hasActivePledge) ? Math.max(tierInfo.tier, isWhitelistedUser ? 2 : 1) : tierInfo.tier;
 
-        // Merge achievements (union of local and server)
-        let mergedAchievements = achievements || [];
+        // Merge achievements (union of local and server, capped at 500)
+        let mergedAchievements = [];
+        if (Array.isArray(achievements)) {
+            mergedAchievements = achievements
+                .filter(a => typeof a === 'string' && a.length <= 100)
+                .slice(0, 500);
+        }
         if (existing?.achievements) {
             const achievementSet = new Set([...existing.achievements, ...mergedAchievements]);
-            mergedAchievements = Array.from(achievementSet);
+            mergedAchievements = Array.from(achievementSet).slice(0, 500);
         }
 
-        // Take the higher XP/level (in case of conflicts)
-        const finalXp = existing ? Math.max(xp, existing.xp || 0) : xp;
-        const finalLevel = existing ? Math.max(level, existing.level || 0) : level;
+        // Anti-cheat: XP delta capping (matches V2 limits)
+        const MAX_V1_XP_PER_SYNC = 25000;
+        const MAX_V1_LEVEL = 999;
+        const oldXp = existing?.xp || 0;
+        const oldLevel = existing?.level || 0;
+        let finalXp = Math.max(xp, oldXp);
+        // Cap XP delta
+        if (finalXp - oldXp > MAX_V1_XP_PER_SYNC) {
+            console.log(`[Anti-cheat V1] XP clamped: tried +${finalXp - oldXp}, allowed +${MAX_V1_XP_PER_SYNC}`);
+            finalXp = oldXp + MAX_V1_XP_PER_SYNC;
+        }
+        // Recalculate level from XP (trust XP, not client-reported level)
+        let finalLevel = Math.max(level, oldLevel);
+        if (finalLevel > MAX_V1_LEVEL) finalLevel = MAX_V1_LEVEL;
+        if (typeof getCumulativeXPForLevel === 'function' && finalLevel > 1) {
+            let recalcLevel = 1;
+            let cumulativeCheck = 0;
+            while (recalcLevel < MAX_V1_LEVEL) {
+                cumulativeCheck += getXPForLevel(recalcLevel);
+                if (finalXp < cumulativeCheck) break;
+                recalcLevel++;
+            }
+            if (recalcLevel < finalLevel) {
+                console.log(`[Anti-cheat V1] Level/XP mismatch: claimed level=${finalLevel}, xp=${finalXp}, recalculated=${recalcLevel}`);
+                finalLevel = recalcLevel;
+            }
+        }
 
         console.log(`Sync for user ${userId}: incoming level=${level}, existing level=${existing?.level || 0}, final level=${finalLevel}`);
 
@@ -3048,10 +3103,24 @@ app.post('/user/sync', async (req, res) => {
         ]);
         const hasForceStreakOverrideLegacy = existing?.force_streak_override === true;
 
+        // Anti-cheat: V1 stat delta caps (matches V2 limits)
+        const V1_STATS_MAX_PER_SYNC = {
+            total_flashes: 700,
+            total_bubbles_popped: 600,
+            total_video_minutes: 70,
+            total_lock_cards_completed: 30,
+            completed_sessions: 5,
+            longest_session_minutes: 480
+        };
+        const V1_ALLOWED_STRING_STATS = new Set(['last_daily_quest_date']);
+        const V1_ALLOWED_ARRAY_STATS = new Set(['quest_completion_dates']);
+        const V1_MAX_STAT_KEYS = 50;
+
         // Merge stats (take max of each stat, skip streak stats if force_streak_override is active)
         let mergedStats = stats || {};
         if (existing?.stats) {
             mergedStats = { ...existing.stats };
+            let newKeyCount = 0;
             for (const [statKey, statValue] of Object.entries(stats || {})) {
                 // Prevent prototype pollution
                 if (statKey === '__proto__' || statKey === 'constructor' || statKey === 'prototype') continue;
@@ -3059,10 +3128,43 @@ app.post('/user/sync', async (req, res) => {
                 if (hasForceStreakOverrideLegacy && STREAK_STAT_KEYS_LEGACY.has(statKey)) {
                     continue;
                 }
-                if (typeof statValue === 'number') {
-                    mergedStats[statKey] = Math.max(mergedStats[statKey] || 0, statValue);
+                // Limit total stat keys
+                if (!(statKey in mergedStats)) {
+                    newKeyCount++;
+                    if (Object.keys(mergedStats).length + newKeyCount > V1_MAX_STAT_KEYS) continue;
+                }
+                // Handle allowed string stats
+                if (V1_ALLOWED_STRING_STATS.has(statKey)) {
+                    if (typeof statValue === 'string' && statValue.length <= 20) {
+                        const existing = typeof mergedStats[statKey] === 'string' ? mergedStats[statKey] : '';
+                        if (statValue >= existing) mergedStats[statKey] = statValue;
+                    }
+                    continue;
+                }
+                // Handle allowed array stats (cap at 100 entries)
+                if (V1_ALLOWED_ARRAY_STATS.has(statKey)) {
+                    const clientDates = Array.isArray(statValue) ? statValue : [];
+                    const serverDates = Array.isArray(mergedStats[statKey]) ? mergedStats[statKey] : [];
+                    const merged = clientDates.length >= serverDates.length ? clientDates : serverDates;
+                    mergedStats[statKey] = merged.slice(-100);
+                    continue;
+                }
+                // Only accept numeric values for all other stats
+                if (typeof statValue !== 'number' || !isFinite(statValue)) continue;
+                const existingVal = Number(mergedStats[statKey]) || 0;
+                const statDelta = statValue - existingVal;
+                if (statDelta <= 0) continue; // Don't decrease
+                // Cap known stat deltas
+                if (V1_STATS_MAX_PER_SYNC.hasOwnProperty(statKey)) {
+                    if (statDelta > V1_STATS_MAX_PER_SYNC[statKey]) {
+                        mergedStats[statKey] = Math.round(existingVal + V1_STATS_MAX_PER_SYNC[statKey]);
+                        console.log(`[Anti-cheat V1] Stat ${statKey} clamped: tried +${statDelta}, allowed +${V1_STATS_MAX_PER_SYNC[statKey]}`);
+                    } else {
+                        mergedStats[statKey] = statValue;
+                    }
                 } else {
-                    mergedStats[statKey] = statValue;
+                    // Unknown keys: accept with Math.max but only numeric
+                    mergedStats[statKey] = Math.max(existingVal, statValue);
                 }
             }
         }
@@ -3131,7 +3233,7 @@ app.post('/user/heartbeat', async (req, res) => {
         }
 
         // Per-IP cooldown to prevent Patreon API amplification
-        const hbIp = req.headers['x-real-ip'] || req.ip || 'unknown';
+        const hbIp = req.ip || 'unknown';
         if (redis) {
             const v1HbCooldownKey = `v1_heartbeat_cooldown:${hbIp}`;
             const onCooldown = await redis.get(v1HbCooldownKey);
@@ -3222,7 +3324,7 @@ app.post('/user/set-display-name', async (req, res) => {
         }
 
         // Per-IP cooldown to prevent Patreon API amplification
-        const setNameIp = req.headers['x-real-ip'] || req.ip || 'unknown';
+        const setNameIp = req.ip || 'unknown';
         if (redis) {
             const v1SetNameCooldownKey = `v1_setname_cooldown:${setNameIp}`;
             const onCooldown = await redis.get(v1SetNameCooldownKey);
@@ -3322,7 +3424,7 @@ app.get('/user/check-display-name', async (req, res) => {
         }
 
         // Per-IP cooldown to prevent Patreon API amplification
-        const checkNameIp = req.headers['x-real-ip'] || req.ip || 'unknown';
+        const checkNameIp = req.ip || 'unknown';
         if (redis) {
             const v1CheckNameCooldownKey = `v1_checkname_cooldown:${checkNameIp}`;
             const onCooldown = await redis.get(v1CheckNameCooldownKey);
@@ -3734,36 +3836,80 @@ app.post('/user/sync-discord', async (req, res) => {
             profile.show_online_status = show_online_status;
         }
 
-        // Update avatar URL if provided (from client's Discord auth)
-        if (avatar_url) {
+        // Update avatar URL if provided (from client's Discord auth, must be HTTPS)
+        if (avatar_url && typeof avatar_url === 'string' && avatar_url.startsWith('https://')) {
             profile.avatar_url = avatar_url;
         }
 
-        // Update profile with new values (only accept higher values to prevent cheating)
+        // Anti-cheat: XP delta capping (matches V2 limits)
+        const MAX_V1D_XP_PER_SYNC = 25000;
+        const MAX_V1D_LEVEL = 999;
         const newXp = typeof xp === 'number' ? xp : 0;
-        const newLevel = level;
+        const oldXpD = profile.xp || 0;
+        const oldLevelD = profile.level || 1;
 
-        // Only update if new values are higher (prevents syncing downward cheats)
-        if (newLevel > (profile.level || 1) || (newLevel === (profile.level || 1) && newXp > (profile.xp || 0))) {
-            profile.xp = newXp;
-            profile.level = newLevel;
+        let finalXpD = Math.max(newXp, oldXpD);
+        if (finalXpD - oldXpD > MAX_V1D_XP_PER_SYNC) {
+            console.log(`[Anti-cheat V1D] XP clamped: tried +${finalXpD - oldXpD}, allowed +${MAX_V1D_XP_PER_SYNC}`);
+            finalXpD = oldXpD + MAX_V1D_XP_PER_SYNC;
         }
 
-        // Merge achievements (union - never remove)
+        let finalLevelD = Math.max(level, oldLevelD);
+        if (finalLevelD > MAX_V1D_LEVEL) finalLevelD = MAX_V1D_LEVEL;
+        // Recalculate level from XP if possible
+        if (typeof getCumulativeXPForLevel === 'function' && finalLevelD > 1) {
+            let recalcLevel = 1;
+            let cumulativeCheck = 0;
+            while (recalcLevel < MAX_V1D_LEVEL) {
+                cumulativeCheck += getXPForLevel(recalcLevel);
+                if (finalXpD < cumulativeCheck) break;
+                recalcLevel++;
+            }
+            if (recalcLevel < finalLevelD) {
+                console.log(`[Anti-cheat V1D] Level/XP mismatch: claimed=${finalLevelD}, recalculated=${recalcLevel}`);
+                finalLevelD = recalcLevel;
+            }
+        }
+        profile.xp = finalXpD;
+        profile.level = finalLevelD;
+
+        // Merge achievements (union - never remove, capped at 500)
         if (Array.isArray(achievements)) {
             const existingAchievements = new Set(profile.achievements || []);
-            achievements.forEach(a => existingAchievements.add(a));
-            profile.achievements = Array.from(existingAchievements);
+            const filtered = achievements.filter(a => typeof a === 'string' && a.length <= 100);
+            filtered.forEach(a => existingAchievements.add(a));
+            profile.achievements = Array.from(existingAchievements).slice(0, 500);
         }
 
-        // Merge stats (take higher values)
+        // Merge stats (take higher values, anti-cheat caps)
+        const V1D_STATS_MAX = {
+            total_flashes: 700, total_bubbles_popped: 600, total_video_minutes: 70,
+            total_lock_cards_completed: 30, completed_sessions: 5, longest_session_minutes: 480
+        };
+        const V1D_MAX_STAT_KEYS = 50;
         if (stats && typeof stats === 'object') {
             profile.stats = profile.stats || {};
+            let newStatKeys = 0;
             for (const [key, value] of Object.entries(stats)) {
-                // Prevent prototype pollution
                 if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
-                if (typeof value === 'number') {
-                    profile.stats[key] = Math.max(profile.stats[key] || 0, value);
+                if (typeof value !== 'number' || !isFinite(value)) continue;
+                // Limit total stat keys
+                if (!(key in profile.stats)) {
+                    newStatKeys++;
+                    if (Object.keys(profile.stats).length + newStatKeys > V1D_MAX_STAT_KEYS) continue;
+                }
+                const existingVal = Number(profile.stats[key]) || 0;
+                const delta = value - existingVal;
+                if (delta <= 0) continue;
+                if (V1D_STATS_MAX.hasOwnProperty(key)) {
+                    if (delta > V1D_STATS_MAX[key]) {
+                        profile.stats[key] = Math.round(existingVal + V1D_STATS_MAX[key]);
+                        console.log(`[Anti-cheat V1D] Stat ${key} clamped: tried +${delta}, allowed +${V1D_STATS_MAX[key]}`);
+                    } else {
+                        profile.stats[key] = value;
+                    }
+                } else {
+                    profile.stats[key] = Math.max(existingVal, value);
                 }
             }
         }
@@ -4097,7 +4243,7 @@ app.get('/user/lookup', async (req, res) => {
         }
 
         // Per-IP cooldown (5s) to prevent mass enumeration
-        const lookupIp = req.headers['x-real-ip'] || req.ip || 'unknown';
+        const lookupIp = req.ip || 'unknown';
         const lookupCooldownKey = `lookup_cooldown:${lookupIp}`;
         const onCooldown = await redis.get(lookupCooldownKey);
         if (onCooldown) {
@@ -4615,7 +4761,7 @@ app.get('/admin/user-info', async (req, res) => {
         res.json({
             user_id: userId,
             profile_key: profileKey,
-            profile: profileData
+            profile: filterUserForAdmin(profileData)
         });
     } catch (error) {
         console.error('Admin user-info error:', error.message);
@@ -4696,6 +4842,8 @@ app.get('/admin/scan-orphaned-indexes', async (req, res) => {
             return res.status(403).json({ error: 'Unauthorized' });
         }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
+        const scanBlock = await enforceAdminScanCooldown(res, 'scan-orphaned-indexes');
+        if (scanBlock) return;
 
         const orphaned = [];
         const valid = [];
@@ -5248,6 +5396,8 @@ app.get('/admin/search-profiles', async (req, res) => {
         }
         if (!pattern) return res.status(400).json({ error: 'pattern required' });
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
+        const scanBlock = await enforceAdminScanCooldown(res, 'search-profiles');
+        if (scanBlock) return;
 
         const searchPattern = pattern.toLowerCase();
         const results = [];
@@ -5308,7 +5458,7 @@ app.get('/admin/scan-unified-users', async (req, res) => {
                         const user = typeof data === 'string' ? JSON.parse(data) : data;
                         allUsers.push({ key, unified_id: user.unified_id, display_name: user.display_name, patreon_id: user.patreon_id, discord_id: user.discord_id });
                         if (!user.display_name || user.display_name.trim() === '') {
-                            brokenUsers.push({ key, user });
+                            brokenUsers.push({ key, user: filterUserForAdmin(user) });
                         }
                     }
                 } catch (e) {}
@@ -5427,6 +5577,8 @@ app.post('/admin/purge-user-data', async (req, res) => {
         }
         if (!display_name) return res.status(400).json({ error: 'display_name required' });
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
+        const scanBlock = await enforceAdminScanCooldown(res, 'purge-user-data');
+        if (scanBlock) return;
 
         const searchName = display_name.toLowerCase();
         const foundKeys = [];
@@ -5510,6 +5662,11 @@ app.get('/admin/get-key', async (req, res) => {
             if (typeof data === 'string') parsed = JSON.parse(data);
         } catch (e) {}
 
+        // Strip auth material from user: key responses
+        if (key.startsWith('user:') && parsed && typeof parsed === 'object') {
+            parsed = filterUserForAdmin(parsed);
+        }
+
         res.json({ key, value: parsed });
     } catch (error) {
         console.error('Admin get-key error:', error.message);
@@ -5559,6 +5716,10 @@ app.post('/admin/update-key', async (req, res) => {
         // Prevent prototype pollution via field name
         if (field === '__proto__' || field === 'constructor' || field === 'prototype') {
             return res.status(400).json({ error: 'Invalid field name' });
+        }
+        // Prevent overwriting auth material via update-key
+        if (field === 'password_hash' || field === 'auth_token_hash') {
+            return res.status(400).json({ error: 'Cannot modify auth fields via update-key' });
         }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
 
@@ -5726,6 +5887,8 @@ app.post('/admin/cleanup-empty-profiles', async (req, res) => {
             return res.status(403).json({ error: 'Unauthorized' });
         }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
+        const scanBlock = await enforceAdminScanCooldown(res, 'cleanup-empty-profiles');
+        if (scanBlock) return;
 
         const emptyProfiles = [];
         const deleted = [];
@@ -5833,6 +5996,8 @@ app.post('/admin/capture-legacy-users', async (req, res) => {
             return res.status(403).json({ error: 'Unauthorized' });
         }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
+        const scanBlock = await enforceAdminScanCooldown(res, 'capture-legacy-users');
+        if (scanBlock) return;
 
         const legacyUsers = [];
         const season0Keys = [];
@@ -6290,6 +6455,9 @@ app.post('/v2/auth/discord', async (req, res) => {
         if (!isValidDisplayNameChars(trimmedName)) {
             return res.status(400).json({ error: 'display_name contains invalid characters' });
         }
+        if (trimmedName.length < 3 || trimmedName.length > 20) {
+            return res.status(400).json({ error: 'display_name must be 3-20 characters' });
+        }
 
         // CLEANUP: Delete any old user data for this discord_id before creating new account
         // This ONLY runs for whitelisted/OG users reclaiming their account - not for regular users
@@ -6739,6 +6907,9 @@ app.post('/v2/auth/patreon', async (req, res) => {
         if (!isValidDisplayNameChars(trimmedName)) {
             return res.status(400).json({ error: 'display_name contains invalid characters' });
         }
+        if (trimmedName.length < 3 || trimmedName.length > 20) {
+            return res.status(400).json({ error: 'display_name must be 3-20 characters' });
+        }
 
         // CLEANUP: Delete any old user data for this patreon_id before creating new account
         // This ONLY runs for whitelisted/OG users reclaiming their account - not for regular users
@@ -6955,6 +7126,7 @@ app.post('/v2/auth/patreon', async (req, res) => {
  * Body: { invite_code: string, display_name: string, password: string }
  */
 app.post('/v2/auth/register', async (req, res) => {
+    let outerCodeLockKey = null;
     try {
         const { invite_code, display_name, password } = req.body;
 
@@ -7007,6 +7179,7 @@ app.post('/v2/auth/register', async (req, res) => {
         // Acquire atomic lock on invite code to prevent TOCTOU race condition
         // (two concurrent requests both passing code.used check before either marks it used)
         const codeLockKey = `invite_code_lock:${normalizedCode}`;
+        outerCodeLockKey = codeLockKey;
         const codeLockAcquired = await redis.set(codeLockKey, '1', { nx: true, ex: 15 });
         if (!codeLockAcquired) {
             return res.status(409).json({ error: 'Invite code registration in progress. Please try again.' });
@@ -7142,9 +7315,9 @@ app.post('/v2/auth/register', async (req, res) => {
             await redis.del(codeLockKey).catch(() => {});
         }
     } catch (error) {
-        // Release code lock on any error (codeLockKey may not be defined if error was before lock)
-        if (typeof codeLockKey === 'string') {
-            await redis.del(codeLockKey).catch(() => {});
+        // Release code lock on any error (outerCodeLockKey may be null if error was before lock)
+        if (outerCodeLockKey) {
+            await redis.del(outerCodeLockKey).catch(() => {});
         }
         console.error('V2 invite register error:', error.message);
         res.status(500).json({ error: 'Internal server error' });
@@ -7167,6 +7340,9 @@ app.post('/v2/auth/login', async (req, res) => {
         if (!display_name || !password) {
             return res.status(400).json({ error: 'display_name and password required' });
         }
+        if (password.length > 128) {
+            return res.status(400).json({ error: 'Invalid credentials' });
+        }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
 
         const ip = req.ip || 'unknown';
@@ -7188,17 +7364,17 @@ app.post('/v2/auth/login', async (req, res) => {
         const unifiedId = await redis.get(nameKey);
 
         if (!unifiedId) {
+            // Perform dummy scrypt to prevent timing-based username enumeration
+            await verifyPassword('dummy', '0123456789abcdef0123456789abcdef:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef').catch(() => {});
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
         // Per-account rate limit: 10 attempts per hour (audit S6 — prevents distributed brute-force)
+        // Check count first (read-only), only increment on actual failure
         const userFailKey = `login_fail_user:${unifiedId}`;
         try {
-            const userFailCount = await redis.incr(userFailKey);
-            if (userFailCount === 1) {
-                await redis.expire(userFailKey, 3600);
-            }
-            if (userFailCount > 10) {
+            const currentCount = await redis.get(userFailKey);
+            if (currentCount && parseInt(currentCount) > 10) {
                 return res.status(429).json({ error: 'Account temporarily locked. Try again later.' });
             }
         } catch (e) {
@@ -7220,6 +7396,11 @@ app.post('/v2/auth/login', async (req, res) => {
 
         const passwordValid = await verifyPassword(password, user.password_hash);
         if (!passwordValid) {
+            // Increment per-account failure counter only on actual wrong password
+            try {
+                const newCount = await redis.incr(userFailKey);
+                if (newCount === 1) await redis.expire(userFailKey, 3600);
+            } catch (e) { /* non-critical */ }
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
@@ -7719,8 +7900,7 @@ app.post('/v2/user/delete-account', async (req, res) => {
         res.json({
             success: true,
             deleted_unified_id: unified_id,
-            deleted_display_name: user.display_name,
-            deleted_keys: deleted
+            deleted_keys_count: deleted.length
         });
     } catch (error) {
         console.error('V2 delete account error:', error.message);
@@ -7852,7 +8032,7 @@ app.post('/admin/delete-user-by-name', async (req, res) => {
             success: true,
             deleted_unified_id: unifiedId,
             deleted_display_name: display_name,
-            user_data: user,
+            user_data: filterUserForAdmin(user),
             deleted_keys: deleted
         });
     } catch (error) {
@@ -7877,6 +8057,8 @@ app.post('/admin/set-achievements', async (req, res) => {
         if (!display_name || !achievements) {
             return res.status(400).json({ error: 'display_name and achievements array required' });
         }
+        const scanBlock = await enforceAdminScanCooldown(res, 'set-achievements');
+        if (scanBlock) return;
 
         // Find user in all profile types (check unified users first — canonical source)
         const patterns = ['user:*', 'profile:*', 'discord_profile:*'];
@@ -7949,6 +8131,8 @@ app.post('/admin/delete-legacy-profile', async (req, res) => {
         if (!display_name) {
             return res.status(400).json({ error: 'display_name required' });
         }
+        const scanBlock = await enforceAdminScanCooldown(res, 'delete-legacy-profile');
+        if (scanBlock) return;
 
         const deleted = [];
         const patterns = ['profile:*', 'discord_profile:*'];
@@ -8197,9 +8381,11 @@ app.post('/v2/user/update', async (req, res) => {
             if (achievements && Array.isArray(achievements)) {
                 const existingAchievements = new Set(user.achievements || []);
                 for (const ach of achievements) {
-                    existingAchievements.add(ach);
+                    if (typeof ach === 'string' && ach.length <= 100) {
+                        existingAchievements.add(ach);
+                    }
                 }
-                user.achievements = [...existingAchievements];
+                user.achievements = [...existingAchievements].slice(0, 500);
             }
         }
         if (settings) {
@@ -8836,6 +9022,8 @@ app.post('/admin/trigger-season-reset', async (req, res) => {
             return res.status(403).json({ error: 'Unauthorized' });
         }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
+        const scanBlock = await enforceAdminScanCooldown(res, 'trigger-season-reset');
+        if (scanBlock) return;
 
         const targetSeason = new_season || getCurrentSeason();
         const resetResults = [];
@@ -9296,13 +9484,15 @@ app.post('/v2/user/sync', async (req, res) => {
         // Recalculate unlocks based on highest_level_ever
         user.unlocks = calculateUnlocks(user.highest_level_ever);
 
-        // Merge achievements (union of local and cloud)
+        // Merge achievements (union of local and cloud, capped at 500)
         if (achievements && Array.isArray(achievements)) {
             const existingAchievements = new Set(user.achievements || []);
             for (const ach of achievements) {
-                existingAchievements.add(ach);
+                if (typeof ach === 'string' && ach.length <= 100) {
+                    existingAchievements.add(ach);
+                }
             }
-            user.achievements = Array.from(existingAchievements);
+            user.achievements = Array.from(existingAchievements).slice(0, 500);
         }
 
         // Stats keys that are controlled by force_streak_override
@@ -9380,8 +9570,9 @@ app.post('/v2/user/sync', async (req, res) => {
                     }
                     // If statDelta <= 0, keep existing (don't decrease)
                 } else {
-                    // Unknown/forward-compatible keys: use Math.max() (original behavior)
-                    user.stats[key] = Math.max(existingValue, numValue);
+                    // Unknown keys: reject to prevent unbounded stats growth
+                    // If a new stat is needed, add it to STATS_MAX_PER_HOUR
+                    continue;
                 }
             }
         }
@@ -9445,12 +9636,15 @@ app.post('/v2/user/sync', async (req, res) => {
             user.total_conditioning_minutes = Math.max(existingMinutes, total_conditioning_minutes);
         }
 
-        // Merge companion progress (per-companion, higher level/XP wins)
+        // Merge companion progress (per-companion, higher level/XP wins, capped at 50 companions)
+        const MAX_COMPANION_KEYS = 50;
         if (companion_progress && typeof companion_progress === 'object') {
             user.companion_progress = user.companion_progress || {};
             for (const [companionId, clientData] of Object.entries(companion_progress)) {
                 // Prevent prototype pollution
                 if (companionId === '__proto__' || companionId === 'constructor' || companionId === 'prototype') continue;
+                // Cap total companion keys
+                if (!(companionId in user.companion_progress) && Object.keys(user.companion_progress).length >= MAX_COMPANION_KEYS) continue;
                 const existing = user.companion_progress[companionId] || {};
                 const clientLevel = Number(clientData?.Level) || 1;
                 const clientTotalXP = Number(clientData?.TotalXPEarned) || 0;
@@ -9643,14 +9837,7 @@ app.post('/v2/user/backup-settings', async (req, res) => {
             return res.status(400).json({ error: 'settings_data too large (max 700KB)' });
         }
 
-        // Per-user cooldown: 30 seconds minimum between backup-settings calls
-        const cooldownKey = `backup_cooldown:${unified_id}`;
-        const onCooldown = await redis.get(cooldownKey);
-        if (onCooldown) {
-            return res.status(429).json({ error: 'Backup cooldown active', retry_after: 30 });
-        }
-
-        // Verify user exists
+        // Verify user exists and auth BEFORE cooldown check (prevents unauthenticated Redis reads)
         const userData = await redis.get(`user:${unified_id}`);
         if (!userData) {
             return res.status(404).json({ error: 'User not found' });
@@ -9658,13 +9845,20 @@ app.post('/v2/user/backup-settings', async (req, res) => {
 
         const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
 
-        // Auth token validation
+        // Auth token validation (moved before cooldown to prevent unauthenticated Redis abuse)
         const authCheck = validateAuthToken(req, user);
         if (!authCheck.valid) {
             return res.status(401).json({ error: 'Invalid or missing auth token' });
         }
         if (authCheck.legacy) {
             console.log(`[AUTH] ${authCheck.missing ? 'Old client (token not sent)' : 'Legacy user (no token hash)'} for ${unified_id} on ${req.path}`);
+        }
+
+        // Per-user cooldown: 30 seconds minimum between backup-settings calls
+        const cooldownKey = `backup_cooldown:${unified_id}`;
+        const onCooldown = await redis.get(cooldownKey);
+        if (onCooldown) {
+            return res.status(429).json({ error: 'Backup cooldown active', retry_after: 30 });
         }
 
         // Set cooldown now that we know request will proceed
@@ -11670,6 +11864,8 @@ app.post('/admin/start-new-season', async (req, res) => {
         if (!new_season) {
             return res.status(400).json({ error: 'new_season required (e.g. "2026-03")' });
         }
+        const scanBlock = await enforceAdminScanCooldown(res, 'start-new-season');
+        if (scanBlock) return;
 
         const currentSeason = getCurrentSeason();
         const snapshotResult = { season: currentSeason, total_users: 0, stored_as: null };
@@ -12274,14 +12470,9 @@ app.post('/admin/clear-patron-display-names', async (req, res) => {
  * Body: { admin_token: string, dry_run?: boolean }
  */
 app.post('/admin/hash-emails', async (req, res) => {
-    try {
-        const { dry_run = true } = req.body;
-        const admin_token = req.headers['x-admin-token'];
-        if (!verifyAdminToken(admin_token)) {
-            return res.status(403).json({ error: 'Unauthorized' });
-        }
-        if (!redis) return res.status(503).json({ error: 'Redis not available' });
-
+    // Migration completed Feb 24 2026 — endpoint disabled to prevent accidental re-run
+    return res.status(410).json({ error: 'Email hashing migration completed. Endpoint disabled.' });
+    /* Original migration code preserved below for reference
         const stats = {
             users_scanned: 0, users_migrated: 0,
             profiles_scanned: 0, profiles_migrated: 0,
@@ -12399,6 +12590,7 @@ app.post('/admin/hash-emails', async (req, res) => {
         console.error('Admin hash-emails error:', error.message);
         res.status(500).json({ error: 'Failed to hash emails' });
     }
+    */
 });
 
 /**
@@ -12719,7 +12911,7 @@ app.get('/admin/export-all-users', async (req, res) => {
                     const raw = await redis.get(key);
                     if (raw) {
                         const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                        users.push({ key, data });
+                        users.push({ key, data: filterUserForAdmin(data) });
                     }
                 } catch (e) { /* skip corrupt keys */ }
             }
@@ -13285,7 +13477,7 @@ setInterval(() => {
 app.post('/remote/connect', async (req, res) => {
     try {
         // Per-IP rate limit to prevent brute-force code guessing
-        const ip = req.headers['x-real-ip']?.trim() || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
+        const ip = req.ip || 'unknown';
         const now = Date.now();
         if (!remoteConnectAttempts.has(ip)) {
             remoteConnectAttempts.set(ip, { count: 0, firstAttempt: now });
