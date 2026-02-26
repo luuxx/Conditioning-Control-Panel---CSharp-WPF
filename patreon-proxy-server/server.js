@@ -104,6 +104,60 @@ function isValidDisplayNameChars(name) {
     return !DISPLAY_NAME_INVALID_CHARS.test(name);
 }
 
+/**
+ * Filter a user object for safe API response (strip auth_token_hash, email_hash, internal fields).
+ * Used by V1 auth endpoints to prevent leaking sensitive server-side data.
+ */
+function filterUserForResponse(user) {
+    if (!user || typeof user !== 'object') return user;
+    return {
+        unified_id: user.unified_id,
+        display_name: user.display_name,
+        level: user.level,
+        xp: user.xp,
+        current_season: user.current_season,
+        highest_level_ever: user.highest_level_ever,
+        is_season0_og: user.is_season0_og,
+        patreon_tier: user.patreon_tier,
+        patreon_is_active: user.patreon_is_active,
+        patreon_is_whitelisted: user.patreon_is_whitelisted,
+        achievements: user.achievements,
+        unlocks: user.unlocks,
+        stats: user.stats,
+        discord_id: user.discord_id || null,
+        patreon_id: user.patreon_id || null,
+        created_at: user.created_at,
+        updated_at: user.updated_at
+    };
+}
+
+/**
+ * Filter a legacy profile object for safe API response (strip email_hash, internal metadata).
+ * Used by V1 profile/sync endpoints.
+ */
+function filterProfileForResponse(profile) {
+    if (!profile || typeof profile !== 'object') return profile;
+    return {
+        display_name: profile.display_name || null,
+        xp: profile.xp || 0,
+        level: profile.level || 1,
+        achievements: profile.achievements || [],
+        stats: profile.stats || {},
+        updated_at: profile.updated_at,
+        last_session: profile.last_session,
+        patreon_tier: profile.patreon_tier,
+        patreon_is_active: profile.patreon_is_active,
+        patreon_is_whitelisted: profile.patreon_is_whitelisted,
+        discord_id: profile.discord_id || null,
+        avatar_url: profile.avatar_url || null,
+        allow_discord_dm: profile.allow_discord_dm || false,
+        share_profile_picture: profile.share_profile_picture || false,
+        show_online_status: profile.show_online_status !== false,
+        reset_weekly_quest: profile.reset_weekly_quest || false,
+        reset_daily_quest: profile.reset_daily_quest || false
+    };
+}
+
 // =============================================================================
 // REQUEST LOGGING MIDDLEWARE
 // =============================================================================
@@ -2419,6 +2473,11 @@ app.post('/auth/lookup', async (req, res) => {
             }
         }
 
+        // Filter user object to safe fields only (never expose auth_token_hash, email_hash, etc.)
+        if (result.user) {
+            result.user = filterUserForResponse(result.user);
+        }
+
         res.json(result);
     } catch (error) {
         console.error('Auth lookup error:', error.message);
@@ -2499,11 +2558,12 @@ app.post('/auth/register', async (req, res) => {
             return res.status(409).json(result);
         }
 
+        const safeUser = filterUserForResponse(result.user);
         res.json({
             success: true,
             unified_id: result.unified_id,
-            display_name: result.user.display_name,
-            user: result.user
+            display_name: safeUser.display_name,
+            user: safeUser
         });
     } catch (error) {
         console.error('Auth register error:', error.message);
@@ -2585,14 +2645,15 @@ app.post('/auth/link-provider', async (req, res) => {
             return res.status(409).json(result);
         }
 
+        const safeUser = filterUserForResponse(result.user);
         res.json({
             success: true,
             unified_id: result.unified_id,
             linked_providers: [
-                result.user.patreon_id ? 'patreon' : null,
-                result.user.discord_id ? 'discord' : null
+                safeUser.patreon_id ? 'patreon' : null,
+                safeUser.discord_id ? 'discord' : null
             ].filter(Boolean),
-            user: result.user
+            user: safeUser
         });
     } catch (error) {
         console.error('Auth link-provider error:', error.message);
@@ -2672,15 +2733,16 @@ app.post('/auth/claim', async (req, res) => {
             return res.status(409).json(result);
         }
 
+        const safeUser = filterUserForResponse(result.user);
         res.json({
             success: true,
             unified_id: result.unified_id,
-            display_name: result.user.display_name,
+            display_name: safeUser.display_name,
             linked_providers: [
-                result.user.patreon_id ? 'patreon' : null,
-                result.user.discord_id ? 'discord' : null
+                safeUser.patreon_id ? 'patreon' : null,
+                safeUser.discord_id ? 'discord' : null
             ].filter(Boolean),
-            user: result.user
+            user: safeUser
         });
     } catch (error) {
         console.error('Auth claim error:', error.message);
@@ -2924,7 +2986,7 @@ app.post('/user/sync', async (req, res) => {
         res.json({
             success: true,
             user_id: userId,
-            profile: profile,
+            profile: filterProfileForResponse(profile),
             merged: !!existing
         });
     } catch (error) {
@@ -3106,7 +3168,7 @@ app.post('/user/set-display-name', async (req, res) => {
             success: true,
             display_name: trimmedName,
             is_whitelisted: profile.patreon_is_whitelisted || false,
-            profile: profile
+            profile: filterProfileForResponse(profile)
         });
     } catch (error) {
         console.error('Set display name error:', error.message);
@@ -3520,6 +3582,8 @@ app.post('/user/sync-discord', async (req, res) => {
         if (stats && typeof stats === 'object') {
             profile.stats = profile.stats || {};
             for (const [key, value] of Object.entries(stats)) {
+                // Prevent prototype pollution
+                if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
                 if (typeof value === 'number') {
                     profile.stats[key] = Math.max(profile.stats[key] || 0, value);
                 }
@@ -8821,6 +8885,8 @@ app.post('/v2/user/sync', async (req, res) => {
         if (companion_progress && typeof companion_progress === 'object') {
             user.companion_progress = user.companion_progress || {};
             for (const [companionId, clientData] of Object.entries(companion_progress)) {
+                // Prevent prototype pollution
+                if (companionId === '__proto__' || companionId === 'constructor' || companionId === 'prototype') continue;
                 const existing = user.companion_progress[companionId] || {};
                 const clientLevel = Number(clientData?.Level) || 1;
                 const clientTotalXP = Number(clientData?.TotalXPEarned) || 0;
