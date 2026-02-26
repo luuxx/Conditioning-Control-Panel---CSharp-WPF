@@ -549,24 +549,16 @@ async function checkRateLimit(userId, dailyLimit) {
     const key = `${RATE_LIMIT.KEY_PREFIX}${userId}:${todayKey}`;
 
     try {
-        // Get current count
-        let count = await redis.get(key) || 0;
-        count = parseInt(count) || 0;
+        // R8/M10: Atomic increment-first to prevent TOCTOU race
+        await redis.set(key, 0, { nx: true, ex: 48 * 60 * 60 });
+        const count = await redis.incr(key);
 
-        if (count >= limit) {
+        if (count > limit) {
             return {
                 allowed: false,
                 remaining: 0,
                 used: count
             };
-        }
-
-        // Increment count
-        count = await redis.incr(key);
-
-        // Set expiry to 48 hours (ensures cleanup even across timezone edge cases)
-        if (count === 1) {
-            await redis.expire(key, 48 * 60 * 60);
         }
 
         return {
@@ -1335,7 +1327,9 @@ app.get('/patreon/validate', async (req, res) => {
         }
 
         // Update unified user's Patreon status if they exist
-        if (unifiedLookup.exists && unifiedLookup.unified_id) {
+        // R8/M5: Only update if the OAuth patreon_user_id matches the unified user's stored patreon_id
+        // (prevents an attacker with a different Patreon account from modifying another user's status)
+        if (unifiedLookup.exists && unifiedLookup.unified_id && userId !== 'unknown') {
             await updateUnifiedUserPatreonStatus(unifiedLookup.unified_id, {
                 tier: tierInfo.tier,
                 is_active: tierInfo.is_active,
@@ -2411,74 +2405,85 @@ async function registerUnifiedUser(displayName, provider, providerId, providerDa
     const normalizedName = displayName.trim();
     const indexKey = `display_name_index:${normalizedName.toLowerCase()}`;
 
-    // Check if name is taken
-    const existingId = await redis.get(indexKey);
-    if (existingId) {
-        // Check if it's a claimable account (same email via hash comparison)
-        const existingUser = await redis.get(`${UNIFIED_USER_PREFIX}${existingId}`);
-        if (existingUser) {
-            const userData = typeof existingUser === 'string' ? JSON.parse(existingUser) : existingUser;
-            const canClaim = providerData.email && userData.email_hash &&
-                            hashEmail(providerData.email) === userData.email_hash;
-            return { success: false, error: 'Display name already taken', can_claim: !!canClaim, existing_unified_id: existingId };
+    // R8/M2: Acquire name lock to prevent TOCTOU race on name uniqueness
+    const nameLockKey = `name_lock:${normalizedName.toLowerCase()}`;
+    const nameLockAcquired = await redis.set(nameLockKey, '1', { nx: true, ex: 10 });
+    if (!nameLockAcquired) {
+        return { success: false, error: 'Display name is being registered by another user' };
+    }
+
+    try {
+        // Check if name is taken
+        const existingId = await redis.get(indexKey);
+        if (existingId) {
+            // Check if it's a claimable account (same email via hash comparison)
+            const existingUser = await redis.get(`${UNIFIED_USER_PREFIX}${existingId}`);
+            if (existingUser) {
+                const userData = typeof existingUser === 'string' ? JSON.parse(existingUser) : existingUser;
+                const canClaim = providerData.email && userData.email_hash &&
+                                hashEmail(providerData.email) === userData.email_hash;
+                return { success: false, error: 'Display name already taken', can_claim: !!canClaim, existing_unified_id: existingId };
+            }
         }
+
+        const unifiedId = generateUnifiedId();
+
+        const unifiedUser = {
+            unified_id: unifiedId,
+            display_name: normalizedName,
+            display_name_set_at: new Date().toISOString(),
+
+            // Linked providers
+            patreon_id: provider === 'patreon' ? providerId : null,
+            discord_id: provider === 'discord' ? providerId : null,
+            email_hash: hashEmail(providerData.email) || null,
+
+            // Progression (starting fresh)
+            xp: 0,
+            level: 1,
+            achievements: [],
+            stats: {},
+            last_session: new Date().toISOString(),
+
+            // Patreon-specific
+            patreon_tier: providerData.tier || 0,
+            patreon_is_active: providerData.is_active || false,
+            patreon_is_whitelisted: providerData.is_whitelisted || false,
+
+            // Discord-specific
+            discord_username: providerData.discord_username || null,
+            allow_discord_dm: false,
+
+            // Metadata
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+        };
+
+        // Check whitelist by display name (use fresh provider email, not stored hash)
+        if (isWhitelisted(providerData.email, null, normalizedName)) {
+            unifiedUser.patreon_is_whitelisted = true;
+            unifiedUser.patreon_tier = Math.max(unifiedUser.patreon_tier, 2);
+        }
+
+        // Save unified user
+        await redis.set(`${UNIFIED_USER_PREFIX}${unifiedId}`, JSON.stringify(unifiedUser));
+
+        // Create indexes
+        await redis.set(indexKey, unifiedId);
+        if (provider === 'patreon') {
+            await redis.set(`${PATREON_USER_INDEX}${providerId}`, unifiedId);
+        } else {
+            await redis.set(`${DISCORD_USER_INDEX}${providerId}`, unifiedId);
+        }
+        if (unifiedUser.email_hash) {
+            await redis.set(`email_index:${unifiedUser.email_hash}`, unifiedId);
+        }
+
+        console.log(`Registered new unified user ${unifiedId} with display name "${normalizedName}" via ${provider}`);
+        return { success: true, unified_id: unifiedId, user: unifiedUser };
+    } finally {
+        await redis.del(nameLockKey).catch(() => {});
     }
-
-    const unifiedId = generateUnifiedId();
-
-    const unifiedUser = {
-        unified_id: unifiedId,
-        display_name: normalizedName,
-        display_name_set_at: new Date().toISOString(),
-
-        // Linked providers
-        patreon_id: provider === 'patreon' ? providerId : null,
-        discord_id: provider === 'discord' ? providerId : null,
-        email_hash: hashEmail(providerData.email) || null,
-
-        // Progression (starting fresh)
-        xp: 0,
-        level: 1,
-        achievements: [],
-        stats: {},
-        last_session: new Date().toISOString(),
-
-        // Patreon-specific
-        patreon_tier: providerData.tier || 0,
-        patreon_is_active: providerData.is_active || false,
-        patreon_is_whitelisted: providerData.is_whitelisted || false,
-
-        // Discord-specific
-        discord_username: providerData.discord_username || null,
-        allow_discord_dm: false,
-
-        // Metadata
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-    };
-
-    // Check whitelist by display name (use fresh provider email, not stored hash)
-    if (isWhitelisted(providerData.email, null, normalizedName)) {
-        unifiedUser.patreon_is_whitelisted = true;
-        unifiedUser.patreon_tier = Math.max(unifiedUser.patreon_tier, 2);
-    }
-
-    // Save unified user
-    await redis.set(`${UNIFIED_USER_PREFIX}${unifiedId}`, JSON.stringify(unifiedUser));
-
-    // Create indexes
-    await redis.set(indexKey, unifiedId);
-    if (provider === 'patreon') {
-        await redis.set(`${PATREON_USER_INDEX}${providerId}`, unifiedId);
-    } else {
-        await redis.set(`${DISCORD_USER_INDEX}${providerId}`, unifiedId);
-    }
-    if (unifiedUser.email_hash) {
-        await redis.set(`email_index:${unifiedUser.email_hash}`, unifiedId);
-    }
-
-    console.log(`Registered new unified user ${unifiedId} with display name "${normalizedName}" via ${provider}`);
-    return { success: true, unified_id: unifiedId, user: unifiedUser };
 }
 
 /**
@@ -2860,6 +2865,12 @@ app.post('/auth/claim', async (req, res) => {
 
         const userData = typeof existingUser === 'string' ? JSON.parse(existingUser) : existingUser;
 
+        // R8/H1: Require auth token to prevent unauthorized account linking
+        const authCheck = validateAuthToken(req, userData);
+        if (!authCheck.valid) {
+            return res.status(401).json({ error: 'Auth token required to claim account' });
+        }
+
         // Check if emails match (compare fresh provider email hash against stored hash)
         if (!providerData.email || !userData.email_hash ||
             hashEmail(providerData.email) !== userData.email_hash) {
@@ -3040,8 +3051,8 @@ app.post('/user/sync', async (req, res) => {
         const { xp, level, achievements, stats, last_session, allow_discord_dm, share_profile_picture, show_online_status, discord_id, display_name: requestDisplayName, avatar_url, reset_weekly_quest, reset_daily_quest, force_streak_override: clientForceStreakOverride } = req.body;
 
         // Validate required fields
-        if (typeof xp !== 'number' || typeof level !== 'number') {
-            return res.status(400).json({ error: 'xp and level are required numbers' });
+        if (typeof xp !== 'number' || !isFinite(xp) || typeof level !== 'number' || !isFinite(level)) {
+            return res.status(400).json({ error: 'xp and level are required finite numbers' });
         }
 
         // Load existing profile to merge/compare
@@ -3149,7 +3160,7 @@ app.post('/user/sync', async (req, res) => {
                 }
                 // Handle allowed array stats (cap at 100 entries)
                 if (V1_ALLOWED_ARRAY_STATS.has(statKey)) {
-                    const clientDates = Array.isArray(statValue) ? statValue : [];
+                    const clientDates = Array.isArray(statValue) ? statValue.filter(d => typeof d === 'string' && d.length <= 20) : [];
                     const serverDates = Array.isArray(mergedStats[statKey]) ? mergedStats[statKey] : [];
                     const merged = clientDates.length >= serverDates.length ? clientDates : serverDates;
                     mergedStats[statKey] = merged.slice(-100);
@@ -3161,7 +3172,7 @@ app.post('/user/sync', async (req, res) => {
                 const statDelta = statValue - existingVal;
                 if (statDelta <= 0) continue; // Don't decrease
                 // Cap known stat deltas
-                if (V1_STATS_MAX_PER_SYNC.hasOwnProperty(statKey)) {
+                if (Object.prototype.hasOwnProperty.call(V1_STATS_MAX_PER_SYNC, statKey)) {
                     if (statDelta > V1_STATS_MAX_PER_SYNC[statKey]) {
                         mergedStats[statKey] = Math.round(existingVal + V1_STATS_MAX_PER_SYNC[statKey]);
                         console.log(`[Anti-cheat V1] Stat ${statKey} clamped: tried +${statDelta}, allowed +${V1_STATS_MAX_PER_SYNC[statKey]}`);
@@ -3169,8 +3180,13 @@ app.post('/user/sync', async (req, res) => {
                         mergedStats[statKey] = statValue;
                     }
                 } else {
-                    // Unknown keys: accept with Math.max but only numeric
-                    mergedStats[statKey] = Math.max(existingVal, statValue);
+                    // Unknown keys: accept with Math.max but cap delta (R8/M27)
+                    const unknownDelta = statValue - existingVal;
+                    if (unknownDelta > 10000) {
+                        mergedStats[statKey] = existingVal + 10000;
+                    } else {
+                        mergedStats[statKey] = Math.max(existingVal, statValue);
+                    }
                 }
             }
         }
@@ -3185,16 +3201,16 @@ app.post('/user/sync', async (req, res) => {
             // Preserve display_name if already set — never auto-populate from patron_name (privacy)
             display_name: existing?.display_name || null,
             display_name_set_at: existing?.display_name_set_at || null,
-            // Discord DM opt-in (preserve if not provided in request)
-            allow_discord_dm: typeof allow_discord_dm === 'boolean' ? allow_discord_dm : (existing?.allow_discord_dm || false),
+            // Discord DM opt-in (R8/M19: strict boolean type check)
+            allow_discord_dm: allow_discord_dm === true || allow_discord_dm === false ? allow_discord_dm : (existing?.allow_discord_dm === true),
             // Profile picture sharing opt-in
-            share_profile_picture: typeof share_profile_picture === 'boolean' ? share_profile_picture : (existing?.share_profile_picture || false),
+            share_profile_picture: share_profile_picture === true || share_profile_picture === false ? share_profile_picture : (existing?.share_profile_picture === true),
             // Online status visibility opt-in (default true - visible)
-            show_online_status: typeof show_online_status === 'boolean' ? show_online_status : (existing?.show_online_status !== false),
+            show_online_status: show_online_status === true || show_online_status === false ? show_online_status : (existing?.show_online_status !== false),
             // Store Discord ID for DM feature (validate numeric, update if provided, otherwise preserve existing)
             discord_id: (discord_id && /^\d{1,20}$/.test(String(discord_id))) ? String(discord_id) : (existing?.discord_id || null),
             // Store Discord avatar URL (validate HTTPS, update if provided, otherwise preserve existing)
-            avatar_url: (avatar_url && typeof avatar_url === 'string' && avatar_url.startsWith('https://')) ? avatar_url : (existing?.avatar_url || null),
+            avatar_url: (avatar_url && typeof avatar_url === 'string' && avatar_url.startsWith('https://') && avatar_url.length <= 500) ? avatar_url : (existing?.avatar_url || null),
             // Update Patreon status fields live (checked during sync)
             patreon_tier: effectiveTier,
             patreon_is_active: hasActivePledge,
@@ -3485,6 +3501,17 @@ app.get('/v2/auth/check-name', async (req, res) => {
         if (!redis) {
             return res.json({ available: true });
         }
+
+        // R8/M7: Per-IP rate limit (10 checks per minute)
+        const ip = req.ip || 'unknown';
+        const checkNameKey = `check_name_limit:${ip}`;
+        try {
+            await redis.set(checkNameKey, 0, { nx: true, ex: 60 });
+            const checkCount = await redis.incr(checkNameKey);
+            if (checkCount > 10) {
+                return res.status(429).json({ available: false });
+            }
+        } catch (e) { /* non-critical */ }
 
         const { name } = req.query;
         if (!name || typeof name !== 'string') {
@@ -3810,8 +3837,11 @@ app.post('/user/sync-discord', async (req, res) => {
         const { xp, level, achievements, stats, allow_discord_dm, share_profile_picture, show_online_status, avatar_url } = req.body;
 
         // Validate input
-        if (typeof level !== 'number' || level < 1) {
+        if (typeof level !== 'number' || !isFinite(level) || level < 1) {
             return res.status(400).json({ error: 'Invalid level' });
+        }
+        if (typeof xp === 'number' && !isFinite(xp)) {
+            return res.status(400).json({ error: 'Invalid xp value' });
         }
 
         const key = `${DISCORD_PROFILE_KEY_PREFIX}${user.id}`;
@@ -3843,7 +3873,7 @@ app.post('/user/sync-discord', async (req, res) => {
         }
 
         // Update avatar URL if provided (from client's Discord auth, must be HTTPS)
-        if (avatar_url && typeof avatar_url === 'string' && avatar_url.startsWith('https://')) {
+        if (avatar_url && typeof avatar_url === 'string' && avatar_url.startsWith('https://') && avatar_url.length <= 500) {
             profile.avatar_url = avatar_url;
         }
 
@@ -3907,7 +3937,7 @@ app.post('/user/sync-discord', async (req, res) => {
                 const existingVal = Number(profile.stats[key]) || 0;
                 const delta = value - existingVal;
                 if (delta <= 0) continue;
-                if (V1D_STATS_MAX.hasOwnProperty(key)) {
+                if (Object.prototype.hasOwnProperty.call(V1D_STATS_MAX, key)) {
                     if (delta > V1D_STATS_MAX[key]) {
                         profile.stats[key] = Math.round(existingVal + V1D_STATS_MAX[key]);
                         console.log(`[Anti-cheat V1D] Stat ${key} clamped: tried +${delta}, allowed +${V1D_STATS_MAX[key]}`);
@@ -6989,8 +7019,9 @@ app.post('/v2/auth/patreon', async (req, res) => {
                     const oldUser = typeof existingUserData === 'string' ? JSON.parse(existingUserData) : existingUserData;
 
                     // Rename the existing user's display name so the OG can have it
-                    const conflictSuffix = '_' + Date.now().toString(36);
-                    oldUser.display_name = (oldUser.display_name || 'user') + conflictSuffix;
+                    // R8/M25: Add random salt to ensure uniqueness
+                    const conflictSuffix = '_' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
+                    oldUser.display_name = ((oldUser.display_name || 'user') + conflictSuffix).slice(0, 30);
                     oldUser.display_name_conflict = true;
                     oldUser.display_name_conflict_at = new Date().toISOString();
                     await redis.set(`user:${existingNameUser}`, JSON.stringify(oldUser));
@@ -7167,8 +7198,11 @@ app.post('/v2/auth/register', async (req, res) => {
             return res.status(429).json({ error: 'Rate limit check failed. Try again later.' });
         }
 
-        // Validate invite code
+        // Validate invite code format (R8/M3 — prevent arbitrary Redis key construction)
         const normalizedCode = invite_code.toUpperCase().trim();
+        if (!/^[A-Z0-9]{6,12}$/.test(normalizedCode)) {
+            return res.status(400).json({ error: 'Invalid invite code format' });
+        }
         const codeKey = `invite_code:${normalizedCode}`;
         const codeData = await redis.get(codeKey);
         if (!codeData) {
@@ -7191,12 +7225,14 @@ app.post('/v2/auth/register', async (req, res) => {
             return res.status(409).json({ error: 'Invite code registration in progress. Please try again.' });
         }
 
-        // Validate display name
+        // Validate display name (R8/M22: release code lock on early returns)
         const trimmedName = display_name.trim();
         if (!trimmedName || trimmedName.length < 3 || trimmedName.length > 20) {
+            await redis.del(codeLockKey).catch(() => {});
             return res.status(400).json({ error: 'Display name must be 3-20 characters' });
         }
         if (!isValidDisplayNameChars(trimmedName)) {
+            await redis.del(codeLockKey).catch(() => {});
             return res.status(400).json({ error: 'Display name contains invalid characters' });
         }
 
@@ -7205,10 +7241,24 @@ app.post('/v2/auth/register', async (req, res) => {
         const nameLockKey = `name_lock:${trimmedName.toLowerCase()}`;
         const nameLockAcquired = await redis.set(nameLockKey, '1', { nx: true, ex: 10 });
         if (!nameLockAcquired) {
+            await redis.del(codeLockKey).catch(() => {});
             return res.status(409).json({ error: 'display_name is being registered by another user' });
         }
 
         try {
+            // R8/M1: Re-read invite code inside lock to prevent stale data
+            const freshCodeData = await redis.get(codeKey);
+            if (!freshCodeData) {
+                return res.status(400).json({ error: 'Invalid or expired invite code' });
+            }
+            const freshCode = typeof freshCodeData === 'string' ? JSON.parse(freshCodeData) : freshCodeData;
+            if (freshCode.used) {
+                return res.status(400).json({ error: 'This invite code has already been used' });
+            }
+            if (freshCode.expires_at && new Date(freshCode.expires_at) < new Date()) {
+                return res.status(400).json({ error: 'Invalid or expired invite code' });
+            }
+
             const existingNameUser = await redis.get(nameIndexKey);
             if (existingNameUser) {
                 // Verify the index points to a real user
@@ -7277,11 +7327,11 @@ app.post('/v2/auth/register', async (req, res) => {
             await redis.set(`user:${unifiedId}`, JSON.stringify(newUser));
             await redis.set(nameIndexKey, unifiedId);
 
-            // Mark invite code as used
-            code.used = true;
-            code.used_by = unifiedId;
-            code.used_at = new Date().toISOString();
-            await redis.set(codeKey, JSON.stringify(code));
+            // Mark invite code as used (use freshCode from inside-lock re-read)
+            freshCode.used = true;
+            freshCode.used_by = unifiedId;
+            freshCode.used_at = new Date().toISOString();
+            await redis.set(codeKey, JSON.stringify(freshCode));
 
             // Add to leaderboard
             await redis.zadd(`leaderboard:${currentSeason}`, { score: 0, member: unifiedId });
@@ -8010,14 +8060,24 @@ app.post('/admin/delete-user-by-name', async (req, res) => {
         await redis.del(`user:${unifiedId}`);
         deleted.push(`user:${unifiedId}`);
 
-        // Delete indexes
+        // Delete indexes (V2 + V1 legacy)
         if (user.discord_id) {
             await redis.del(`discord_index:${user.discord_id}`);
             deleted.push(`discord_index:${user.discord_id}`);
+            // V1 legacy index
+            await redis.del(`discord_id:${user.discord_id}`);
+            deleted.push(`discord_id:${user.discord_id}`);
         }
         if (user.patreon_id) {
             await redis.del(`patreon_index:${user.patreon_id}`);
             deleted.push(`patreon_index:${user.patreon_id}`);
+            // V1 legacy index
+            await redis.del(`patreon_id:${user.patreon_id}`);
+            deleted.push(`patreon_id:${user.patreon_id}`);
+        }
+        if (user.email_hash) {
+            await redis.del(`email_index:${user.email_hash}`);
+            deleted.push(`email_index:${user.email_hash}`);
         }
         await redis.del(nameIndexKey);
         deleted.push(nameIndexKey);
@@ -9399,9 +9459,17 @@ app.post('/v2/user/sync', async (req, res) => {
         // --- Anti-cheat: XP delta rate limiting (Phase 1A) ---
         const now = Date.now();
         const lastSyncAt = user.last_sync_at ? new Date(user.last_sync_at).getTime() : (now - 24 * 60 * 60 * 1000);
-        const hoursSinceLastSync = Math.max(0.01, (now - lastSyncAt) / (1000 * 60 * 60));
+        const hoursSinceLastSync = Math.min(168, Math.max(0.01, (now - lastSyncAt) / (1000 * 60 * 60)));
         const MAX_XP_PER_HOUR = 50000;
         const MAX_XP_PER_SYNC = 25000;
+
+        // R8/M23: Pre-cap arrays in case Redis record was manipulated
+        if (user.anti_cheat_flags && user.anti_cheat_flags.length > 100) {
+            user.anti_cheat_flags = user.anti_cheat_flags.slice(-50);
+        }
+        if (user.xp_rate && user.xp_rate.hourly_samples && user.xp_rate.hourly_samples.length > 100) {
+            user.xp_rate.hourly_samples = user.xp_rate.hourly_samples.slice(-48);
+        }
 
         let xpWasClamped = false;
         const xpDelta = newXp - oldXp;
@@ -9485,7 +9553,7 @@ app.post('/v2/user/sync', async (req, res) => {
         user.updated_at = new Date().toISOString();
 
         // Update highest_level_ever for unlock tracking
-        user.highest_level_ever = Math.max(user.highest_level_ever || 0, newLevel);
+        user.highest_level_ever = Math.min(999, Math.max(user.highest_level_ever || 0, newLevel));
 
         // Recalculate unlocks based on highest_level_ever
         user.unlocks = calculateUnlocks(user.highest_level_ever);
@@ -9515,7 +9583,12 @@ app.post('/v2/user/sync', async (req, res) => {
             total_video_minutes: 70,
             total_lock_cards_completed: 30,
             completed_sessions: 5,
-            longest_session_minutes: 480
+            longest_session_minutes: 480,
+            // Quest stats (R8/C1 — were being silently dropped by unknown-key rejection)
+            daily_quest_streak: 7,
+            total_daily_quests_completed: 24,
+            total_weekly_quests_completed: 4,
+            total_xp_from_quests: 50000
         };
 
         // Merge stats (take HIGHER values, but skip streak stats if force_streak_override is active)
@@ -9532,7 +9605,7 @@ app.post('/v2/user/sync', async (req, res) => {
                 // Handle non-numeric stat fields (date strings, arrays) — these can't go through Math.max
                 if (key === 'last_daily_quest_date') {
                     // Take the more recent date string (lexicographic compare works for YYYY-MM-DD)
-                    const clientDate = typeof value === 'string' ? value : '';
+                    const clientDate = typeof value === 'string' && value.length <= 20 ? value : '';
                     const serverDate = typeof user.stats[key] === 'string' ? user.stats[key] : '';
                     if (clientDate >= serverDate) {
                         user.stats[key] = clientDate;
@@ -9541,7 +9614,8 @@ app.post('/v2/user/sync', async (req, res) => {
                 }
                 if (key === 'quest_completion_dates') {
                     // Take the longer array (more completion dates = more progress), cap at 100 entries
-                    const clientDates = Array.isArray(value) ? value : [];
+                    // R8/M24: Filter to valid date strings only
+                    const clientDates = Array.isArray(value) ? value.filter(d => typeof d === 'string' && d.length <= 20) : [];
                     const serverDates = Array.isArray(user.stats[key]) ? user.stats[key] : [];
                     const merged = clientDates.length >= serverDates.length ? clientDates : serverDates;
                     user.stats[key] = merged.slice(-100);
@@ -9551,7 +9625,7 @@ app.post('/v2/user/sync', async (req, res) => {
                 const numValue = Number(value) || 0;
                 const existingValue = Number(user.stats[key]) || 0;
 
-                if (STATS_MAX_PER_HOUR.hasOwnProperty(key)) {
+                if (Object.prototype.hasOwnProperty.call(STATS_MAX_PER_HOUR, key)) {
                     // Known stat: cap the delta
                     const statDelta = numValue - existingValue;
                     if (statDelta > 0) {
@@ -9604,9 +9678,11 @@ app.post('/v2/user/sync', async (req, res) => {
             if (unlocked_skills && Array.isArray(unlocked_skills)) {
                 const existingSkills = new Set(user.unlocked_skills || []);
                 for (const skill of unlocked_skills) {
-                    existingSkills.add(skill);
+                    if (typeof skill === 'string' && skill.length <= 50) {
+                        existingSkills.add(skill);
+                    }
                 }
-                user.unlocked_skills = Array.from(existingSkills);
+                user.unlocked_skills = Array.from(existingSkills).slice(0, 200);
             }
             // Sync skill points: accept client value if they have more unlocked skills
             // (meaning they spent points on new skills), OR if they have more points (earned new ones)
@@ -9639,7 +9715,8 @@ app.post('/v2/user/sync', async (req, res) => {
         // Merge total conditioning minutes (lifetime value — always take higher)
         if (typeof total_conditioning_minutes === 'number' && total_conditioning_minutes > 0) {
             const existingMinutes = user.total_conditioning_minutes || 0;
-            user.total_conditioning_minutes = Math.max(existingMinutes, total_conditioning_minutes);
+            // R8/M16: Cap at 10M minutes (~19 years)
+            user.total_conditioning_minutes = Math.min(10000000, Math.max(existingMinutes, total_conditioning_minutes));
         }
 
         // Merge companion progress (per-companion, higher level/XP wins, capped at 50 companions)
@@ -9649,6 +9726,10 @@ app.post('/v2/user/sync', async (req, res) => {
             for (const [companionId, clientData] of Object.entries(companion_progress)) {
                 // Prevent prototype pollution
                 if (companionId === '__proto__' || companionId === 'constructor' || companionId === 'prototype') continue;
+                // R8/M15: Validate key length
+                if (typeof companionId !== 'string' || companionId.length > 100) continue;
+                // R8/M14: Validate clientData structure
+                if (!clientData || typeof clientData !== 'object' || Array.isArray(clientData)) continue;
                 // Cap total companion keys
                 if (!(companionId in user.companion_progress) && Object.keys(user.companion_progress).length >= MAX_COMPANION_KEYS) continue;
                 const existing = user.companion_progress[companionId] || {};
@@ -9657,12 +9738,15 @@ app.post('/v2/user/sync', async (req, res) => {
                 const existingLevel = Number(existing.Level) || 1;
                 const existingTotalXP = Number(existing.TotalXPEarned) || 0;
 
+                // Sanitize: only store known fields (R8/M14)
+                const sanitizedData = { Level: clientLevel, TotalXPEarned: clientTotalXP };
+
                 // Take the more progressed version (higher level, or if same level, higher XP)
                 if (clientLevel > existingLevel || (clientLevel === existingLevel && clientTotalXP > existingTotalXP)) {
-                    user.companion_progress[companionId] = clientData;
+                    user.companion_progress[companionId] = sanitizedData;
                 } else if (!existing.Level) {
                     // First time seeing this companion
-                    user.companion_progress[companionId] = clientData;
+                    user.companion_progress[companionId] = sanitizedData;
                 }
             }
         }
@@ -9700,7 +9784,7 @@ app.post('/v2/user/sync', async (req, res) => {
 
         // Update leaderboard sorted set with new XP
         const season = user.current_season || getCurrentSeason();
-        await redis.zadd(`leaderboard:${season}`, { score: newXp, member: unified_id });
+        await redis.zadd(`leaderboard:${season}`, { score: Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, newXp)), member: unified_id });
 
         console.log(`[V2 Sync] User ${unified_id} (${user.display_name}): Level ${oldLevel}->${newLevel}, XP ${oldXp}->${newXp}`);
 
@@ -9807,9 +9891,9 @@ app.post('/v2/user/heartbeat', async (req, res) => {
         // Store enriched heartbeat data for anti-cheat cross-referencing
         user.last_heartbeat = {
             at: user.last_seen,
-            is_active: is_active ?? null,
-            in_session: in_session ?? null,
-            app_version: app_version ?? null
+            is_active: is_active === true || is_active === false ? is_active : null,
+            in_session: in_session === true || in_session === false ? in_session : null,
+            app_version: (typeof app_version === 'string' ? app_version.slice(0, 50) : null)
         };
 
         await redis.set(`user:${unified_id}`, JSON.stringify(user));
@@ -12981,13 +13065,16 @@ app.get('/admin/export-all-users', async (req, res) => {
  * Restore from a full backup. Writes user records, indexes, and leaderboard entries.
  * Body: { admin_token: string, backup: <export JSON> }
  */
-app.post('/admin/import-all-users', express.json({ limit: '50mb' }), async (req, res) => {
+app.post('/admin/import-all-users', (req, res, next) => {
+    // R8/M8: Verify admin auth BEFORE parsing 50MB body
+    const admin_token = req.headers['x-admin-token'];
+    if (!verifyAdminToken(admin_token)) {
+        return res.status(403).json({ error: 'Unauthorized' });
+    }
+    next();
+}, express.json({ limit: '50mb' }), async (req, res) => {
     try {
         const { backup } = req.body;
-        const admin_token = req.headers['x-admin-token'];
-        if (!verifyAdminToken(admin_token)) {
-            return res.status(403).json({ error: 'Unauthorized' });
-        }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
         if (!backup || !backup.users) {
             return res.status(400).json({ error: 'Invalid backup format: missing users array' });
@@ -13501,6 +13588,8 @@ app.post('/remote/connect', async (req, res) => {
 
         const { code } = req.body;
         if (!code || code.length !== 6) return res.status(400).json({ error: 'Valid 6-character code required' });
+        // R8/M11: Validate character set to prevent Redis key injection
+        if (!/^[A-Za-z0-9]{6}$/.test(code)) return res.status(400).json({ error: 'Invalid code format' });
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
 
         const normalizedCode = code.toUpperCase();
