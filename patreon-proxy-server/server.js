@@ -27,10 +27,24 @@ function hashEmail(email) {
 }
 
 const app = express();
+
+// Trust Vercel's reverse proxy so req.ip returns the real client IP (not proxy IP)
+app.set('trust proxy', 1);
+
+// Remove Express framework fingerprint
+app.disable('x-powered-by');
+
+// Security headers (API server — browser-specific headers like CSP/X-Frame-Options not needed)
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    next();
+});
+
 app.use(cors({
     origin: ['https://codebambi.github.io'],
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'X-Auth-Token', 'X-CCP-Timestamp', 'X-CCP-Signature', 'X-Client-Version']
+    allowedHeaders: ['Content-Type', 'X-Auth-Token', 'X-Admin-Token', 'X-CCP-Timestamp', 'X-CCP-Signature', 'X-Client-Version']
 }));
 app.use(express.json({
     limit: '1mb',
@@ -171,6 +185,22 @@ const IP_RATE_LIMIT = 50;            // Max requests per IP per minute before bl
 const IP_AUTH_FAIL_LIMIT = 10;       // Max auth failures per IP per minute before blocking
 const IP_BLOCK_DURATION_MS = 1800000; // Block IP for 30 minutes after exceeding limits
 
+// Auth endpoints exempt from global IP rate limiter (have their own per-IP cooldown instead)
+// These are one-shot login/registration operations that shouldn't be collaterally blocked
+// by attack traffic sharing the same IP (residential botnet / CGNAT)
+const AUTH_EXEMPT_PATHS = new Set([
+    '/patreon/authorize',
+    '/patreon/token',
+    '/patreon/refresh',
+    '/patreon/validate',
+    '/v2/auth/patreon',
+    '/v2/auth/discord',
+    '/v2/auth/restore-session',
+    '/discord/validate',
+    '/auth/register',
+    '/auth/link-provider'
+]);
+
 // Clean up old entries every 5 minutes, cap Map size at 10,000 entries
 const MAX_REQUEST_COUNT_ENTRIES = 10000;
 setInterval(() => {
@@ -202,6 +232,35 @@ app.use(async (req, res, next) => {
     const unifiedId = sanitizeForLog(req.body?.unified_id || req.query?.unified_id || '-');
     const hasAuthToken = !!req.headers['x-auth-token'];
     const clientVersion = req.headers['x-client-version'] || null;
+
+    // Auth endpoints bypass global IP rate limiter — protected by their own per-IP
+    // rate limit instead. This prevents legitimate users from being collaterally blocked
+    // when sharing IPs with attack traffic (residential botnet / CGNAT / VPN).
+    // Limit: 10 auth requests per IP per 30s window (shared across all auth endpoints).
+    if (AUTH_EXEMPT_PATHS.has(req.path)) {
+        if (redis) {
+            try {
+                const authRateKey = `auth_rate:${ip}`;
+                // Atomic increment — returns new count, creates key with value 1 if missing
+                const authCount = await redis.incr(authRateKey);
+                if (authCount === 1) {
+                    // First request in window — set TTL (key created by incr has no expiry)
+                    await redis.expire(authRateKey, 30);
+                }
+                if (authCount > 10) {
+                    return res.status(429).json({ error: 'Too many auth requests. Please wait and try again.', retry_after: 30 });
+                }
+            } catch (e) { /* Redis failure = allow through, auth endpoints require valid OAuth tokens */ }
+        }
+        // Still log request on finish
+        res.on('finish', () => {
+            const duration = Date.now() - start;
+            if (req.method !== 'GET' || res.statusCode >= 400) {
+                console.log(`[REQ] ${req.method} ${req.path} ${res.statusCode} ${duration}ms | ip=${ip} uid=${unifiedId} auth=${hasAuthToken} ua=${ua.substring(0, 80)}`);
+            }
+        });
+        return next();
+    }
 
     // Track per-IP request rate
     const ipKey = ip;
@@ -624,7 +683,8 @@ app.get('/debug/whitelist', (req, res) => {
 // Seed Redis with whitelist data (one-time migration)
 app.post('/admin/whitelist/seed', async (req, res) => {
     try {
-        const { admin_token, emails, names } = req.body;
+        const { emails, names } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -670,7 +730,8 @@ app.post('/admin/whitelist/seed', async (req, res) => {
 // Add a whitelist entry
 app.post('/admin/whitelist/add', async (req, res) => {
     try {
-        const { admin_token, type, value } = req.body;
+        const { type, value } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -701,7 +762,8 @@ app.post('/admin/whitelist/add', async (req, res) => {
 // Remove a whitelist entry
 app.post('/admin/whitelist/remove', async (req, res) => {
     try {
-        const { admin_token, type, value } = req.body;
+        const { type, value } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -761,7 +823,7 @@ app.get('/admin/whitelist/list', async (req, res) => {
 // Force-refresh in-memory cache from Redis
 app.post('/admin/whitelist/reload', async (req, res) => {
     try {
-        const { admin_token } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -4139,7 +4201,8 @@ function getCumulativeXPForLevel(level) {
  */
 app.post('/admin/set-level', async (req, res) => {
     try {
-        const { display_name, level, admin_token, fix_xp } = req.body;
+        const { display_name, level, fix_xp } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         // Admin token check
         if (!verifyAdminToken(admin_token)) {
@@ -4289,7 +4352,8 @@ app.post('/admin/set-level', async (req, res) => {
  */
 app.post('/admin/reset-progress', async (req, res) => {
     try {
-        const { display_name, admin_token } = req.body;
+        const { display_name } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         // Admin token check
         if (!verifyAdminToken(admin_token)) {
@@ -4450,7 +4514,8 @@ app.get('/admin/user-info', async (req, res) => {
  */
 app.post('/admin/cleanup-index', async (req, res) => {
     try {
-        const { display_name, admin_token } = req.body;
+        const { display_name } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         // Admin token check
         if (!verifyAdminToken(admin_token)) {
@@ -4565,7 +4630,8 @@ app.get('/admin/scan-orphaned-indexes', async (req, res) => {
  */
 app.post('/admin/fix-display-name', async (req, res) => {
     try {
-        const { discord_id, patreon_id, new_display_name, admin_token } = req.body;
+        const { discord_id, patreon_id, new_display_name } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
@@ -4672,7 +4738,8 @@ app.post('/admin/fix-display-name', async (req, res) => {
  */
 app.post('/admin/fix-patreon-tier', async (req, res) => {
     try {
-        const { display_name, admin_token, tier } = req.body;
+        const { display_name, tier } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
@@ -4737,7 +4804,8 @@ app.post('/admin/fix-patreon-tier', async (req, res) => {
  */
 app.post('/admin/set-og', async (req, res) => {
     try {
-        const { display_name, admin_token, og } = req.body;
+        const { display_name, og } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
@@ -4795,7 +4863,8 @@ app.post('/admin/set-og', async (req, res) => {
  */
 app.post('/admin/delete-profile', async (req, res) => {
     try {
-        const { display_name, admin_token } = req.body;
+        const { display_name } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
@@ -4876,7 +4945,8 @@ app.post('/admin/delete-profile', async (req, res) => {
  */
 app.post('/admin/batch-restore', async (req, res) => {
     try {
-        const { profiles, admin_token } = req.body;
+        const { profiles } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -4994,7 +5064,8 @@ app.post('/admin/batch-restore', async (req, res) => {
  */
 app.post('/admin/link-accounts', async (req, res) => {
     try {
-        const { patreon_id, discord_id, admin_token } = req.body;
+        const { patreon_id, discord_id } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -5146,7 +5217,8 @@ app.get('/admin/scan-unified-users', async (req, res) => {
  */
 app.post('/admin/fix-migrated-users', async (req, res) => {
     try {
-        const { admin_token, dry_run = true } = req.body;
+        const { dry_run = true } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -5228,7 +5300,8 @@ app.post('/admin/fix-migrated-users', async (req, res) => {
  */
 app.post('/admin/purge-user-data', async (req, res) => {
     try {
-        const { display_name, admin_token, dry_run = false } = req.body;
+        const { display_name, dry_run = false } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -5331,7 +5404,8 @@ app.get('/admin/get-key', async (req, res) => {
  */
 app.post('/admin/delete-key', async (req, res) => {
     try {
-        const { key, admin_token } = req.body;
+        const { key } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -5355,7 +5429,8 @@ app.post('/admin/delete-key', async (req, res) => {
  */
 app.post('/admin/update-key', async (req, res) => {
     try {
-        const { key, field, value, admin_token } = req.body;
+        const { key, field, value } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -5390,7 +5465,8 @@ app.post('/admin/update-key', async (req, res) => {
  */
 app.post('/admin/set-key', async (req, res) => {
     try {
-        const { key, data, admin_token } = req.body;
+        const { key, data } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -5418,7 +5494,8 @@ app.post('/admin/mass-restore-display-names', async (req, res) => {
     return res.status(410).json({ error: 'This endpoint has been disabled to protect user privacy. patron_name must never be used as display_name.' });
 
     try {
-        const { admin_token, dry_run = false } = req.body;
+        const { dry_run = false } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -5513,7 +5590,8 @@ app.post('/admin/mass-restore-display-names', async (req, res) => {
  */
 app.post('/admin/cleanup-empty-profiles', async (req, res) => {
     try {
-        const { admin_token, dry_run = true } = req.body;
+        const { dry_run = true } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -5619,7 +5697,8 @@ function getCurrentSeason() {
  */
 app.post('/admin/capture-legacy-users', async (req, res) => {
     try {
-        const { admin_token, dry_run = true } = req.body;
+        const { dry_run = true } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -7246,7 +7325,8 @@ app.post('/v2/user/export-data', async (req, res) => {
  */
 app.post('/admin/delete-user-by-name', async (req, res) => {
     try {
-        const { admin_token, display_name } = req.body;
+        const { display_name } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -7319,7 +7399,8 @@ app.post('/admin/delete-user-by-name', async (req, res) => {
  */
 app.post('/admin/set-achievements', async (req, res) => {
     try {
-        const { admin_token, display_name, achievements } = req.body;
+        const { display_name, achievements } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -7390,7 +7471,8 @@ app.post('/admin/set-achievements', async (req, res) => {
  */
 app.post('/admin/delete-legacy-profile', async (req, res) => {
     try {
-        const { admin_token, display_name } = req.body;
+        const { display_name } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -7447,7 +7529,8 @@ app.post('/admin/delete-legacy-profile', async (req, res) => {
  */
 app.post('/admin/purge-user-completely', async (req, res) => {
     try {
-        const { admin_token, discord_id, patreon_id } = req.body;
+        const { discord_id, patreon_id } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -7619,7 +7702,7 @@ app.post('/v2/user/update', async (req, res) => {
 
         // XP, level, stats, and achievements are anti-cheat protected — admin-only via this endpoint.
         // Regular clients must use /v2/user/sync which has delta capping, HMAC verification, and rate limits.
-        const { admin_token } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         const isAdmin = admin_token && verifyAdminToken(admin_token);
 
         if ((typeof xp === 'number' || typeof level === 'number' || stats || achievements) && !isAdmin) {
@@ -7693,7 +7776,8 @@ app.post('/v2/user/update', async (req, res) => {
  */
 app.post('/v2/user/change-display-name', async (req, res) => {
     try {
-        const { unified_id, new_display_name, admin_token } = req.body;
+        const { unified_id, new_display_name } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         const isAdmin = admin_token && verifyAdminToken(admin_token);
 
         if (!unified_id) {
@@ -8190,7 +8274,8 @@ app.get('/v2/leaderboard', async (req, res) => {
  */
 app.post('/admin/leaderboard-remove', async (req, res) => {
     try {
-        const { admin_token, season, unified_ids } = req.body;
+        const { season, unified_ids } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -8220,7 +8305,8 @@ app.post('/admin/leaderboard-remove', async (req, res) => {
  */
 app.post('/admin/cleanup-leaderboard', async (req, res) => {
     try {
-        const { admin_token, season, dry_run = true } = req.body;
+        const { season, dry_run = true } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -8272,7 +8358,8 @@ app.post('/admin/cleanup-leaderboard', async (req, res) => {
  */
 app.post('/admin/trigger-season-reset', async (req, res) => {
     try {
-        const { admin_token, new_season, dry_run = true } = req.body;
+        const { new_season, dry_run = true } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -8381,7 +8468,8 @@ app.post('/admin/trigger-season-reset', async (req, res) => {
  */
 app.post('/admin/clear-leaderboard', async (req, res) => {
     try {
-        const { admin_token, season } = req.body;
+        const { season } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -8408,7 +8496,8 @@ app.post('/admin/clear-leaderboard', async (req, res) => {
  */
 app.post('/admin/reset-all-levels', async (req, res) => {
     try {
-        const { admin_token, dry_run = true } = req.body;
+        const { dry_run = true } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -9184,7 +9273,8 @@ app.post('/v2/user/settings-backup', async (req, res) => {
  */
 app.post('/admin/import-patreon-members', async (req, res) => {
     try {
-        const { admin_token, members, dry_run = true } = req.body;
+        const { members, dry_run = true } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -9298,7 +9388,8 @@ app.get('/config/marquee', async (req, res) => {
  */
 app.post('/config/marquee', async (req, res) => {
     try {
-        const { message, admin_token } = req.body;
+        const { message } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         // Simple admin token check (set ADMIN_TOKEN in environment)
         if (!verifyAdminToken(admin_token)) {
@@ -9362,7 +9453,8 @@ app.get('/config/update-banner', async (req, res) => {
  */
 app.post('/config/update-banner', async (req, res) => {
     try {
-        const { enabled, version, message, url, admin_token } = req.body;
+        const { enabled, version, message, url } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         // Simple admin token check
         if (!verifyAdminToken(admin_token)) {
@@ -9452,7 +9544,8 @@ app.get('/config/announcement', async (req, res) => {
  */
 app.post('/config/announcement', async (req, res) => {
     try {
-        const { enabled, id, title, message, image_url, admin_token } = req.body;
+        const { enabled, id, title, message, image_url } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
@@ -9484,7 +9577,8 @@ app.post('/config/announcement', async (req, res) => {
  */
 app.post('/admin/user-announcement', async (req, res) => {
     try {
-        const { display_name, enabled, id, title, message, image_url, admin_token } = req.body;
+        const { display_name, enabled, id, title, message, image_url } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
@@ -9540,7 +9634,8 @@ app.post('/admin/user-announcement', async (req, res) => {
  */
 app.post('/admin/update-user', async (req, res) => {
     try {
-        const { admin_token, display_name, updates } = req.body;
+        const { display_name, updates } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
@@ -10361,7 +10456,8 @@ app.get('/quests/definitions', async (req, res) => {
  * Body: { admin_token, daily: [...], weekly: [...], seasonal: [...] }
  */
 app.post('/admin/quests/update', async (req, res) => {
-    const { admin_token, daily, weekly, seasonal } = req.body;
+    const { daily, weekly, seasonal } = req.body;
+    const admin_token = req.headers['x-admin-token'];
 
     // Verify admin token
     if (!verifyAdminToken(admin_token)) {
@@ -10431,7 +10527,8 @@ app.get('/admin/quests/get', async (req, res) => {
  * Body: { admin_token, quest: { id, name, description, ... } }
  */
 app.post('/admin/quests/add-seasonal', async (req, res) => {
-    const { admin_token, quest } = req.body;
+    const { quest } = req.body;
+    const admin_token = req.headers['x-admin-token'];
 
     if (!verifyAdminToken(admin_token)) {
         return res.status(401).json({ error: 'Invalid admin token' });
@@ -10485,7 +10582,8 @@ app.post('/admin/quests/add-seasonal', async (req, res) => {
  * Body: { admin_token, questId }
  */
 app.post('/admin/quests/remove-seasonal', async (req, res) => {
-    const { admin_token, questId } = req.body;
+    const { questId } = req.body;
+    const admin_token = req.headers['x-admin-token'];
 
     if (!verifyAdminToken(admin_token)) {
         return res.status(401).json({ error: 'Invalid admin token' });
@@ -10536,7 +10634,8 @@ app.post('/admin/quests/remove-seasonal', async (req, res) => {
  * Body: { admin_token, display_name, type: 'weekly'|'daily'|'both' }
  */
 app.post('/admin/reset-quest', async (req, res) => {
-    const { admin_token, display_name, type } = req.body;
+    const { display_name, type } = req.body;
+    const admin_token = req.headers['x-admin-token'];
 
     if (!verifyAdminToken(admin_token)) {
         return res.status(401).json({ error: 'Invalid admin token' });
@@ -10638,9 +10737,10 @@ app.post('/admin/reset-quest', async (req, res) => {
  *         total_weekly_quests_completed?: number, total_xp_from_quests?: number }
  */
 app.post('/admin/set-streak', async (req, res) => {
-    const { admin_token, display_name, daily_quest_streak, last_daily_quest_date,
+    const { display_name, daily_quest_streak, last_daily_quest_date,
             quest_completion_dates, total_daily_quests_completed,
             total_weekly_quests_completed, total_xp_from_quests } = req.body;
+    const admin_token = req.headers['x-admin-token'];
 
     if (!verifyAdminToken(admin_token)) {
         return res.status(401).json({ error: 'Invalid admin token' });
@@ -10771,7 +10871,8 @@ app.post('/admin/set-streak', async (req, res) => {
  * Body: { admin_token, display_name }
  */
 app.post('/admin/reset-skills', async (req, res) => {
-    const { admin_token, display_name } = req.body;
+    const { display_name } = req.body;
+    const admin_token = req.headers['x-admin-token'];
 
     if (!verifyAdminToken(admin_token)) {
         return res.status(401).json({ error: 'Invalid admin token' });
@@ -10862,7 +10963,8 @@ app.post('/admin/reset-skills', async (req, res) => {
  * Body: { admin_token, dry_run?: boolean }
  */
 app.post('/admin/reset-all-skills', async (req, res) => {
-    const { admin_token, dry_run = true } = req.body;
+    const { dry_run = true } = req.body;
+    const admin_token = req.headers['x-admin-token'];
 
     if (!verifyAdminToken(admin_token)) {
         return res.status(401).json({ error: 'Invalid admin token' });
@@ -10944,7 +11046,8 @@ app.post('/admin/reset-all-skills', async (req, res) => {
  */
 app.post('/admin/retroactive-og-check', async (req, res) => {
     try {
-        const { admin_token, discord_ids, dry_run = true } = req.body;
+        const { discord_ids, dry_run = true } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -11026,7 +11129,8 @@ app.post('/admin/retroactive-og-check', async (req, res) => {
  */
 app.post('/admin/import-v1-discord-ids', async (req, res) => {
     try {
-        const { admin_token, discord_ids } = req.body;
+        const { discord_ids } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -11064,7 +11168,8 @@ app.post('/admin/import-v1-discord-ids', async (req, res) => {
  */
 app.post('/admin/start-new-season', async (req, res) => {
     try {
-        const { admin_token, new_season, season_title, dry_run = true } = req.body;
+        const { new_season, season_title, dry_run = true } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -11248,7 +11353,8 @@ app.get('/admin/leaderboard-snapshot/:season', async (req, res) => {
  */
 app.post('/admin/season/update', async (req, res) => {
     try {
-        const { admin_token, title, quests } = req.body;
+        const { title, quests } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -11315,10 +11421,11 @@ app.post('/admin/season/update', async (req, res) => {
 app.post('/admin/merge-accounts', async (req, res) => {
     try {
         const {
-            admin_token, source_id, target_id,
+            source_id, target_id,
             override_display_name, override_level, override_xp,
             set_whitelisted, set_og, dry_run = false
         } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
@@ -11574,7 +11681,8 @@ app.post('/admin/merge-accounts', async (req, res) => {
  */
 app.post('/admin/clear-patron-display-names', async (req, res) => {
     try {
-        const { admin_token, dry_run = true } = req.body;
+        const { dry_run = true } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -11670,7 +11778,8 @@ app.post('/admin/clear-patron-display-names', async (req, res) => {
  */
 app.post('/admin/hash-emails', async (req, res) => {
     try {
-        const { admin_token, dry_run = true } = req.body;
+        const { dry_run = true } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -11804,7 +11913,8 @@ app.post('/admin/hash-emails', async (req, res) => {
  */
 app.post('/admin/purge-patron-names', async (req, res) => {
     try {
-        const { admin_token, dry_run = true } = req.body;
+        const { dry_run = true } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
@@ -11883,7 +11993,8 @@ app.post('/admin/purge-patron-names', async (req, res) => {
  */
 app.post('/admin/set-highest-level', async (req, res) => {
     try {
-        const { display_name, highest_level, admin_token } = req.body;
+        const { display_name, highest_level } = req.body;
+        const admin_token = req.headers['x-admin-token'];
 
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
@@ -12171,7 +12282,8 @@ app.get('/admin/export-all-users', async (req, res) => {
  */
 app.post('/admin/import-all-users', express.json({ limit: '50mb' }), async (req, res) => {
     try {
-        const { admin_token, backup } = req.body;
+        const { backup } = req.body;
+        const admin_token = req.headers['x-admin-token'];
         if (!verifyAdminToken(admin_token)) {
             return res.status(403).json({ error: 'Unauthorized' });
         }
