@@ -20,6 +20,7 @@ namespace ConditioningControlPanel.Services
         Working,
         Media,
         Learning,
+        Training,
         Idle
     }
 
@@ -229,6 +230,11 @@ namespace ConditioningControlPanel.Services
             { "xhamster", "adult content" },
             { "bambicloud", "BambiCloud" },
             { "hypnotube", "Hypnotube" },
+            { "shibbydex", "ShibbyDex" },
+            { "mistress calia", "MistressCalia" },
+            { "lilith", "LilithUnleashed" },
+            { "giveinto", "GiveInToMe" },
+
         };
 
         private static readonly Dictionary<string, string> LearningSites = new(StringComparer.OrdinalIgnoreCase)
@@ -290,6 +296,19 @@ namespace ConditioningControlPanel.Services
             { "gmail", "Gmail" },
             { "cursor", "Cursor" },
             { "zed", "Zed Editor" },
+        };
+
+        private readonly Dictionary<string, string> TrainingSites = new(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Give in to me", "giveinto" },
+            { "Hypnotube", "hypnotube" },
+            { "Porn hub", "pornhub" },
+            { "Xvideos", "xvideos" },
+            { "Xhamster", "xhamster" },
+            { "Bambicloud", "bambicloud" },
+            { "Shibby dex", "shibbydex" },
+            { "Mistress calia", "mistress calia" },
+            { "Lilith", "lilith" }
         };
 
         /// <summary>
@@ -605,7 +624,9 @@ namespace ConditioningControlPanel.Services
                 if (lowerTitle.Contains(kvp.Key))
                 {
                     var (displayName, pageTitle) = ExtractPageNameWithService(title, kvp.Value);
-                    return (ActivityCategory.Media, displayName, kvp.Value, pageTitle);
+                    return TrainingSites.FirstOrDefault(x => x.Value.Contains(pageTitle.ToLowerInvariant())).Value != null ? 
+                        (ActivityCategory.Training, displayName, kvp.Value, pageTitle) : 
+                        (ActivityCategory.Media, displayName, kvp.Value, pageTitle);
                 }
             }
 

@@ -1,21 +1,17 @@
-using System;
-using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Text.Json;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using ConditioningControlPanel.Models;
 
-namespace ConditioningControlPanel.Services
+namespace ConditioningControlPanel.Services.AIService
 {
     /// <summary>
     /// Handles AI-powered chat responses for the Bambi Companion widget.
     /// Uses hosted proxy that forwards to OpenRouter for roleplay.
     /// Free for all users with a cloud identity; falls back to Patreon auth.
     /// </summary>
-    public class AiService : IDisposable
+    public class AiService : IDisposable, IAiService
     {
         private readonly HttpClient _httpClient;
         private readonly BambiSprite _bambiSprite;
