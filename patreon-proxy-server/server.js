@@ -182,14 +182,48 @@ function filterUserForResponse(user) {
  */
 function filterUserForAdmin(user) {
     if (!user || typeof user !== 'object') return user;
-    const filtered = { ...user };
-    delete filtered.password_hash;
-    delete filtered.auth_token_hash;
-    delete filtered.xp_rate;
-    delete filtered.patron_name;
-    delete filtered.email;
-    delete filtered.email_hash;
-    return filtered;
+    // Whitelist approach: only include fields admins need for debugging/management.
+    // New fields added to user records will NOT auto-leak.
+    return {
+        unified_id: user.unified_id,
+        display_name: user.display_name,
+        display_name_set_at: user.display_name_set_at,
+        level: user.level,
+        xp: user.xp,
+        current_season: user.current_season,
+        highest_level_ever: user.highest_level_ever,
+        is_season0_og: user.is_season0_og,
+        patreon_tier: user.patreon_tier,
+        patreon_is_active: user.patreon_is_active,
+        patreon_is_whitelisted: user.patreon_is_whitelisted,
+        patreon_id: user.patreon_id || null,
+        discord_id: user.discord_id || null,
+        achievements: user.achievements,
+        unlocked_skills: user.unlocked_skills,
+        skill_points: user.skill_points,
+        stats: user.stats,
+        all_time_stats: user.all_time_stats,
+        quest_stats: user.quest_stats,
+        companion_progress: user.companion_progress,
+        total_conditioning_minutes: user.total_conditioning_minutes,
+        unlocks: user.unlocks,
+        anti_cheat_flags: user.anti_cheat_flags,
+        auth_method: user.auth_method,
+        avatar_url: user.avatar_url,
+        app_version: user.app_version,
+        show_online_status: user.show_online_status,
+        allow_discord_dm: user.allow_discord_dm,
+        last_seen: user.last_seen,
+        last_heartbeat: user.last_heartbeat,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+        bonus_daily_rerolls: user.bonus_daily_rerolls,
+        bonus_weekly_rerolls: user.bonus_weekly_rerolls,
+        oopsie_used_season: user.oopsie_used_season,
+        force_skills_reset: user.force_skills_reset,
+        force_streak_override: user.force_streak_override,
+        provider_data: user.provider_data ? { ...user.provider_data } : undefined,
+    };
 }
 
 /**
@@ -4057,7 +4091,7 @@ app.post('/user/heartbeat-discord', async (req, res) => {
                     last_seen: now
                 };
                 await redis.set(key, JSON.stringify(newProfile));
-                console.log(`Discord heartbeat created new profile for ${user.username} (${user.id})`);
+                console.log(`Discord heartbeat created new profile for discord_id:${user.id}`);
             }
 
             // Also update unified user's last_seen if this Discord user is linked to one
@@ -5064,7 +5098,7 @@ app.post('/admin/fix-display-name', async (req, res) => {
             old_display_name: oldDisplayName || null,
             new_display_name: trimmedName,
             is_whitelisted: whitelistedByDisplayName || profile.patreon_is_whitelisted || false,
-            profile: profile
+            profile: filterUserForAdmin(profile)
         });
     } catch (error) {
         console.error('Admin fix-display-name error:', error.message);
@@ -5489,7 +5523,7 @@ app.get('/admin/search-profiles', async (req, res) => {
                         if (data) {
                             const p = typeof data === 'string' ? JSON.parse(data) : data;
                             if (p.display_name && p.display_name.toLowerCase().includes(searchPattern)) {
-                                results.push({ key, type, display_name: p.display_name, email_hash: p.email_hash || null, level: p.level,
+                                results.push({ key, type, display_name: p.display_name, level: p.level,
                                     patreon_id: p.patreon_id || (type === 'patreon' ? key.replace('profile:', '') : null),
                                     discord_id: p.discord_id || (type === 'discord' ? key.replace('discord_profile:', '') : null) });
                             }
@@ -7692,7 +7726,7 @@ app.post('/v2/auth/login', async (req, res) => {
         if (!display_name || !password) {
             return res.status(400).json({ error: 'display_name and password required' });
         }
-        if (password.length > 128) {
+        if (display_name.length > 30 || password.length > 128) {
             return res.status(400).json({ error: 'Invalid credentials' });
         }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
@@ -10815,28 +10849,36 @@ app.post('/admin/update-user', async (req, res) => {
             user.bonus_weekly_rerolls = updates.bonus_weekly_rerolls;
         }
 
-        // Update level
+        // Update level (bounded 0-999 for data integrity)
         if (typeof updates.level === 'number') {
-            changes.level = { from: user.level, to: updates.level };
-            user.level = updates.level;
+            const boundedLevel = Math.max(0, Math.min(999, Math.floor(updates.level)));
+            if (isNaN(boundedLevel)) return res.status(400).json({ error: 'Invalid level value' });
+            changes.level = { from: user.level, to: boundedLevel };
+            user.level = boundedLevel;
         }
 
-        // Update xp
+        // Update xp (bounded 0-MAX_SAFE_INTEGER for data integrity)
         if (typeof updates.xp === 'number') {
-            changes.xp = { from: user.xp, to: updates.xp };
-            user.xp = updates.xp;
+            const boundedXp = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(updates.xp)));
+            if (isNaN(boundedXp)) return res.status(400).json({ error: 'Invalid xp value' });
+            changes.xp = { from: user.xp, to: boundedXp };
+            user.xp = boundedXp;
         }
 
-        // Update highest_level_ever
+        // Update highest_level_ever (bounded 0-999 for data integrity)
         if (typeof updates.highest_level_ever === 'number') {
-            changes.highest_level_ever = { from: user.highest_level_ever, to: updates.highest_level_ever };
-            user.highest_level_ever = updates.highest_level_ever;
+            const boundedHighest = Math.max(0, Math.min(999, Math.floor(updates.highest_level_ever)));
+            if (isNaN(boundedHighest)) return res.status(400).json({ error: 'Invalid highest_level_ever value' });
+            changes.highest_level_ever = { from: user.highest_level_ever, to: boundedHighest };
+            user.highest_level_ever = boundedHighest;
         }
 
-        // Update skill_points
+        // Update skill_points (bounded, non-negative)
         if (typeof updates.skill_points === 'number') {
-            changes.skill_points = { from: user.skill_points, to: updates.skill_points };
-            user.skill_points = updates.skill_points;
+            const boundedSP = Math.max(0, Math.min(9999, Math.floor(updates.skill_points)));
+            if (isNaN(boundedSP)) return res.status(400).json({ error: 'Invalid skill_points value' });
+            changes.skill_points = { from: user.skill_points, to: boundedSP };
+            user.skill_points = boundedSP;
         }
 
         // Update stats (partial merge — only provided keys are overwritten)
@@ -11179,8 +11221,8 @@ app.get('/packs/manifest', (req, res) => {
  */
 async function checkPackDownloadLimit(userId, packId) {
     if (!redis) {
-        // No Redis = no rate limiting, allow download
-        return { allowed: true, remaining: PACK_RATE_LIMIT.DOWNLOADS_PER_DAY, used: 0 };
+        // No Redis = fail-closed, deny download
+        return { allowed: false, remaining: 0, used: 0, error: true };
     }
 
     const todayKey = getTodayKey();
@@ -11280,6 +11322,16 @@ app.post('/pack/download-url', async (req, res) => {
             });
         }
 
+        // Verify user has a paid Patreon tier (free followers cannot download packs)
+        const tierInfo = determineTier(identity);
+        const isWhitelisted = tierInfo.is_whitelisted || false;
+        if (!isWhitelisted && (!tierInfo.tier || tierInfo.tier < 1)) {
+            return res.status(403).json({
+                error: 'Subscription required',
+                message: 'Content packs require an active Patreon subscription.'
+            });
+        }
+
         // Validate pack ID
         const { packId } = req.body;
         if (!packId || !AVAILABLE_PACKS[packId]) {
@@ -11361,9 +11413,10 @@ app.get('/pack/status', async (req, res) => {
             return res.status(401).json({ error: 'Invalid user' });
         }
 
-        // Get rate limit status for all packs
+        // Get rate limit status for all enabled packs
         const packStatus = {};
         for (const [packId, pack] of Object.entries(AVAILABLE_PACKS)) {
+            if (pack.enabled === false) continue;
             const rateLimit = await checkPackDownloadLimit(userId, packId);
             packStatus[packId] = {
                 name: pack.name,
@@ -11376,7 +11429,6 @@ app.get('/pack/status', async (req, res) => {
         }
 
         res.json({
-            userId: userId,
             packs: packStatus,
             dailyLimit: PACK_RATE_LIMIT.DOWNLOADS_PER_DAY
         });
@@ -11416,9 +11468,10 @@ app.get('/discord/pack/status', async (req, res) => {
 
         const discordUserId = `discord_${discordUser.id}`;
 
-        // Get rate limit status for all packs
+        // Get rate limit status for all enabled packs
         const packStatus = {};
         for (const [packId, pack] of Object.entries(AVAILABLE_PACKS)) {
+            if (pack.enabled === false) continue;
             const rateLimit = await checkPackDownloadLimit(discordUserId, packId);
             packStatus[packId] = {
                 name: pack.name,
@@ -11431,8 +11484,6 @@ app.get('/discord/pack/status', async (req, res) => {
         }
 
         res.json({
-            userId: discordUserId,
-            discordUserId: discordUserId,
             packs: packStatus,
             dailyLimit: PACK_RATE_LIMIT.DOWNLOADS_PER_DAY
         });
@@ -11528,8 +11579,19 @@ function filterActiveQuests(quests) {
  * Returns all active quest definitions (daily, weekly, seasonal)
  * Seasonal quests are filtered by current date
  */
+// In-memory cache for quest definitions (prevents per-request Redis reads on public endpoint)
+let questDefinitionsCache = null;
+let questDefinitionsCacheTime = 0;
+const QUEST_DEFINITIONS_CACHE_TTL = 60_000; // 60 seconds
+
 app.get('/quests/definitions', async (req, res) => {
     try {
+        // Serve from cache if fresh
+        const now = Date.now();
+        if (questDefinitionsCache && (now - questDefinitionsCacheTime) < QUEST_DEFINITIONS_CACHE_TTL) {
+            return res.json(questDefinitionsCache);
+        }
+
         const allQuests = await getQuestDefinitions();
         const activeQuests = filterActiveQuests(allQuests);
 
@@ -11547,13 +11609,19 @@ app.get('/quests/definitions', async (req, res) => {
             }
         }
 
-        res.json({
+        const response = {
             success: true,
             version: allQuests.version || 1,
             updatedAt: allQuests.updatedAt || new Date().toISOString(),
             seasonTitle: seasonTitle,
             quests: activeQuests
-        });
+        };
+
+        // Cache the response
+        questDefinitionsCache = response;
+        questDefinitionsCacheTime = now;
+
+        res.json(response);
     } catch (error) {
         console.error('Error getting quest definitions:', error.message);
         res.status(500).json({ error: 'Failed to fetch quest definitions' });
@@ -11926,8 +11994,9 @@ app.post('/admin/set-streak', async (req, res) => {
             changes.push(`last_daily_quest_date=${last_daily_quest_date}`);
         }
         if (Array.isArray(quest_completion_dates)) {
-            foundUser.stats.quest_completion_dates = quest_completion_dates;
-            changes.push(`quest_completion_dates=[${quest_completion_dates.length} dates]`);
+            const filteredDates = quest_completion_dates.filter(d => typeof d === 'string' && d.length <= 20).slice(-100);
+            foundUser.stats.quest_completion_dates = filteredDates;
+            changes.push(`quest_completion_dates=[${filteredDates.length} dates]`);
         }
         if (typeof total_daily_quests_completed === 'number') {
             foundUser.stats.total_daily_quests_completed = total_daily_quests_completed;
@@ -12547,8 +12616,13 @@ app.post('/admin/merge-accounts', async (req, res) => {
             return res.status(403).json({ error: 'Unauthorized' });
         }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
-        if (!source_id || !target_id) {
+        if (!source_id || !target_id || typeof source_id !== 'string' || typeof target_id !== 'string') {
             return res.status(400).json({ error: 'source_id and target_id required' });
+        }
+        // Validate unified_id format: alphanumeric + hyphens/underscores, max 64 chars
+        const ID_FORMAT = /^[a-zA-Z0-9_-]{1,64}$/;
+        if (!ID_FORMAT.test(source_id) || !ID_FORMAT.test(target_id)) {
+            return res.status(400).json({ error: 'Invalid account ID format' });
         }
         if (source_id === target_id) {
             return res.status(400).json({ error: 'source_id and target_id must be different' });
@@ -12803,6 +12877,8 @@ app.post('/admin/clear-patron-display-names', async (req, res) => {
             return res.status(403).json({ error: 'Unauthorized' });
         }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
+        const scanBlock = await enforceAdminScanCooldown(res, 'clear-patron-display-names');
+        if (scanBlock) return;
 
         const affected = [];
         const skipped = [];
@@ -13030,6 +13106,8 @@ app.post('/admin/purge-patron-names', async (req, res) => {
             return res.status(403).json({ error: 'Unauthorized' });
         }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
+        const scanBlock = await enforceAdminScanCooldown(res, 'purge-patron-names');
+        if (scanBlock) return;
 
         let purgedCount = 0;
         let displayNameClearedCount = 0;
@@ -13123,7 +13201,29 @@ app.post('/admin/set-highest-level', async (req, res) => {
             return res.status(503).json({ error: 'Redis not available' });
         }
 
-        // Scan for V2 user:* record by display_name
+        // Try display_name_index first (O(1) lookup instead of SCAN)
+        const indexKey = `display_name_index:${display_name.trim().toLowerCase()}`;
+        const indexedId = await redis.get(indexKey);
+        if (indexedId) {
+            const userData = await redis.get(`user:${indexedId}`);
+            if (userData) {
+                const profile = typeof userData === 'string' ? JSON.parse(userData) : userData;
+                const oldLevel = profile.highest_level_ever || 0;
+                profile.highest_level_ever = highest_level;
+                await redis.set(`user:${indexedId}`, JSON.stringify(profile));
+                return res.json({
+                    success: true,
+                    unified_id: profile.unified_id,
+                    display_name: profile.display_name,
+                    old_highest_level: oldLevel,
+                    new_highest_level: highest_level
+                });
+            }
+        }
+
+        // Fallback: Scan for V2 user:* record by display_name
+        const scanBlock = await enforceAdminScanCooldown(res, 'set-highest-level');
+        if (scanBlock) return;
         const targetName = display_name.toLowerCase();
         let foundKey = null;
         let foundProfile = null;
@@ -13509,7 +13609,10 @@ app.post('/admin/invite-codes/generate', async (req, res) => {
         const ttlSeconds = expiresHours * 3600;
 
         for (let i = 0; i < count; i++) {
-            const code = crypto.randomBytes(5).toString('hex').slice(0, 8).toUpperCase();
+            const INVITE_CHARSET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+            const bytes = crypto.randomBytes(8);
+            let code = '';
+            for (let j = 0; j < 8; j++) code += INVITE_CHARSET[bytes[j] % INVITE_CHARSET.length];
             const codeData = {
                 created_at: now.toISOString(),
                 expires_at: expiresAt.toISOString(),
@@ -13873,26 +13976,7 @@ app.post('/v2/remote/status', async (req, res) => {
     }
 });
 
-// Rate limit tracker for /remote/connect (per-IP, prevents brute-force of 6-char codes)
-const remoteConnectAttempts = new Map();
-const REMOTE_CONNECT_MAX_ATTEMPTS = 5; // per minute
-const REMOTE_CONNECT_MAP_MAX = 5000;
-setInterval(() => {
-    const cutoff = Date.now() - 60000;
-    for (const [key, entry] of remoteConnectAttempts) {
-        if (entry.firstAttempt < cutoff) remoteConnectAttempts.delete(key);
-    }
-    // Hard cap: evict oldest entries if still over limit
-    if (remoteConnectAttempts.size > REMOTE_CONNECT_MAP_MAX) {
-        const excess = remoteConnectAttempts.size - REMOTE_CONNECT_MAP_MAX;
-        let removed = 0;
-        for (const key of remoteConnectAttempts.keys()) {
-            if (removed >= excess) break;
-            remoteConnectAttempts.delete(key);
-            removed++;
-        }
-    }
-}, 60000);
+const REMOTE_CONNECT_MAX_ATTEMPTS = 5; // per minute per IP
 
 /**
  * POST /remote/connect
@@ -13901,21 +13985,20 @@ setInterval(() => {
  */
 app.post('/remote/connect', async (req, res) => {
     try {
-        // Per-IP rate limit to prevent brute-force code guessing
+        // Per-IP rate limit to prevent brute-force code guessing (Redis-backed, shared across instances)
         const ip = req.ip || 'unknown';
-        const now = Date.now();
-        if (!remoteConnectAttempts.has(ip)) {
-            remoteConnectAttempts.set(ip, { count: 0, firstAttempt: now });
-        }
-        const attempts = remoteConnectAttempts.get(ip);
-        if (now - attempts.firstAttempt > 60000) {
-            attempts.count = 0;
-            attempts.firstAttempt = now;
-        }
-        attempts.count++;
-        if (attempts.count > REMOTE_CONNECT_MAX_ATTEMPTS) {
-            console.log(`[SECURITY] Remote connect rate limit hit: ${ip} (${attempts.count} attempts/min)`);
-            return res.status(429).json({ error: 'Too many connection attempts. Try again in a minute.' });
+        if (!redis) return res.status(503).json({ error: 'Service temporarily unavailable' });
+        try {
+            const connectRateKey = `remote_connect_rate:${ip}`;
+            await redis.set(connectRateKey, 0, { nx: true, ex: 60 });
+            const connectCount = await redis.incr(connectRateKey);
+            if (connectCount > REMOTE_CONNECT_MAX_ATTEMPTS) {
+                console.log(`[SECURITY] Remote connect rate limit hit: ${ip} (${connectCount} attempts/min)`);
+                return res.status(429).json({ error: 'Too many connection attempts. Try again in a minute.' });
+            }
+        } catch (e) {
+            // Redis failure on unauthenticated brute-force-sensitive endpoint = fail closed
+            return res.status(503).json({ error: 'Service temporarily unavailable' });
         }
 
         const { code } = req.body;
@@ -13970,18 +14053,17 @@ app.post('/remote/connect', async (req, res) => {
  */
 app.post('/remote/command', async (req, res) => {
     try {
-        // Per-IP rate limit: 30 commands per minute (prevents Redis write amplification)
+        // Per-IP rate limit: 30 commands per minute (fail-closed on Redis error)
         const cmdIp = req.ip || 'unknown';
-        if (redis) {
-            try {
-                const cmdRateKey = `remote_cmd_rate:${cmdIp}`;
-                await redis.set(cmdRateKey, 0, { nx: true, ex: 60 });
-                const cmdCount = await redis.incr(cmdRateKey);
-                if (cmdCount > 30) {
-                    return res.status(429).json({ error: 'Too many commands. Please slow down.' });
-                }
-            } catch (e) { /* Redis failure = allow through, session validation still required */ }
-        }
+        if (!redis) return res.status(503).json({ error: 'Service temporarily unavailable' });
+        try {
+            const cmdRateKey = `remote_cmd_rate:${cmdIp}`;
+            await redis.set(cmdRateKey, 0, { nx: true, ex: 60 });
+            const cmdCount = await redis.incr(cmdRateKey);
+            if (cmdCount > 30) {
+                return res.status(429).json({ error: 'Too many commands. Please slow down.' });
+            }
+        } catch (e) { return res.status(503).json({ error: 'Service temporarily unavailable' }); }
 
         const { code, controller_id, action, params } = req.body;
         if (!code || !controller_id || !action) {
@@ -14021,8 +14103,13 @@ app.post('/remote/command', async (req, res) => {
         }
         await redis.set(`remote:${normalizedCode}`, JSON.stringify(session), { ex: REMOTE_SESSION_TTL });
 
-        // Validate params: must be a plain object, max 4KB serialized, no nested depth abuse
-        const sanitizedParams = (params && typeof params === 'object' && !Array.isArray(params)) ? params : {};
+        // Validate params: must be a plain object, max 4KB serialized, no proto pollution
+        const BANNED_KEYS = ['__proto__', 'constructor', 'prototype'];
+        const rawParams = (params && typeof params === 'object' && !Array.isArray(params)) ? params : {};
+        const sanitizedParams = {};
+        for (const [k, v] of Object.entries(rawParams)) {
+            if (!BANNED_KEYS.includes(k)) sanitizedParams[k] = v;
+        }
         const paramsJson = JSON.stringify(sanitizedParams);
         if (paramsJson.length > 4096) {
             return res.status(400).json({ error: 'params too large (max 4KB)' });
@@ -14054,18 +14141,17 @@ app.post('/remote/command', async (req, res) => {
  */
 app.get('/remote/status/:code', async (req, res) => {
     try {
-        // Per-IP rate limit: 20 status polls per minute
+        // Per-IP rate limit: 20 status polls per minute (fail-closed on Redis error)
         const statusIp = req.ip || 'unknown';
-        if (redis) {
-            try {
-                const statusRateKey = `remote_status_rate:${statusIp}`;
-                await redis.set(statusRateKey, 0, { nx: true, ex: 60 });
-                const statusCount = await redis.incr(statusRateKey);
-                if (statusCount > 20) {
-                    return res.status(429).json({ error: 'Too many status requests. Please slow down.' });
-                }
-            } catch (e) { /* Redis failure = allow through */ }
-        }
+        if (!redis) return res.status(503).json({ error: 'Service temporarily unavailable' });
+        try {
+            const statusRateKey = `remote_status_rate:${statusIp}`;
+            await redis.set(statusRateKey, 0, { nx: true, ex: 60 });
+            const statusCount = await redis.incr(statusRateKey);
+            if (statusCount > 20) {
+                return res.status(429).json({ error: 'Too many status requests. Please slow down.' });
+            }
+        } catch (e) { return res.status(503).json({ error: 'Service temporarily unavailable' }); }
 
         const { code } = req.params;
         const { controller_id } = req.query;
@@ -14126,18 +14212,17 @@ app.get('/remote/status/:code', async (req, res) => {
  */
 app.post('/remote/disconnect', async (req, res) => {
     try {
-        // Per-IP rate limit: 10 disconnects per minute
+        // Per-IP rate limit: 10 disconnects per minute (fail-closed on Redis error)
         const dcIp = req.ip || 'unknown';
-        if (redis) {
-            try {
-                const dcRateKey = `remote_dc_rate:${dcIp}`;
-                await redis.set(dcRateKey, 0, { nx: true, ex: 60 });
-                const dcCount = await redis.incr(dcRateKey);
-                if (dcCount > 10) {
-                    return res.status(429).json({ error: 'Too many requests. Please slow down.' });
-                }
-            } catch (e) { /* Redis failure = allow through */ }
-        }
+        if (!redis) return res.status(503).json({ error: 'Service temporarily unavailable' });
+        try {
+            const dcRateKey = `remote_dc_rate:${dcIp}`;
+            await redis.set(dcRateKey, 0, { nx: true, ex: 60 });
+            const dcCount = await redis.incr(dcRateKey);
+            if (dcCount > 10) {
+                return res.status(429).json({ error: 'Too many requests. Please slow down.' });
+            }
+        } catch (e) { return res.status(503).json({ error: 'Service temporarily unavailable' }); }
 
         const { code, controller_id } = req.body;
         if (!code || !controller_id) {
