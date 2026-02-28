@@ -6250,6 +6250,261 @@ app.post('/admin/capture-legacy-users', async (req, res) => {
 });
 
 /**
+ * POST /admin/migrate-legacy-to-v2
+ * Migrate legacy profile:* and discord_profile:* users to full V2 user:* records.
+ * Skips users that already have V2 records (checked via patreon_index, discord_index, patreon_user, discord_user).
+ * Deduplicates by display_name (keeps highest level, merges provider IDs and stats).
+ * Body: { dry_run?: boolean } (default: true)
+ */
+app.post('/admin/migrate-legacy-to-v2', async (req, res) => {
+    try {
+        const admin_token = req.headers['x-admin-token'];
+        if (!verifyAdminToken(admin_token)) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        if (!redis) return res.status(503).json({ error: 'Redis not available' });
+
+        const { dry_run = true } = req.body || {};
+        const errors = [];
+        const legacyProfiles = [];
+        const skippedAlreadyMigrated = [];
+
+        // Scan profile:* and discord_profile:* keys
+        const patterns = ['profile:*', 'discord_profile:*'];
+        for (const pattern of patterns) {
+            let cursor = "0";
+            do {
+                const result = await redis.scan(cursor, { match: pattern, count: 100 });
+                cursor = String(result[0]);
+                for (const key of (result[1] || [])) {
+                    try {
+                        const data = await redis.get(key);
+                        if (!data) continue;
+                        const profile = typeof data === 'string' ? JSON.parse(data) : data;
+
+                        // Extract provider IDs from key
+                        let patreonId = null;
+                        let discordId = null;
+
+                        if (key.startsWith('profile:')) {
+                            patreonId = key.replace('profile:', '');
+                        }
+                        if (key.startsWith('discord_profile:')) {
+                            discordId = key.replace('discord_profile:', '');
+                        }
+
+                        // Also check provider IDs stored in the profile itself
+                        if (profile.patreon_id) patreonId = profile.patreon_id;
+                        if (profile.discord_id) discordId = profile.discord_id;
+
+                        // Check if already migrated to V2 via any index
+                        let alreadyMigrated = false;
+                        if (patreonId) {
+                            const v2Index = await redis.get(`patreon_index:${patreonId}`);
+                            const v1Index = await redis.get(`patreon_user:${patreonId}`);
+                            if (v2Index || v1Index) alreadyMigrated = true;
+                        }
+                        if (!alreadyMigrated && discordId) {
+                            const v2Index = await redis.get(`discord_index:${discordId}`);
+                            const v1Index = await redis.get(`discord_user:${discordId}`);
+                            if (v2Index || v1Index) alreadyMigrated = true;
+                        }
+
+                        if (alreadyMigrated) {
+                            skippedAlreadyMigrated.push({ key, patreon_id: patreonId, discord_id: discordId });
+                            continue;
+                        }
+
+                        const displayName = profile.display_name || profile.displayName || profile.name || null;
+                        if (!displayName) {
+                            errors.push({ key, error: 'No display_name found' });
+                            continue;
+                        }
+
+                        legacyProfiles.push({
+                            key,
+                            display_name: displayName,
+                            patreon_id: patreonId,
+                            discord_id: discordId,
+                            level: profile.level || 1,
+                            xp: profile.xp || 0,
+                            achievements: profile.achievements || [],
+                            stats: {
+                                total_flashes: profile.stats?.total_flashes || 0,
+                                total_bubbles_popped: profile.stats?.total_bubbles_popped || 0,
+                                total_video_minutes: profile.stats?.total_video_minutes || 0,
+                                total_lock_cards_completed: profile.stats?.total_lock_cards_completed || 0
+                            },
+                            patreon_tier: profile.patreon_tier || 0,
+                            patreon_is_active: profile.patreon_is_active || false,
+                            patreon_is_whitelisted: profile.patreon_is_whitelisted || false,
+                            email_hash: profile.email_hash || null,
+                            allow_discord_dm: profile.allow_discord_dm || false,
+                            show_online_status: profile.show_online_status !== false
+                        });
+                    } catch (e) {
+                        errors.push({ key, error: e.message });
+                    }
+                }
+            } while (cursor !== "0");
+        }
+
+        // Deduplicate by display_name (keep highest level, merge provider IDs + stats)
+        const deduped = new Map();
+        for (const user of legacyProfiles) {
+            const nameKey = user.display_name.toLowerCase();
+            if (deduped.has(nameKey)) {
+                const existing = deduped.get(nameKey);
+                if (user.level > existing.level) {
+                    if (!user.patreon_id && existing.patreon_id) user.patreon_id = existing.patreon_id;
+                    if (!user.discord_id && existing.discord_id) user.discord_id = existing.discord_id;
+                    const allAchievements = new Set([...user.achievements, ...existing.achievements]);
+                    user.achievements = [...allAchievements];
+                    user.stats.total_flashes = Math.max(user.stats.total_flashes, existing.stats.total_flashes);
+                    user.stats.total_bubbles_popped = Math.max(user.stats.total_bubbles_popped, existing.stats.total_bubbles_popped);
+                    user.stats.total_video_minutes = Math.max(user.stats.total_video_minutes, existing.stats.total_video_minutes);
+                    user.stats.total_lock_cards_completed = Math.max(user.stats.total_lock_cards_completed, existing.stats.total_lock_cards_completed);
+                    if (!user.email_hash && existing.email_hash) user.email_hash = existing.email_hash;
+                    deduped.set(nameKey, user);
+                } else {
+                    if (!existing.patreon_id && user.patreon_id) existing.patreon_id = user.patreon_id;
+                    if (!existing.discord_id && user.discord_id) existing.discord_id = user.discord_id;
+                    const allAchievements = new Set([...existing.achievements, ...user.achievements]);
+                    existing.achievements = [...allAchievements];
+                    existing.stats.total_flashes = Math.max(existing.stats.total_flashes, user.stats.total_flashes);
+                    existing.stats.total_bubbles_popped = Math.max(existing.stats.total_bubbles_popped, user.stats.total_bubbles_popped);
+                    existing.stats.total_video_minutes = Math.max(existing.stats.total_video_minutes, user.stats.total_video_minutes);
+                    existing.stats.total_lock_cards_completed = Math.max(existing.stats.total_lock_cards_completed, user.stats.total_lock_cards_completed);
+                    if (!existing.email_hash && user.email_hash) existing.email_hash = user.email_hash;
+                }
+            } else {
+                deduped.set(nameKey, user);
+            }
+        }
+
+        const finalUsers = [...deduped.values()];
+        const created = [];
+
+        if (!dry_run) {
+            for (const user of finalUsers) {
+                try {
+                    const unifiedId = generateUnifiedId();
+                    const now = new Date().toISOString();
+
+                    // Check display_name isn't already taken
+                    const nameOwner = await isDisplayNameTaken(user.display_name);
+                    if (nameOwner) {
+                        errors.push({ key: user.key, error: `display_name "${user.display_name}" already taken by ${nameOwner}` });
+                        continue;
+                    }
+
+                    // Check Season 0 legacy data for OG status
+                    let isV1Og = false;
+                    if (user.patreon_id) {
+                        const s0 = await lookupSeason0('patreon', user.patreon_id);
+                        if (s0) isV1Og = true;
+                    }
+                    if (!isV1Og && user.discord_id) {
+                        const s0 = await lookupSeason0('discord', user.discord_id);
+                        if (s0) isV1Og = true;
+                        if (!isV1Og) isV1Og = await isV1DiscordUser(user.discord_id);
+                    }
+
+                    const newUser = {
+                        unified_id: unifiedId,
+                        display_name: user.display_name,
+                        patreon_id: user.patreon_id || null,
+                        discord_id: user.discord_id || null,
+                        email_hash: user.email_hash || null,
+                        current_season: '2026-02',
+                        xp: user.xp || 0,
+                        level: user.level || 1,
+                        highest_level_ever: user.level || 1,
+                        unlocks: calculateUnlocks(user.level || 1),
+                        achievements: user.achievements || [],
+                        all_time_stats: {
+                            total_flashes: 0,
+                            total_bubbles_popped: 0,
+                            total_video_minutes: 0,
+                            total_lock_cards_completed: 0,
+                            seasons_completed: 0
+                        },
+                        stats: user.stats,
+                        is_season0_og: isV1Og,
+                        patreon_tier: user.patreon_tier || 0,
+                        patreon_is_active: user.patreon_is_active || false,
+                        patreon_is_whitelisted: user.patreon_is_whitelisted || false,
+                        skill_points: user.level || 1,
+                        unlocked_skills: [],
+                        allow_discord_dm: user.allow_discord_dm || false,
+                        show_online_status: user.show_online_status !== false,
+                        auth_token_hash: null,
+                        auth_method: 'legacy_migration',
+                        display_name_set_at: now,
+                        created_at: now,
+                        updated_at: now,
+                        last_seen: now
+                    };
+
+                    // Save user record
+                    await redis.set(`user:${unifiedId}`, JSON.stringify(newUser));
+
+                    // Create indexes
+                    await redis.set(`display_name_index:${user.display_name.toLowerCase()}`, unifiedId);
+                    if (user.patreon_id) {
+                        await redis.set(`patreon_index:${user.patreon_id}`, unifiedId);
+                    }
+                    if (user.discord_id) {
+                        await redis.set(`discord_index:${user.discord_id}`, unifiedId);
+                    }
+                    if (user.email_hash) {
+                        await redis.set(`email_index:${user.email_hash}`, unifiedId);
+                    }
+
+                    // Add to leaderboard
+                    const totalXp = user.xp || 0;
+                    await redis.zadd('leaderboard:2026-02', { score: totalXp, member: unifiedId });
+
+                    created.push({
+                        unified_id: unifiedId,
+                        display_name: user.display_name,
+                        patreon_id: user.patreon_id,
+                        discord_id: user.discord_id,
+                        level: user.level,
+                        is_season0_og: isV1Og
+                    });
+                } catch (e) {
+                    errors.push({ key: user.key, error: e.message });
+                }
+            }
+        }
+
+        console.log(`[ADMIN] migrate-legacy-to-v2: ${finalUsers.length} users to migrate, ${created.length} created, ${skippedAlreadyMigrated.length} skipped (already migrated), dry_run=${dry_run}`);
+
+        res.json({
+            dry_run,
+            total_legacy_profiles: legacyProfiles.length,
+            deduplicated_count: finalUsers.length,
+            already_migrated_count: skippedAlreadyMigrated.length,
+            created_count: created.length,
+            errors_count: errors.length,
+            users: dry_run ? finalUsers.map(u => ({
+                display_name: u.display_name,
+                patreon_id: u.patreon_id,
+                discord_id: u.discord_id,
+                level: u.level,
+                xp: u.xp
+            })) : created,
+            already_migrated: skippedAlreadyMigrated,
+            errors
+        });
+    } catch (error) {
+        console.error('Admin migrate-legacy-to-v2 error:', error.message);
+        res.status(500).json({ error: 'Failed to migrate legacy users' });
+    }
+});
+
+/**
  * GET /admin/season0-lookup
  * Look up a Season 0 legacy user by provider ID
  * Query: ?admin_token=XXX&provider=patreon|discord&provider_id=XXX
