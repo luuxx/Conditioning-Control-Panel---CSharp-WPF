@@ -5486,7 +5486,7 @@ app.post('/admin/link-accounts', async (req, res) => {
         }
 
         console.log(`[ADMIN] Linked: Patreon ${patreon_id} <-> Discord ${discord_id} (${unifiedId})`);
-        res.json({ success: true, unified_id: unifiedId, merged_profile: mergedProfile });
+        res.json({ success: true, unified_id: unifiedId, merged_profile: filterUserForAdmin(mergedProfile) });
     } catch (error) {
         console.error('Admin link-accounts error:', error.message);
         res.status(500).json({ error: 'Failed to link accounts' });
@@ -5894,94 +5894,6 @@ app.post('/admin/set-key', async (req, res) => {
  */
 app.post('/admin/mass-restore-display-names', async (req, res) => {
     return res.status(410).json({ error: 'This endpoint has been disabled to protect user privacy. patron_name must never be used as display_name.' });
-
-    try {
-        const { dry_run = false } = req.body;
-        const admin_token = req.headers['x-admin-token'];
-        if (!verifyAdminToken(admin_token)) {
-            return res.status(403).json({ error: 'Unauthorized' });
-        }
-        if (!redis) return res.status(503).json({ error: 'Redis not available' });
-
-        const restored = [];
-        const skipped = [];
-        const errors = [];
-
-        // Scan all user: keys
-        let cursor = "0";
-        do {
-            const result = await redis.scan(cursor, { match: 'user:*', count: 100 });
-            cursor = String(result[0]);
-            for (const key of (result[1] || [])) {
-                try {
-                    const data = await redis.get(key);
-                    if (!data) continue;
-                    const user = typeof data === 'string' ? JSON.parse(data) : data;
-
-                    // Skip if already has display_name
-                    if (user.display_name && user.display_name.trim() !== '') {
-                        continue;
-                    }
-
-                    // Try to get a name from patron_name or discord_username
-                    const newName = user.patron_name || user.discord_username || null;
-                    if (!newName || newName.trim() === '') {
-                        skipped.push({ key, reason: 'no_name_source' });
-                        continue;
-                    }
-
-                    if (!dry_run) {
-                        // Update the user record
-                        user.display_name = newName;
-                        user.display_name_restored_at = new Date().toISOString();
-                        await redis.set(key, JSON.stringify(user));
-
-                        // Create display_name_index
-                        await redis.set(`display_name_index:${newName.toLowerCase()}`, user.unified_id);
-
-                        // Also update the profile: or discord_profile: key if it exists
-                        if (user.patreon_id) {
-                            const profileKey = `profile:${user.patreon_id}`;
-                            const profileData = await redis.get(profileKey);
-                            if (profileData) {
-                                const profile = typeof profileData === 'string' ? JSON.parse(profileData) : profileData;
-                                profile.display_name = newName;
-                                await redis.set(profileKey, JSON.stringify(profile));
-                            }
-                        }
-                        if (user.discord_id) {
-                            const discordKey = `discord_profile:${user.discord_id}`;
-                            const discordData = await redis.get(discordKey);
-                            if (discordData) {
-                                const profile = typeof discordData === 'string' ? JSON.parse(discordData) : discordData;
-                                profile.display_name = newName;
-                                await redis.set(discordKey, JSON.stringify(profile));
-                            }
-                        }
-                    }
-
-                    restored.push({ key, unified_id: user.unified_id, new_display_name: newName });
-                } catch (e) {
-                    errors.push({ key, error: e.message });
-                }
-            }
-        } while (cursor !== "0");
-
-        console.log(`[ADMIN] Mass restore display names: ${restored.length} restored, ${skipped.length} skipped, ${errors.length} errors (dry_run=${dry_run})`);
-        res.json({
-            success: true,
-            dry_run,
-            restored_count: restored.length,
-            skipped_count: skipped.length,
-            error_count: errors.length,
-            restored: restored.slice(0, 100), // Limit response size
-            skipped: skipped.slice(0, 50),
-            errors: errors
-        });
-    } catch (error) {
-        console.error('Admin mass-restore-display-names error:', error.message);
-        res.status(500).json({ error: 'Failed to mass restore display names' });
-    }
 });
 
 /**
@@ -13740,9 +13652,9 @@ const REMOTE_TIER_ACTIONS = {
 };
 
 function generateRemoteCode() {
-    const bytes = crypto.randomBytes(6);
+    const bytes = crypto.randomBytes(8);
     let code = '';
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 8; i++) {
         code += REMOTE_CODE_CHARSET[bytes[i] % REMOTE_CODE_CHARSET.length];
     }
     return code;
@@ -13755,11 +13667,15 @@ function generateRemoteCode() {
  */
 app.post('/v2/remote/start', async (req, res) => {
     try {
-        const { unified_id, tier } = req.body;
+        const { unified_id, tier, connect_pin } = req.body;
 
         if (!unified_id) return res.status(400).json({ error: 'unified_id required' });
         if (!tier || !REMOTE_TIER_ACTIONS[tier]) {
             return res.status(400).json({ error: 'Invalid tier. Must be light, standard, or full' });
+        }
+        // Require a 4-digit PIN for controller auth
+        if (!connect_pin || typeof connect_pin !== 'string' || !/^\d{4}$/.test(connect_pin)) {
+            return res.status(400).json({ error: 'A 4-digit connect_pin is required' });
         }
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
 
@@ -13802,10 +13718,14 @@ app.post('/v2/remote/start', async (req, res) => {
             safeName = null;
         }
 
+        // Hash PIN for storage (SHA-256, timing-safe comparison on connect)
+        const pinHash = crypto.createHash('sha256').update(connect_pin).digest('hex');
+
         const session = {
             unified_id,
             display_name: safeName || 'Anonymous',
             tier,
+            connect_pin_hash: pinHash,
             created_at: now,
             controller_connected: false,
             controller_id: null,
@@ -13823,7 +13743,7 @@ app.post('/v2/remote/start', async (req, res) => {
             level: user.level || 1
         }), { ex: REMOTE_SESSION_TTL });
 
-        console.log(`[Remote] Session started: ${code} by ${user.display_name} (${unified_id}), tier: ${tier}`);
+        console.log(`[Remote] Session started: ${code.slice(0,3)}*** by uid:${unified_id}, tier: ${tier}`);
 
         res.json({ code, expires_at: expiresAt });
     } catch (error) {
@@ -13860,7 +13780,7 @@ app.post('/v2/remote/stop', async (req, res) => {
         await redis.del(`remote:status:${code}`);
         await redis.del(`remote:lookup:${unified_id}`);
 
-        console.log(`[Remote] Session stopped: ${code} by ${unified_id}`);
+        console.log(`[Remote] Session stopped: ${code.slice(0,3)}*** by uid:${unified_id}`);
 
         res.json({ ok: true });
     } catch (error) {
@@ -14001,21 +13921,37 @@ app.post('/remote/connect', async (req, res) => {
             return res.status(503).json({ error: 'Service temporarily unavailable' });
         }
 
-        const { code } = req.body;
-        if (!code || code.length !== 6) return res.status(400).json({ error: 'Valid 6-character code required' });
-        // R8/M11: Validate character set to prevent Redis key injection
-        if (!/^[A-Za-z0-9]{6}$/.test(code)) return res.status(400).json({ error: 'Invalid code format' });
+        const { code, pin } = req.body;
+        if (!code || code.length < 6 || code.length > 8) return res.status(400).json({ error: 'Valid session code required' });
+        // Validate character set to prevent Redis key injection
+        if (!/^[A-Za-z0-9]{6,8}$/.test(code)) return res.status(400).json({ error: 'Invalid code format' });
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
 
         const normalizedCode = code.toUpperCase();
         const sessionRaw = await redis.get(`remote:${normalizedCode}`);
-        if (!sessionRaw) return res.status(404).json({ error: 'Session not found or expired' });
+        // Use same error for not-found and wrong PIN to prevent session enumeration
+        if (!sessionRaw) return res.status(404).json({ error: 'Invalid code or PIN' });
 
-        const session = typeof sessionRaw === 'string' ? JSON.parse(sessionRaw) : sessionRaw;
+        // Validate connect PIN (required for sessions that have one)
+        const sessionPeek = typeof sessionRaw === 'string' ? JSON.parse(sessionRaw) : sessionRaw;
+        if (sessionPeek.connect_pin_hash) {
+            if (!pin || typeof pin !== 'string') {
+                return res.status(404).json({ error: 'Invalid code or PIN' });
+            }
+            const providedHash = crypto.createHash('sha256').update(pin).digest('hex');
+            // Timing-safe comparison to prevent timing oracle on PIN
+            const expected = Buffer.from(sessionPeek.connect_pin_hash, 'hex');
+            const provided = Buffer.from(providedHash, 'hex');
+            if (expected.length !== provided.length || !crypto.timingSafeEqual(expected, provided)) {
+                return res.status(404).json({ error: 'Invalid code or PIN' });
+            }
+        }
+
+        const session = sessionPeek;
 
         // If another controller is connected, replace it (they may have closed the page)
         if (session.controller_connected && session.controller_id) {
-            console.log(`[Remote] Replacing previous controller on ${normalizedCode}`);
+            console.log(`[Remote] Replacing previous controller on ${normalizedCode.slice(0,3)}***`);
         }
 
         const controllerId = crypto.randomUUID();
@@ -14031,7 +13967,7 @@ app.post('/remote/connect', async (req, res) => {
         const statusRaw = await redis.get(`remote:status:${normalizedCode}`);
         const status = statusRaw ? (typeof statusRaw === 'string' ? JSON.parse(statusRaw) : statusRaw) : {};
 
-        console.log(`[Remote] Controller connected to ${normalizedCode} (${session.display_name})`);
+        console.log(`[Remote] Controller connected to ${normalizedCode.slice(0,3)}***`);
 
         res.json({
             controller_id: controllerId,
@@ -14175,7 +14111,7 @@ app.get('/remote/status/:code', async (req, res) => {
         session.last_controller_ping = new Date().toISOString();
         if (!session.controller_connected) {
             session.controller_connected = true;
-            console.log(`[Remote] Controller resumed on ${normalizedCode}`);
+            console.log(`[Remote] Controller resumed on ${normalizedCode.slice(0,3)}***`);
         }
         await redis.set(`remote:${normalizedCode}`, JSON.stringify(session), { ex: REMOTE_SESSION_TTL });
 
@@ -14246,7 +14182,7 @@ app.post('/remote/disconnect', async (req, res) => {
 
         await redis.set(`remote:${normalizedCode}`, JSON.stringify(session), { ex: REMOTE_SESSION_TTL });
 
-        console.log(`[Remote] Controller disconnected from ${normalizedCode}`);
+        console.log(`[Remote] Controller disconnected from ${normalizedCode.slice(0,3)}***`);
 
         res.json({ ok: true });
     } catch (error) {
