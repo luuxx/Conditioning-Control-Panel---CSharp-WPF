@@ -9,7 +9,7 @@ public class LocalAiService : IAiService, IDisposable
     public int DailyRequestsRemaining { get; }
     private OllamaApiClient AiService { get; }
     private readonly BambiSprite _bambiSprite;
-    private readonly Uri _localUri = new Uri("http://localhost:11434/");
+    private readonly Uri _localUri = new Uri("http://localhost:5259/");
     private Chat _chat;
     
     public LocalAiService()
@@ -18,7 +18,7 @@ public class LocalAiService : IAiService, IDisposable
         DailyRequestsRemaining = -1;
         _bambiSprite = new BambiSprite();
         AiService = new OllamaApiClient(_localUri);
-        AiService.SelectedModel = "bambi-model-v3";
+        AiService.SelectedModel = "bambi-model-v4";
         _chat = new Chat(AiService);
     }
     
@@ -81,10 +81,10 @@ public class LocalAiService : IAiService, IDisposable
     private bool _isWorkingOnResponse = false;
     private async Task<string?> GetAiResponseAsync(string userInput, string systemPrompt)
     {
-        var timeAwareInput = $"<meta>Make sure to check time awareness before responding and revise if needed. NO COMPULSION TRIGGERS IN REPLIES TO INITIAL GREETINGS. Remember your name is bambi. keep to the output guild lines like char limit and emojy limit.</meta><data></data><user>{userInput}</user><time>{DateTime.Now:yyyy-MM-dd HH:mm:ss}</time>";
+        var timeAwareInput = $"{userInput}";
         if (_isWorkingOnResponse) return null;
         string response = "";
-        _isWorkingOnResponse = true;
+        _isWorkingOnResponse = false;
         await foreach (var answerToken in _chat.SendAsync(timeAwareInput))
             response += answerToken;
         _isWorkingOnResponse = false;

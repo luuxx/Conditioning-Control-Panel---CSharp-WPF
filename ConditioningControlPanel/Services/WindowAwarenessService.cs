@@ -308,7 +308,8 @@ namespace ConditioningControlPanel.Services
             { "Bambicloud", "bambicloud" },
             { "Shibby dex", "shibbydex" },
             { "Mistress calia", "mistress calia" },
-            { "Lilith", "lilith" }
+            { "Lilith", "lilith" },
+            { "vlc", "VLC" },
         };
 
         /// <summary>
