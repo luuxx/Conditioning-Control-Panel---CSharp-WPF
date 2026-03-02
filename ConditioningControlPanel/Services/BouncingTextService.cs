@@ -48,7 +48,7 @@ public class BouncingTextService : IDisposable
     
     public event EventHandler? OnBounce;
 
-    public void Start(bool bypassLevelCheck = false)
+    public void Start(bool bypassLevelCheck = false, List<string>? pool = null)
     {
         if (_isRunning) return;
 
@@ -70,7 +70,7 @@ public class BouncingTextService : IDisposable
         _currentFontSize = (int)(BASE_FONT_SIZE * settings.BouncingTextSize / 100.0);
         
         // Get random text from pool
-        SelectRandomText();
+        SelectRandomText(pool);
         
         // Measure actual text size
         MeasureTextSize();
@@ -123,13 +123,15 @@ public class BouncingTextService : IDisposable
         App.Logger?.Information("BouncingTextService stopped");
     }
 
-    private void SelectRandomText()
+    private void SelectRandomText(List<string>? pool = null)
     {
         var settings = App.Settings.Current;
         var enabledTexts = settings.BouncingTextPool
             .Where(kv => kv.Value)
             .Select(kv => kv.Key)
             .ToList();
+        
+        enabledTexts = pool != null ? pool.ToList() : enabledTexts;
         
         if (enabledTexts.Count == 0)
         {

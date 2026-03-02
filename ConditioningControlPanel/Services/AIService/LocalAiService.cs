@@ -1,4 +1,10 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Timers;
+using ConditioningControlPanel.Models;
+using ConditioningControlPanel.Models.CommandData;
+using Newtonsoft.Json;
 using OllamaSharp;
 
 namespace ConditioningControlPanel.Services.AIService;
@@ -12,13 +18,15 @@ public class LocalAiService : IAiService, IDisposable
     private readonly Uri _localUri = new Uri("http://localhost:5259/");
     private Chat _chat;
     
+    public MainWindow? MainWindowRef { get; set; }
+    
     public LocalAiService()
     {
         IsAvailable = true;
         DailyRequestsRemaining = -1;
         _bambiSprite = new BambiSprite();
         AiService = new OllamaApiClient(_localUri);
-        AiService.SelectedModel = "bambi-model-v4";
+        AiService.SelectedModel = "bambi-model-v4:t";
         _chat = new Chat(AiService);
     }
     
@@ -90,6 +98,7 @@ public class LocalAiService : IAiService, IDisposable
         _isWorkingOnResponse = false;
         if (string.IsNullOrEmpty(response))
             return GetFallbackResponse();
+        response = ParseJson(response);
         return SanitizeResponse(response);
     }
     
@@ -124,7 +133,111 @@ public class LocalAiService : IAiService, IDisposable
 
         return sanitized;
     }
+    private List<AICommand> CurrentCommands { get; set; }
 
+    private string ParseJson(string response)
+    {
+        var pattern = new Regex(@"```json\s*([\s\S]*?)\s*```", RegexOptions.Compiled);
+        CurrentCommands = new List<AICommand>();
+        var jsons = new List<string>();
+        string clean = pattern.Replace(response, m =>
+        {
+            var body = m.Groups[1].Value;
+            try
+            {
+                CurrentCommands.Add(AICommand.ParseCommand(body) ?? new AICommand());
+            }
+            catch
+            {
+                // If parsing fails, you may choose to ignore, log, or keep it
+            }
+            // Return empty string to strip the entire code fence from output
+            return string.Empty;
+        });
+
+        // Optional: collapse extra blank lines created by stripping
+        clean = Regex.Replace(clean, @"\n{3,}", "\n\n");
+        LogCommands();
+        foreach (var command in CurrentCommands)
+        {
+            TriggerCommand(command);
+        }
+        return clean.Trim();
+    }
+
+    private void LogCommands()
+    {
+        foreach (var command in CurrentCommands)
+        {
+            Console.WriteLine($"Command: {command.Command}");
+            App.Logger?.Debug("AiService: Command: {Command}", command);
+        }
+    }
+
+    private void TriggerCommand(AICommand command)
+    {
+        App.Logger?.Debug("AiService: Triggering command: {Command}", command);
+        switch (command.Command)
+        {
+            case AICommandType.flash_image:
+                var commandData = command.Data as FlashImage;
+                App.Flash.TriggerFlashOnce(commandData.Amount, commandData.Duration, commandData.Opacity, commandData.Size);
+                break;
+            case AICommandType.audio:
+            case AICommandType.video:
+                App.Video.PlaySpecificVideo((command.Data as Media)?.Path ?? string.Empty, false);
+                break;
+            case AICommandType.getbacktome:
+                var getbacktome = command.Data as GetBackToMe;
+                Task.Delay(getbacktome!.Delay * 1000).ContinueWith(t => SendTokenMessage(getbacktome!.Token, getbacktome.JsonOnly));
+                break;
+            case AICommandType.pink:
+                if ((command.Data as SpiralPinkFiler)?.On ?? false)
+                {
+                    MainWindowRef?.EnablePinkFilter(true);
+                    App.Settings.Current.PinkFilterOpacity = (command.Data as SpiralPinkFiler)?.Intensity ?? 5;
+                }
+                else
+                    MainWindowRef?.EnablePinkFilter(false);
+                break;
+            case AICommandType.spiral:
+                if ((command.Data as SpiralPinkFiler)?.On ?? false)
+                {
+                    MainWindowRef?.EnableSpiral(true);
+                    App.Settings.Current.SpiralOpacity = (command.Data as SpiralPinkFiler)?.Intensity ?? 5;
+                }
+                else
+                    MainWindowRef?.EnableSpiral(false);
+                break;
+            case AICommandType.mantra_lockscreen:
+                App.LockCard.ShowLockCard((command.Data as MantraLockscreen)?.Mantra ?? string.Empty, (command.Data as MantraLockscreen)?.Amount ?? -1, true);
+                break;
+            case AICommandType.subliminal:
+                App.Subliminal.FlashSubliminalCustom((command.Data as Subliminal)?.Text ?? string.Empty, (command.Data as Subliminal)?.Opacity ?? 20);
+                break;
+            case AICommandType.bubbles:
+                if((command.Data as Bubbles)?.On ?? false)
+                    App.Bubbles.Start(true, (command.Data as Bubbles)?.Frequency);
+                else
+                    App.Bubbles.Stop();
+                break;
+            case AICommandType.bounce:
+                if((command.Data as Bounce)?.On ?? false)
+                    App.BouncingText.Start(true, (command.Data as Bounce)?.Words);
+                else
+                    App.BouncingText.Stop();
+                break;
+            case AICommandType.none:
+            default:
+                break;
+        }
+    }
+
+    private async Task SendTokenMessage(string token, bool jsonOnly = false)
+    {
+        Console.WriteLine($"Sending token: {token}");
+        await GetAiResponseAsync($"[{token}, {jsonOnly}]", "");
+    }
 
     public void Dispose()
     {
