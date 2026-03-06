@@ -4814,7 +4814,9 @@ app.post('/admin/set-level', async (req, res) => {
             // Update leaderboard
             const season = getCurrentSeason();
             const leaderboardXp = fix_xp ? newXp : (foundProfile.xp || 0);
-            await redis.zadd(`leaderboard:${season}`, { score: safeLeaderboardScore(leaderboardXp), member: foundKey.replace('user:', '') });
+            const setLevelMemberId = foundKey.replace('user:', '');
+            await redis.zadd(`leaderboard:${season}`, { score: safeLeaderboardScore(leaderboardXp), member: setLevelMemberId });
+            try { await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(foundProfile.total_xp_earned || 0), member: setLevelMemberId }); } catch (e) { console.log(`[WARN] All-time leaderboard update failed:`, e.message); }
         }
 
         await redis.set(foundKey, JSON.stringify(foundProfile));
@@ -5829,6 +5831,7 @@ app.post('/admin/fix-migrated-users', async (req, res) => {
                         fixes.missing_leaderboard.push({ unified_id: user.unified_id, display_name: user.display_name, season });
                         if (!dry_run) {
                             await redis.zadd(`leaderboard:${season}`, { score: safeLeaderboardScore(user.xp), member: user.unified_id });
+                            try { await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(user.total_xp_earned || 0), member: user.unified_id }); } catch (e) { /* best-effort */ }
                         }
                     }
 
@@ -6591,6 +6594,7 @@ app.post('/admin/migrate-legacy-to-v2', async (req, res) => {
                     // Add to leaderboard
                     const totalXp = user.xp || 0;
                     await redis.zadd('leaderboard:2026-02', { score: totalXp, member: unifiedId });
+                    try { await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(user.total_xp_earned || 0), member: unifiedId }); } catch (e) { /* best-effort */ }
 
                     created.push({
                         unified_id: unifiedId,
@@ -7041,6 +7045,9 @@ app.post('/v2/auth/discord', async (req, res) => {
                 seasons_completed: 0
             },
 
+            // All-time XP tracking (server-computed, never trust client)
+            total_xp_earned: 0,
+
             // Legacy status — check both season0 key AND V1 discord IDs set
             is_season0_og: isV1Og,
 
@@ -7078,6 +7085,7 @@ app.post('/v2/auth/discord', async (req, res) => {
 
         // Add to leaderboard sorted set
         await redis.zadd(`leaderboard:${currentSeason}`, { score: 0, member: unifiedId });
+        try { await redis.zadd('leaderboard:all-time', { score: 0, member: unifiedId }); } catch (e) { console.log(`[WARN] All-time leaderboard update failed for ${unifiedId}:`, e.message); }
 
         console.log(`[V2] Created new user: ${unifiedId} (${trimmedName}) via Discord, OG=${isV1Og}`);
 
@@ -7505,6 +7513,9 @@ app.post('/v2/auth/patreon', async (req, res) => {
                 seasons_completed: 0
             },
 
+            // All-time XP tracking (server-computed, never trust client)
+            total_xp_earned: 0,
+
             // Legacy status
             is_season0_og: !!legacyData,
 
@@ -7542,6 +7553,7 @@ app.post('/v2/auth/patreon', async (req, res) => {
 
         // Add to leaderboard sorted set
         await redis.zadd(`leaderboard:${currentSeason}`, { score: 0, member: unifiedId });
+        try { await redis.zadd('leaderboard:all-time', { score: 0, member: unifiedId }); } catch (e) { console.log(`[WARN] All-time leaderboard update failed for ${unifiedId}:`, e.message); }
 
         console.log(`[V2] Created new user: ${unifiedId} (${trimmedName}) via Patreon, OG=${!!legacyData}`);
 
@@ -7730,6 +7742,9 @@ app.post('/v2/auth/register', async (req, res) => {
                     seasons_completed: 0
                 },
 
+                // All-time XP tracking (server-computed, never trust client)
+                total_xp_earned: 0,
+
                 is_season0_og: false,
 
                 patreon_tier: 0,
@@ -7764,6 +7779,7 @@ app.post('/v2/auth/register', async (req, res) => {
 
             // Add to leaderboard
             await redis.zadd(`leaderboard:${currentSeason}`, { score: 0, member: unifiedId });
+            try { await redis.zadd('leaderboard:all-time', { score: 0, member: unifiedId }); } catch (e) { console.log(`[WARN] All-time leaderboard update failed for ${unifiedId}:`, e.message); }
 
             // Check whitelist by display name
             const whitelisted = isWhitelisted(null, null, trimmedName);
@@ -8543,6 +8559,7 @@ app.post('/admin/delete-user-by-name', async (req, res) => {
             await redis.zrem(`leaderboard:${user.current_season}`, unifiedId);
             deleted.push(`leaderboard:${user.current_season} (member removed)`);
         }
+        try { await redis.zrem('leaderboard:all-time', unifiedId); deleted.push('leaderboard:all-time (member removed)'); } catch (e) { /* best-effort */ }
 
         // Delete cloud settings backup
         await redis.del(`settings_backup:${unifiedId}`);
@@ -8762,6 +8779,7 @@ app.post('/admin/purge-user-completely', async (req, res) => {
                     await redis.zrem(`leaderboard:${user.current_season}`, unifiedId);
                     deleted.push(`leaderboard:${user.current_season} (member removed)`);
                 }
+                try { await redis.zrem('leaderboard:all-time', unifiedId); deleted.push('leaderboard:all-time (member removed)'); } catch (e) { /* best-effort */ }
 
                 // Delete user record
                 await redis.del(`user:${unifiedId}`);
@@ -8873,6 +8891,8 @@ app.post('/v2/user/update', async (req, res) => {
             // Move user to new season leaderboard (remove from OLD season, not new)
             await redis.zrem(`leaderboard:${oldSeason}`, unified_id);
             await redis.zadd(`leaderboard:${currentSeason}`, { score: 0, member: unified_id });
+            // All-time leaderboard persists across seasons (total_xp_earned is NOT reset)
+            try { await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(user.total_xp_earned || 0), member: unified_id }); } catch (e) { console.log(`[WARN] All-time leaderboard update failed for ${unified_id}:`, e.message); }
         }
 
         // XP, level, stats, and achievements are anti-cheat protected — admin-only via this endpoint.
@@ -8887,8 +8907,13 @@ app.post('/v2/user/update', async (req, res) => {
         // Apply updates (admin-only for progression fields)
         if (isAdmin) {
             if (typeof xp === 'number') {
+                const adminXpDelta = xp - (user.xp || 0);
                 user.xp = xp;
+                if (adminXpDelta > 0) {
+                    user.total_xp_earned = (user.total_xp_earned || 0) + adminXpDelta;
+                }
                 await redis.zadd(`leaderboard:${currentSeason}`, { score: safeLeaderboardScore(xp), member: unified_id });
+                try { await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(user.total_xp_earned || 0), member: unified_id }); } catch (e) { console.log(`[WARN] All-time leaderboard update failed for ${unified_id}:`, e.message); }
             }
             if (typeof level === 'number') {
                 user.level = level;
@@ -9128,6 +9153,8 @@ app.post('/v2/user/use-oopsie', async (req, res) => {
             // Update leaderboard sorted set with new XP
             const season = freshUser.current_season || currentSeason;
             await redis.zadd(`leaderboard:${season}`, { score: safeLeaderboardScore(freshUser.xp), member: unified_id });
+            // All-time leaderboard: total_xp_earned does NOT decrease on oopsie (XP was earned then spent)
+            try { await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(freshUser.total_xp_earned || 0), member: unified_id }); } catch (e) { console.log(`[WARN] All-time leaderboard update failed for ${unified_id}:`, e.message); }
 
             console.log(`[Oopsie] User ${unified_id} used oopsie insurance: -500 XP, fixed ${fix_date}, new XP: ${freshUser.xp}`);
 
@@ -9161,13 +9188,13 @@ app.get('/v3/leaderboard', async (req, res) => {
     try {
         if (!redis) return res.status(503).json({ error: 'Redis not available' });
 
-        // Per-IP rate limit: 5 leaderboard requests per minute (prevents amplification)
+        // Per-IP rate limit: 15 leaderboard requests per minute (raised from 5 for monthly/all-time toggling)
         const lbIp = req.ip || 'unknown';
         try {
             const lbRateKey = `lb_rate:${lbIp}`;
             await redis.set(lbRateKey, 0, { nx: true, ex: 60 });
             const lbCount = await redis.incr(lbRateKey);
-            if (lbCount > 5) {
+            if (lbCount > 15) {
                 return res.status(429).json({ error: 'Too many leaderboard requests. Please wait.' });
             }
         } catch (e) {
@@ -9176,16 +9203,19 @@ app.get('/v3/leaderboard', async (req, res) => {
         }
 
         const season = req.query.season || getCurrentSeason();
-        // Validate season format to prevent arbitrary Redis key lookups and cache pollution
-        if (!/^\d{4}-\d{2}$/.test(season)) {
-            return res.status(400).json({ error: 'Invalid season format. Expected YYYY-MM.' });
-        }
-        // Restrict season range to prevent cache pollution (current year +/- 1)
-        const seasonYear = parseInt(season.substring(0, 4), 10);
-        const seasonMonth = parseInt(season.substring(5, 7), 10);
-        const currentYear = new Date().getFullYear();
-        if (seasonYear < currentYear - 1 || seasonYear > currentYear + 1 || seasonMonth < 1 || seasonMonth > 12) {
-            return res.status(400).json({ error: 'Season out of valid range.' });
+        // Allow "all-time" as a special season value (exact match only — prevents injection via "all-time-../../key")
+        if (season !== 'all-time') {
+            // Validate season format to prevent arbitrary Redis key lookups and cache pollution
+            if (!/^\d{4}-\d{2}$/.test(season)) {
+                return res.status(400).json({ error: 'Invalid season format. Expected YYYY-MM or all-time.' });
+            }
+            // Restrict season range to prevent cache pollution (current year +/- 1)
+            const seasonYear = parseInt(season.substring(0, 4), 10);
+            const seasonMonth = parseInt(season.substring(5, 7), 10);
+            const currentYear = new Date().getFullYear();
+            if (seasonYear < currentYear - 1 || seasonYear > currentYear + 1 || seasonMonth < 1 || seasonMonth > 12) {
+                return res.status(400).json({ error: 'Season out of valid range.' });
+            }
         }
         let limit = parseInt(req.query.limit, 10) || 200;
         limit = Math.max(Math.min(limit, 200), 1);
@@ -9303,7 +9333,10 @@ app.get('/v3/leaderboard', async (req, res) => {
                         total_lock_cards_completed: user.stats?.total_lock_cards_completed || 0,
                         has_trophy_case: hasTrophyCase,
                         longest_session_minutes: hasTrophyCase ? (user.stats?.longest_session_minutes || 0) : 0,
-                        highest_streak: hasTrophyCase ? (user.stats?.consecutive_days || 0) : 0
+                        highest_streak: hasTrophyCase ? (user.stats?.consecutive_days || 0) : 0,
+                        seasons_completed: user.all_time_stats?.seasons_completed || 0,
+                        total_xp_earned: user.total_xp_earned || 0,
+                        highest_level_ever: user.highest_level_ever || 0
                     });
                 }
             }
@@ -9661,6 +9694,7 @@ app.post('/admin/trigger-season-reset', async (req, res) => {
                             await redis.zrem(`leaderboard:${oldSeason}`, unifiedId);
                         }
                         await redis.zadd(`leaderboard:${targetSeason}`, { score: 0, member: unifiedId });
+                        try { await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(user.total_xp_earned || 0), member: unifiedId }); } catch (e) { /* best-effort */ }
                     }
 
                     resetResults.push({
@@ -9920,6 +9954,8 @@ app.post('/v2/user/sync', async (req, res) => {
 
             // Add to new season leaderboard (don't touch old season — may be snapshotted)
             await redis.zadd(`leaderboard:${currentSeason}`, { score: 0, member: unified_id });
+            // All-time leaderboard persists across seasons
+            try { await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(user.total_xp_earned || 0), member: unified_id }); } catch (e) { console.log(`[WARN] All-time leaderboard update failed for ${unified_id}:`, e.message); }
 
             seasonResetPerformed = true;
         }
@@ -10057,6 +10093,12 @@ app.post('/v2/user/sync', async (req, res) => {
         user.level = newLevel;
         user.last_seen = new Date().toISOString();
         user.updated_at = new Date().toISOString();
+
+        // Track all-time XP earned (server-computed, monotonically increasing)
+        const acceptedXpDelta = newXp - oldXp;
+        if (acceptedXpDelta > 0) {
+            user.total_xp_earned = (user.total_xp_earned || 0) + acceptedXpDelta;
+        }
 
         // Update highest_level_ever for unlock tracking
         user.highest_level_ever = Math.min(999, Math.max(user.highest_level_ever || 0, newLevel));
@@ -10296,6 +10338,7 @@ app.post('/v2/user/sync', async (req, res) => {
         // Update leaderboard sorted set with new XP
         const season = user.current_season || getCurrentSeason();
         await redis.zadd(`leaderboard:${season}`, { score: safeLeaderboardScore(newXp), member: unified_id });
+        try { await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(user.total_xp_earned || 0), member: unified_id }); } catch (e) { console.log(`[WARN] All-time leaderboard update failed for ${unified_id}:`, e.message); }
 
         console.log(`[V2 Sync] User ${unified_id}: Level ${oldLevel}->${newLevel}, XP ${oldXp}->${newXp}`);
 
@@ -11088,6 +11131,7 @@ app.post('/admin/update-user', async (req, res) => {
             user.current_season = currentSeason;
             const score = safeLeaderboardScore(user.xp);
             await redis.zadd(`leaderboard:${currentSeason}`, { score, member: unifiedId });
+            try { await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(user.total_xp_earned || 0), member: unifiedId }); } catch (e) { console.log(`[WARN] All-time leaderboard update failed:`, e.message); }
             changes.fix_leaderboard = { current_season: currentSeason, old_season: oldSeason || null, leaderboard_score: score };
         }
 
@@ -12690,6 +12734,7 @@ app.post('/admin/start-new-season', async (req, res) => {
                             await redis.zrem(`leaderboard:${oldSeason}`, unifiedId);
                         }
                         await redis.zadd(`leaderboard:${new_season}`, { score: 0, member: unifiedId });
+                        try { await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(user.total_xp_earned || 0), member: unifiedId }); } catch (e) { /* best-effort */ }
                     }
 
                     resetResult.users_reset++;
@@ -13036,10 +13081,12 @@ app.post('/admin/merge-accounts', async (req, res) => {
         const season = target.current_season || getCurrentSeason();
         const leaderboardXp = safeLeaderboardScore(target.xp);
         if (!dry_run) await redis.zadd(`leaderboard:${season}`, { score: leaderboardXp, member: target_id });
+        if (!dry_run) { try { await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(target.total_xp_earned || 0), member: target_id }); } catch (e) { /* best-effort */ } }
         changes.push(`leaderboard:${season} updated for target (xp: ${leaderboardXp})`);
 
         if (source.current_season) {
             if (!dry_run) await redis.zrem(`leaderboard:${source.current_season}`, source_id);
+            if (!dry_run) { try { await redis.zrem('leaderboard:all-time', source_id); } catch (e) { /* best-effort */ } }
             deletedKeys.push(`leaderboard:${source.current_season} (source removed)`);
         }
 
@@ -13447,6 +13494,72 @@ app.post('/admin/purge-patron-names', async (req, res) => {
     } catch (error) {
         console.error('Admin purge-patron-names error:', error.message);
         res.status(500).json({ error: 'Failed to purge patron names' });
+    }
+});
+
+/**
+ * POST /admin/migrate-total-xp
+ * Backfill total_xp_earned from existing user XP data and populate leaderboard:all-time sorted set.
+ * Body: { dry_run?: boolean }
+ */
+app.post('/admin/migrate-total-xp', async (req, res) => {
+    try {
+        if (!verifyAdminToken(req.headers['x-admin-token'])) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        if (!redis) return res.status(503).json({ error: 'Redis not available' });
+
+        // SCAN cooldown to prevent spamming
+        const cooldownKey = 'admin_scan_cooldown:migrate-total-xp';
+        const cooldownSet = await redis.set(cooldownKey, '1', { nx: true, ex: 30 });
+        if (!cooldownSet) {
+            return res.status(429).json({ error: 'Migration cooldown active. Please wait 30 seconds.' });
+        }
+
+        const { dry_run = true } = req.body;
+        let cursor = "0";
+        let migrated = 0;
+        let skipped = 0;
+        let errors = 0;
+
+        do {
+            const result = await redis.scan(cursor, { match: 'user:*', count: 100 });
+            cursor = String(result[0]);
+
+            for (const key of (result[1] || [])) {
+                try {
+                    const userData = await redis.get(key);
+                    if (!userData) continue;
+
+                    const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
+                    const unifiedId = user.unified_id || key.replace('user:', '');
+
+                    // Set total_xp_earned from current XP (historical XP from past seasons is not recoverable)
+                    const totalXp = user.xp || 0;
+
+                    if (!dry_run) {
+                        user.total_xp_earned = totalXp;
+                        await redis.set(key, JSON.stringify(user));
+                        await redis.zadd('leaderboard:all-time', { score: safeLeaderboardScore(totalXp), member: unifiedId });
+                    }
+
+                    migrated++;
+                } catch (e) {
+                    errors++;
+                }
+            }
+        } while (cursor !== "0");
+
+        res.json({
+            success: true,
+            dry_run,
+            migrated,
+            skipped,
+            errors
+        });
+    } catch (error) {
+        console.error('migrate-total-xp error:', error.message);
+        res.status(500).json({ error: 'Migration failed' });
     }
 });
 
