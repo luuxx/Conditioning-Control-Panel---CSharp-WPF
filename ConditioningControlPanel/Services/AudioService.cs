@@ -28,8 +28,14 @@ namespace ConditioningControlPanel.Services
         private int _duckCount; // Reference count — unduck only when all duckers release
         private bool _isDucked;
         private float _duckAmount = 0.8f; // Default: reduce to 20%
+        private long _duckGeneration; // Incremented on ForceUnduck to invalidate stale Unduck callbacks
 
         private bool _disposed;
+
+        // Cached WebView2 process IDs to avoid slow Process.GetProcessById() on every duck
+        private HashSet<int> _webView2Pids = new();
+        private DateTime _webView2PidsCacheTime = DateTime.MinValue;
+        private static readonly TimeSpan WebView2CacheExpiry = TimeSpan.FromSeconds(30);
 
         // Crash recovery file for ducking state
         private static readonly string DuckingRecoveryFile = Path.Combine(
@@ -215,6 +221,14 @@ namespace ConditioningControlPanel.Services
         #region Audio Ducking
 
         /// <summary>
+        /// Current duck generation — capture this when calling Duck() and pass to Unduck() to avoid stale callbacks.
+        /// </summary>
+        public long DuckGeneration
+        {
+            get { lock (_lockObj) { return _duckGeneration; } }
+        }
+
+        /// <summary>
         /// Lower the volume of other applications
         /// </summary>
         /// <param name="strength">0-100 (0 = no ducking, 100 = full mute)</param>
@@ -242,6 +256,32 @@ namespace ConditioningControlPanel.Services
                     // Check if we should exclude BambiCloud (WebView2) from ducking
                     var excludeWebView2 = App.Settings?.Current?.ExcludeBambiCloudFromDucking ?? true;
 
+                    // Refresh WebView2 PID cache if expired (avoids slow Process.GetProcessById per session)
+                    if (excludeWebView2 && DateTime.UtcNow - _webView2PidsCacheTime > WebView2CacheExpiry)
+                    {
+                        try
+                        {
+                            var newPids = new HashSet<int>();
+                            foreach (var proc in Process.GetProcesses())
+                            {
+                                try
+                                {
+                                    var name = proc.ProcessName.ToLowerInvariant();
+                                    if (name.Contains("msedgewebview2") || name.Contains("webview2"))
+                                        newPids.Add(proc.Id);
+                                }
+                                catch { }
+                                finally { proc.Dispose(); }
+                            }
+                            _webView2Pids = newPids;
+                            _webView2PidsCacheTime = DateTime.UtcNow;
+                        }
+                        catch (Exception ex)
+                        {
+                            App.Logger?.Debug("Failed to refresh WebView2 PID cache: {Error}", ex.Message);
+                        }
+                    }
+
                     for (int i = 0; i < sessions.Count; i++)
                     {
                         try
@@ -253,23 +293,8 @@ namespace ConditioningControlPanel.Services
                             if (processId == currentProcessId || processId == 0) continue;
 
                             // Skip WebView2 processes if setting is enabled (for BambiCloud audio)
-                            if (excludeWebView2 && processId > 0)
-                            {
-                                try
-                                {
-                                    var process = Process.GetProcessById(processId);
-                                    var processName = process.ProcessName.ToLowerInvariant();
-                                    if (processName.Contains("msedgewebview2") || processName.Contains("webview2"))
-                                    {
-                                        continue; // Don't duck WebView2 audio
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    // Process may have ended, continue with ducking
-                                    App.Logger?.Debug("Could not check process {ProcessId}: {Error}", processId, ex.Message);
-                                }
-                            }
+                            if (excludeWebView2 && _webView2Pids.Contains(processId))
+                                continue;
 
                             var currentVolume = session.SimpleAudioVolume.Volume;
 
@@ -297,20 +322,34 @@ namespace ConditioningControlPanel.Services
                 catch (Exception ex)
                 {
                     App.Logger?.Debug("Audio ducking failed: {Error}", ex.Message);
+                    // Duck failed — compensate for the increment so ref count stays balanced
+                    _duckCount = Math.Max(0, _duckCount - 1);
                 }
             }
         }
 
         /// <summary>
-        /// Restore the original volume of other applications
+        /// Restore the original volume of other applications.
+        /// Pass the generation from DuckGeneration captured at Duck() time to prevent stale callbacks
+        /// from interfering with newer ducking sessions.
         /// </summary>
-        public void Unduck()
+        /// <param name="generation">Duck generation to validate against. Pass -1 to skip generation check (legacy callers).</param>
+        public void Unduck(long generation = -1)
         {
-            if (!_isDucked || _deviceEnumerator == null) return;
-
             lock (_lockObj)
             {
-                if (!_isDucked) return;
+                // If a generation was specified and doesn't match current, this is a stale callback — ignore
+                if (generation >= 0 && generation != _duckGeneration)
+                {
+                    App.Logger?.Debug("Ignoring stale Unduck (gen {Old} vs current {Current})", generation, _duckGeneration);
+                    return;
+                }
+
+                if (!_isDucked || _deviceEnumerator == null)
+                {
+                    _duckCount = Math.Max(0, _duckCount - 1);
+                    return;
+                }
 
                 _duckCount = Math.Max(0, _duckCount - 1);
                 if (_duckCount > 0) return; // Other consumers still need ducking
@@ -327,7 +366,7 @@ namespace ConditioningControlPanel.Services
                         {
                             var session = sessions[i];
                             var processId = (int)session.GetProcessID;
-                            
+
                             if (_originalVolumes.TryGetValue(processId, out var originalVolume))
                             {
                                 session.SimpleAudioVolume.Volume = originalVolume;
@@ -350,25 +389,31 @@ namespace ConditioningControlPanel.Services
                 }
                 catch (Exception ex)
                 {
-                    App.Logger?.Debug("Audio unducking failed: {Error}", ex.Message);
-                    _originalVolumes.Clear();
-                    _isDucked = false;
+                    App.Logger?.Warning("Audio unducking failed, preserving state for retry: {Error}", ex.Message);
+                    // CRITICAL: Do NOT clear _originalVolumes or set _isDucked=false here.
+                    // If we do, the next Duck() will re-read the currently-ducked volumes as
+                    // "originals", causing volumes to ratchet toward 0% over repeated cycles.
+                    // Keep state intact so the next Unduck/ForceUnduck can retry restoration.
                     _duckCount = 0;
-                    ClearDuckingState();
+                    // Keep recovery file so crash recovery can restore if app exits
                 }
             }
         }
 
         /// <summary>
         /// Force-unduck regardless of reference count. Used for panic key / app exit.
+        /// Increments the duck generation to invalidate all pending stale Unduck callbacks.
         /// </summary>
         public void ForceUnduck()
         {
+            long gen;
             lock (_lockObj)
             {
+                _duckGeneration++; // Invalidate all pending stale Unduck callbacks
                 _duckCount = 1; // Force next Unduck() to actually restore
+                gen = _duckGeneration;
             }
-            Unduck();
+            Unduck(gen);
         }
 
         #endregion

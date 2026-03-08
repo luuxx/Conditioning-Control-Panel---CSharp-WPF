@@ -51,7 +51,7 @@ public class QuestDefinitionService : IDisposable
     {
         { 1, "Jerk-it January" },
         { 2, "Fucked-up February" },
-        { 3, "Mindfuck March" },
+        { 3, "Mindless March" },
         { 4, "Anal April" },
         { 5, "Mesmerize May" },
         { 6, "Juicy June" },
@@ -72,6 +72,8 @@ public class QuestDefinitionService : IDisposable
     public QuestDefinitionService()
     {
         _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        _httpClient.DefaultRequestHeaders.Add("X-Client-Version", UpdateService.AppVersion);
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"ConditioningControlPanel/{UpdateService.AppVersion}");
 
         // Set up cache directories
         var appDataPath = Path.Combine(

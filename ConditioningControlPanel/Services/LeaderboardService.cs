@@ -26,8 +26,17 @@ public class LeaderboardService : IDisposable
     /// <summary>Number of users currently online (active in last minute)</summary>
     public int OnlineUsers { get; private set; }
 
+    /// <summary>Server-provided rank for the current player (1-indexed), or null if not available</summary>
+    public int? YourRank { get; private set; }
+
+    /// <summary>Total number of season leaderboard members (for percentile calculation)</summary>
+    public int? YourTotal { get; private set; }
+
     /// <summary>Current sort field</summary>
     public string CurrentSortBy { get; private set; } = "level";
+
+    /// <summary>Current leaderboard mode (monthly or all-time)</summary>
+    public string CurrentMode { get; private set; } = "monthly";
 
     /// <summary>Last successful refresh time</summary>
     public DateTime? LastRefreshTime { get; private set; }
@@ -44,6 +53,8 @@ public class LeaderboardService : IDisposable
     public LeaderboardService()
     {
         _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        _httpClient.DefaultRequestHeaders.Add("X-Client-Version", UpdateService.AppVersion);
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"ConditioningControlPanel/{UpdateService.AppVersion}");
 
         // Auto-refresh every 30 minutes (server caches leaderboard in memory for 30s)
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
@@ -57,8 +68,9 @@ public class LeaderboardService : IDisposable
     /// Refresh leaderboard data from the server
     /// </summary>
     /// <param name="sortBy">Field to sort by (xp, level, total_bubbles_popped, total_flashes, total_video_minutes, total_lock_cards_completed)</param>
+    /// <param name="mode">Leaderboard mode: "monthly" (default) or "all-time"</param>
     /// <returns>True if successful</returns>
-    public async Task<bool> RefreshAsync(string? sortBy = null)
+    public async Task<bool> RefreshAsync(string? sortBy = null, string? mode = null)
     {
         // Skip if offline mode is enabled
         if (App.Settings?.Current?.OfflineMode == true)
@@ -70,15 +82,20 @@ public class LeaderboardService : IDisposable
         if (IsRefreshing) return false;
 
         sortBy ??= CurrentSortBy;
+        mode ??= CurrentMode;
         IsRefreshing = true;
 
         try
         {
-            App.Logger?.Debug("Fetching leaderboard with sort_by={SortBy}", sortBy);
+            App.Logger?.Debug("Fetching leaderboard with sort_by={SortBy}, mode={Mode}", sortBy, mode);
 
-            // Use V2 leaderboard (monthly seasons system)
-            var season = DateTime.UtcNow.ToString("yyyy-MM");
-            var response = await _httpClient.GetAsync($"{ProxyBaseUrl}/v3/leaderboard?season={season}&limit=10000");
+            // Use V3 leaderboard — "all-time" mode uses a permanent sorted set
+            var season = mode == "all-time" ? "all-time" : DateTime.UtcNow.ToString("yyyy-MM");
+            var unifiedId = App.UnifiedUserId;
+            var url = $"{ProxyBaseUrl}/v3/leaderboard?season={season}&limit=10000";
+            if (!string.IsNullOrEmpty(unifiedId))
+                url += $"&unified_id={Uri.EscapeDataString(unifiedId)}";
+            var response = await _httpClient.GetAsync(url);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -96,7 +113,10 @@ public class LeaderboardService : IDisposable
                 Entries = result.Entries;
                 TotalUsers = result.TotalUsers;
                 OnlineUsers = result.OnlineUsers;
+                YourRank = result.YourRank;
+                YourTotal = result.YourTotal;
                 CurrentSortBy = sortBy;
+                CurrentMode = mode;
                 LastRefreshTime = DateTime.Now;
                 LastRefreshError = null;
 
@@ -168,60 +188,63 @@ public class LeaderboardService : IDisposable
     {
         try
         {
+            // Prefer server-provided rank (works for any rank, not just top 200)
+            if (YourRank.HasValue && YourTotal.HasValue && YourTotal.Value > 0)
+            {
+                var percentile = (int)Math.Ceiling((double)YourRank.Value / YourTotal.Value * 100);
+                var clampedPercentile = Math.Min(99, Math.Max(1, percentile));
+
+                App.Logger?.Debug("GetPlayerPercentile: Server rank {Position}/{Total} = Top {Percentile}%",
+                    YourRank.Value, YourTotal.Value, clampedPercentile);
+
+                return clampedPercentile;
+            }
+
+            // Fallback: scan local entries (only works if player is within the fetched set)
             if (Entries.Count == 0 || TotalUsers == 0)
             {
                 App.Logger?.Debug("GetPlayerPercentile: No entries ({Count}) or users ({Total})", Entries.Count, TotalUsers);
                 return 0;
             }
 
-            // Try to find the player by unified ID, Discord ID, then display name
             var unifiedId = App.UnifiedUserId;
             var discordId = App.Discord?.UserId;
             var displayName = App.UserDisplayName;
 
-            // Find player in leaderboard
             int position = -1;
             for (int i = 0; i < Entries.Count; i++)
             {
                 var entry = Entries[i];
-                // Match by Unified ID (primary)
                 if (!string.IsNullOrEmpty(unifiedId) && entry.UnifiedId == unifiedId)
                 {
                     position = i + 1;
-                    App.Logger?.Debug("GetPlayerPercentile: Found player by Unified ID at position {Position} out of {Total}", position, TotalUsers);
                     break;
                 }
-                // Match by Discord ID
                 if (!string.IsNullOrEmpty(discordId) && entry.DiscordId == discordId)
                 {
                     position = i + 1;
-                    App.Logger?.Debug("GetPlayerPercentile: Found player by Discord ID at position {Position} out of {Total}", position, TotalUsers);
                     break;
                 }
-                // Fallback: match by display name
                 if (!string.IsNullOrEmpty(displayName) && string.Equals(entry.DisplayName, displayName, StringComparison.OrdinalIgnoreCase))
                 {
                     position = i + 1;
-                    App.Logger?.Debug("GetPlayerPercentile: Found player by display name at position {Position} out of {Total}", position, TotalUsers);
                     break;
                 }
             }
 
             if (position <= 0)
             {
-                App.Logger?.Debug("GetPlayerPercentile: Player not found in leaderboard (UnifiedId={UnifiedId}, DiscordId={DiscordId}, DisplayName={DisplayName})", unifiedId, discordId, displayName);
+                App.Logger?.Debug("GetPlayerPercentile: Player not found in leaderboard");
                 return 0;
             }
 
-            // Calculate percentile (higher is better, so invert)
-            // Top 10% means better than 90% of players
-            var percentile = (int)Math.Ceiling((double)position / TotalUsers * 100);
-            var clampedPercentile = Math.Min(99, Math.Max(1, percentile));
+            var fallbackPercentile = (int)Math.Ceiling((double)position / TotalUsers * 100);
+            var clampedFallback = Math.Min(99, Math.Max(1, fallbackPercentile));
 
-            App.Logger?.Debug("GetPlayerPercentile: Player rank {Position}/{Total} = Top {Percentile}%",
-                position, TotalUsers, clampedPercentile);
+            App.Logger?.Debug("GetPlayerPercentile: Fallback scan rank {Position}/{Total} = Top {Percentile}%",
+                position, TotalUsers, clampedFallback);
 
-            return clampedPercentile;
+            return clampedFallback;
         }
         catch (Exception ex)
         {
@@ -257,6 +280,12 @@ public class LeaderboardService : IDisposable
 
         [JsonProperty("fetched_at")]
         public string? FetchedAt { get; set; }
+
+        [JsonProperty("your_rank")]
+        public int? YourRank { get; set; }
+
+        [JsonProperty("your_total")]
+        public int? YourTotal { get; set; }
     }
 
     #endregion
@@ -349,6 +378,20 @@ public class LeaderboardEntry
     /// Formatted highest streak display — blank if user doesn't have trophy_case skill
     /// </summary>
     public string HighestStreakDisplay => HasTrophyCase ? HighestStreak.ToString() : "";
+
+    [JsonProperty("seasons_completed")]
+    public int SeasonsCompleted { get; set; }
+
+    [JsonProperty("total_xp_earned")]
+    public long TotalXpEarned { get; set; }
+
+    /// <summary>
+    /// Formatted total XP earned display (e.g., "100.3k" or "1.2M")
+    /// </summary>
+    public string TotalXpEarnedDisplay => FormatLargeNumber((int)Math.Min(TotalXpEarned, int.MaxValue));
+
+    [JsonProperty("highest_level_ever")]
+    public int HighestLevelEver { get; set; }
 
     [JsonProperty("is_online", NullValueHandling = NullValueHandling.Ignore)]
     public bool IsOnline { get; set; }

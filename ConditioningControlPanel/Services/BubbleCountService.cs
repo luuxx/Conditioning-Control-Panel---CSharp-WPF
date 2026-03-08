@@ -353,6 +353,7 @@ public class BubbleCountService : IDisposable
 
             foreach (var screen in screens)
             {
+                var dpiScale = BubbleCountWindow.GetDpiForScreen(screen);
                 var win = new Window
                 {
                     WindowStyle = WindowStyle.None,
@@ -361,8 +362,8 @@ public class BubbleCountService : IDisposable
                     ShowInTaskbar = false,
                     ShowActivated = false,
                     WindowStartupLocation = WindowStartupLocation.Manual,
-                    Left = screen.Bounds.X + 100,
-                    Top = screen.Bounds.Y + 100,
+                    Left = (screen.Bounds.X + 100) / dpiScale,
+                    Top = (screen.Bounds.Y + 100) / dpiScale,
                     Width = 400,
                     Height = 300,
                     Content = new TextBlock
@@ -499,13 +500,40 @@ public class BubbleCountService : IDisposable
         _regularVideos.Clear();
         _packVideos.Clear();
 
-        // Get regular videos from filesystem
+        // Get regular videos from filesystem (including subfolders for content pack organization)
         if (Directory.Exists(_videosPath))
         {
-            var files = Directory.GetFiles(_videosPath)
-                .Where(f => new[] { ".mp4", ".webm", ".avi", ".mkv", ".mov", ".wmv" }
-                    .Contains(Path.GetExtension(f).ToLowerInvariant()))
-                .ToList();
+            var validExtensions = new[] { ".mp4", ".webm", ".avi", ".mkv", ".mov", ".wmv" };
+            var allFiles = Directory.GetFiles(_videosPath, "*.*", SearchOption.AllDirectories);
+            var files = new List<string>();
+
+            foreach (var file in allFiles)
+            {
+                var ext = Path.GetExtension(file).ToLowerInvariant();
+                if (!validExtensions.Contains(ext)) continue;
+
+                // Security: validate path is within allowed directories
+                if (!SecurityHelper.IsPathSafe(file, AppDomain.CurrentDomain.BaseDirectory)
+                    && !SecurityHelper.IsPathSafe(file, App.UserDataPath)
+                    && !SecurityHelper.IsPathSafe(file, App.EffectiveAssetsPath))
+                    continue;
+
+                var fileName = SecurityHelper.SanitizeFilename(Path.GetFileName(file));
+                if (string.IsNullOrEmpty(fileName)) continue;
+
+                files.Add(file);
+            }
+
+            // Filter out disabled assets
+            if (App.Settings?.Current?.DisabledAssetPaths.Count > 0)
+            {
+                var basePath = App.EffectiveAssetsPath;
+                files = files.Where(f =>
+                {
+                    var relativePath = Path.GetRelativePath(basePath, f);
+                    return !App.Settings.Current.DisabledAssetPaths.Contains(relativePath);
+                }).ToList();
+            }
 
             _regularVideos = files.OrderBy(_ => _random.Next()).ToList();
         }

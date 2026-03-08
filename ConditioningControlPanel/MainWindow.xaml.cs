@@ -83,6 +83,7 @@ namespace ConditioningControlPanel
         private bool _isCapturingPanicKey = false;
         private bool _exitRequested = false;
         private int _panicPressCount = 0;
+        private string _leaderboardMode = "monthly";
 
         // Lockdown mode
         private int _lockdownTimerClickCount = 0;
@@ -531,7 +532,7 @@ namespace ConditioningControlPanel
                         var outputDevice = new WaveOutEvent();
 
                         var masterVolume = App.Settings.Current.MasterVolume / 100f;
-                        var curvedVolume = (float)Math.Pow(masterVolume, 1.5) * 0.5f;
+                        var curvedVolume = (float)Math.Pow(masterVolume, 1.5) * 0.375f;
                         audioFile.Volume = Math.Max(0.01f, curvedVolume);
 
                         outputDevice.Init(audioFile);
@@ -1152,6 +1153,9 @@ namespace ConditioningControlPanel
 
             // Initialize quick login UI
             UpdateQuickLoginUI();
+
+            // Load past quizzes list
+            RefreshPastQuizzes();
 
             // Handle start minimized (to tray) - delay briefly to let window render properly first
             if (App.Settings.Current.StartMinimized)
@@ -2714,8 +2718,25 @@ namespace ConditioningControlPanel
                 UpdateBannerWelcomeMessage();
                 UpdateAccountLinkingUI();
 
+                // Save new account's identity/lifetime data set by ApplyUserDataToSettings inside LoginDialog.
+                // ClearProgressionData will zero these, so we restore them after clearing.
+                var savedHighestLevelEver = App.Settings?.Current?.HighestLevelEver ?? 0;
+                var savedIsSeason0Og = App.Settings?.Current?.IsSeason0Og ?? false;
+                var savedCurrentSeason = App.Settings?.Current?.CurrentSeason;
+                var savedPatreonTier = App.Settings?.Current?.PatreonTier ?? 0;
+
                 // Clear stale progression data from previous account before syncing
                 ClearProgressionData();
+
+                // Restore the new account's lifetime data that ClearProgressionData just zeroed
+                if (App.Settings?.Current != null)
+                {
+                    App.Settings.Current.HighestLevelEver = savedHighestLevelEver;
+                    App.Settings.Current.IsSeason0Og = savedIsSeason0Og;
+                    App.Settings.Current.CurrentSeason = savedCurrentSeason;
+                    App.Settings.Current.PatreonTier = savedPatreonTier;
+                    App.Settings.Save();
+                }
 
                 // Start profile sync
                 App.ProfileSync?.StartHeartbeat();
@@ -2731,12 +2752,21 @@ namespace ConditioningControlPanel
                         if (App.Achievements != null) App.Achievements.SuppressPopups = true;
                         try
                         {
-                            // IMPORTANT: Load FIRST, then sync. ClearProgressionData() zeroed local data,
-                            // so we must restore from cloud before syncing UP — otherwise we'd push
-                            // level=1/xp=0 to the server, which can permanently erase progress if the
-                            // server also has low values (e.g. right after migration/season reset).
-                            await App.ProfileSync.LoadProfileAsync();
-                            await App.ProfileSync.SyncProfileAsync();
+                            // Load profile from cloud, then sync. Server is authoritative for
+                            // progression data after login (local was just cleared).
+                            var loaded = await App.ProfileSync.LoadProfileAsync();
+                            if (loaded)
+                            {
+                                await App.ProfileSync.SyncProfileAsync();
+                            }
+                            else
+                            {
+                                // LoadProfileAsync fails for invite-code users (no OAuth token).
+                                // For V2 users with UnifiedId, LoadProfileAsync calls SyncProfileAsync
+                                // internally and returns its result. If it still returns false here,
+                                // force a sync anyway — server will return authoritative data.
+                                await App.ProfileSync.SyncProfileAsync();
+                            }
                         }
                         finally
                         {
@@ -2755,11 +2785,6 @@ namespace ConditioningControlPanel
                     }
                 });
 
-                // Show OG welcome if applicable
-                if (result.ShouldShowOgWelcome)
-                {
-                    ShowOgWelcomePopup();
-                }
             }
         }
 
@@ -2946,12 +2971,6 @@ namespace ConditioningControlPanel
                         UpdatePatreonUI();
                         UpdateBannerWelcomeMessage();
                         UpdateAccountLinkingUI();
-
-                        // Show OG welcome popup if applicable
-                        if (result.ShouldShowOgWelcome)
-                        {
-                            ShowOgWelcomePopup();
-                        }
                     }
                 }
                 catch (OperationCanceledException)
@@ -3024,12 +3043,6 @@ namespace ConditioningControlPanel
                         UpdateQuickDiscordUI();
                         UpdateBannerWelcomeMessage();
                         UpdateAccountLinkingUI();
-
-                        // Show OG welcome popup if applicable
-                        if (result.ShouldShowOgWelcome)
-                        {
-                            ShowOgWelcomePopup();
-                        }
                     }
                 }
                 catch (OperationCanceledException)
@@ -3092,13 +3105,32 @@ namespace ConditioningControlPanel
 
         private void ChkDiscordRichPresence_Changed(object sender, RoutedEventArgs e)
         {
+            if (_isLoading) return;
+
             // Get the state from whichever checkbox was clicked
             var checkbox = sender as CheckBox;
             var isEnabled = checkbox?.IsChecked == true;
 
-            // Sync both checkboxes
+            // Block enabling Rich Presence if Discord is not linked — prevents accidental
+            // exposure for users who chose anonymous invite-code accounts
+            if (isEnabled && App.Settings?.Current?.HasLinkedDiscord != true)
+            {
+                _isLoading = true;
+                ChkDiscordRichPresence.IsChecked = false;
+                ChkQuickDiscordRichPresence.IsChecked = false;
+                if (ChkDiscordTabRichPresence != null) ChkDiscordTabRichPresence.IsChecked = false;
+                _isLoading = false;
+                MessageBox.Show("Discord Rich Presence requires a linked Discord account.\n\nLink your Discord in the Profile tab first.",
+                    "Discord Not Linked", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            // Sync all checkboxes without re-entrancy
+            _isLoading = true;
             ChkDiscordRichPresence.IsChecked = isEnabled;
             ChkQuickDiscordRichPresence.IsChecked = isEnabled;
+            if (ChkDiscordTabRichPresence != null) ChkDiscordTabRichPresence.IsChecked = isEnabled;
+            _isLoading = false;
 
             App.Settings.Current.DiscordRichPresenceEnabled = isEnabled;
 
@@ -3395,6 +3427,82 @@ namespace ConditioningControlPanel
             if (!confirmed) return;
 
             App.Lockdown.Activate(duration);
+        }
+
+        private void BtnStartQuiz_Click(object sender, RoutedEventArgs e)
+        {
+            if (App.Ai == null || !App.Ai.IsAvailable)
+            {
+                MessageBox.Show("You need to be logged in to use the AI quiz.", "Login Required",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var fullscreen = ChkQuizFullscreen?.IsChecked == true;
+            var playDrone = ChkQuizDrone?.IsChecked == true;
+            var quizWindow = new QuizWindow(fullscreen, playDrone);
+            quizWindow.Closed += (s, args) => RefreshPastQuizzes();
+            quizWindow.Show();
+        }
+
+        private void RefreshPastQuizzes()
+        {
+            try
+            {
+                var history = QuizService.LoadHistory();
+                PastQuizzesList.Children.Clear();
+
+                if (history.Count == 0)
+                {
+                    TxtPastQuizzesHeader.Visibility = Visibility.Collapsed;
+                    PastQuizzesPanel.Visibility = Visibility.Collapsed;
+                    return;
+                }
+
+                TxtPastQuizzesHeader.Visibility = Visibility.Visible;
+                PastQuizzesPanel.Visibility = Visibility.Visible;
+
+                foreach (var entry in history)
+                {
+                    var pct = entry.MaxScore > 0 ? (int)Math.Round((double)entry.TotalScore / entry.MaxScore * 100) : 0;
+                    var label = $"{entry.TakenAt:MMM d}  ·  {entry.Category}  ·  {entry.TotalScore}/{entry.MaxScore} ({pct}%)";
+
+                    var row = new Border
+                    {
+                        Cursor = System.Windows.Input.Cursors.Hand,
+                        Padding = new Thickness(8, 5, 8, 5),
+                        Background = System.Windows.Media.Brushes.Transparent
+                    };
+
+                    var txt = new TextBlock
+                    {
+                        Text = label,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xB8)),
+                        FontSize = 11.5
+                    };
+                    row.Child = txt;
+
+                    var captured = entry;
+                    row.MouseLeftButtonDown += (s, args) =>
+                    {
+                        new QuizReportWindow(captured) { Owner = this }.Show();
+                    };
+                    row.MouseEnter += (s, args) =>
+                    {
+                        if (s is Border b) b.Background = new SolidColorBrush(Color.FromArgb(0x15, 0xFF, 0xFF, 0xFF));
+                    };
+                    row.MouseLeave += (s, args) =>
+                    {
+                        if (s is Border b) b.Background = System.Windows.Media.Brushes.Transparent;
+                    };
+
+                    PastQuizzesList.Children.Add(row);
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "MainWindow: Failed to refresh past quizzes");
+            }
         }
 
         private void OnLockdownActivated()
@@ -3763,6 +3871,62 @@ namespace ConditioningControlPanel
             await RefreshLeaderboardAsync();
         }
 
+        private async void BtnLeaderboardMode_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is System.Windows.Controls.Button btn && btn.Tag is string mode && mode != _leaderboardMode)
+            {
+                _leaderboardMode = mode;
+                UpdateLeaderboardModeButtons();
+                await RefreshLeaderboardAsync();
+            }
+        }
+
+        private void UpdateLeaderboardModeButtons()
+        {
+            try
+            {
+                if (BtnLeaderboardMonthly == null || BtnLeaderboardAllTime == null) return;
+
+                if (_leaderboardMode == "all-time")
+                {
+                    BtnLeaderboardMonthly.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#352545"));
+                    BtnLeaderboardMonthly.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4"));
+                    BtnLeaderboardAllTime.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4"));
+                    BtnLeaderboardAllTime.Foreground = new SolidColorBrush(Colors.White);
+                }
+                else
+                {
+                    BtnLeaderboardMonthly.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4"));
+                    BtnLeaderboardMonthly.Foreground = new SolidColorBrush(Colors.White);
+                    BtnLeaderboardAllTime.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#352545"));
+                    BtnLeaderboardAllTime.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4"));
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "Error updating leaderboard mode buttons");
+            }
+        }
+
+        private void UpdateSeasonsColumn()
+        {
+            try
+            {
+                var gridView = LstLeaderboard?.View as GridView;
+                if (gridView == null || gridView.Columns.Count == 0) return;
+
+                var seasonsCol = gridView.Columns.FirstOrDefault(c => c.Header?.ToString() == "Seasons");
+                if (seasonsCol != null)
+                {
+                    seasonsCol.Width = _leaderboardMode == "all-time" ? 80 : 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "Error updating Seasons column");
+            }
+        }
+
         private void BtnLeaderboardDiscord_Click(object sender, RoutedEventArgs e)
         {
             if (sender is System.Windows.Controls.Button btn && btn.Tag is string discordId && !string.IsNullOrEmpty(discordId))
@@ -3830,7 +3994,7 @@ namespace ConditioningControlPanel
                 }
 
                 TxtLeaderboardStatus.Text = "Loading...";
-                var success = await App.Leaderboard.RefreshAsync(sortBy);
+                var success = await App.Leaderboard.RefreshAsync(sortBy, _leaderboardMode);
 
                 if (success)
                 {
@@ -3838,13 +4002,26 @@ namespace ConditioningControlPanel
                     ApplyLeaderboardSort(sortBy ?? App.Leaderboard.CurrentSortBy);
                     TxtLeaderboardStatus.Text = $"{App.Leaderboard.OnlineUsers} online / {App.Leaderboard.TotalUsers} users";
 
-                    // Update season flavour text
-                    var seasonTitle = App.QuestDefinitions?.SeasonTitle;
-                    if (!string.IsNullOrEmpty(seasonTitle))
-                        TxtLeaderboardSeason.Text = $"{seasonTitle} ~ prove your devotion~";
+                    // Update season flavour text based on mode
+                    if (_leaderboardMode == "all-time")
+                    {
+                        TxtLeaderboardSeason.Text = "all-time ~ legends never die~";
+                        if (TxtLeaderboardSubtitle != null)
+                            TxtLeaderboardSubtitle.Text = "cumulative XP across all seasons~";
+                    }
+                    else
+                    {
+                        var seasonTitle = App.QuestDefinitions?.SeasonTitle;
+                        if (!string.IsNullOrEmpty(seasonTitle))
+                            TxtLeaderboardSeason.Text = $"{seasonTitle} ~ prove your devotion~";
+                        if (TxtLeaderboardSubtitle != null)
+                            TxtLeaderboardSubtitle.Text = "resets monthly — your rank is everything~";
+                    }
 
                     // Show/hide Trophy Case columns based on skill unlock
                     UpdateTrophyCaseColumns();
+                    // Show/hide Seasons column based on mode
+                    UpdateSeasonsColumn();
                 }
                 else
                 {
@@ -3866,13 +4043,29 @@ namespace ConditioningControlPanel
         {
             if (App.Leaderboard?.Entries == null || LstLeaderboard == null) return;
 
-            var sorted = sortBy switch
+            List<Services.LeaderboardEntry> sorted;
+
+            if (_leaderboardMode == "all-time")
             {
-                "level" => App.Leaderboard.Entries.OrderByDescending(x => x.Level).ThenByDescending(x => x.Xp).ToList(),
-                "xp" => App.Leaderboard.Entries.OrderByDescending(x => x.Xp).ToList(),
-                "is_patreon" => App.Leaderboard.Entries.OrderByDescending(x => x.PatreonTier).ThenByDescending(x => x.Level).ToList(),
-                _ => App.Leaderboard.Entries.OrderByDescending(x => x.Xp).ToList()
-            };
+                // In all-time mode, default sort by total XP earned; "level" sorts by highest_level_ever
+                sorted = sortBy switch
+                {
+                    "level" => App.Leaderboard.Entries.OrderByDescending(x => x.HighestLevelEver).ThenByDescending(x => x.TotalXpEarned).ToList(),
+                    "xp" => App.Leaderboard.Entries.OrderByDescending(x => x.TotalXpEarned).ToList(),
+                    "is_patreon" => App.Leaderboard.Entries.OrderByDescending(x => x.PatreonTier).ThenByDescending(x => x.TotalXpEarned).ToList(),
+                    _ => App.Leaderboard.Entries.OrderByDescending(x => x.TotalXpEarned).ToList()
+                };
+            }
+            else
+            {
+                sorted = sortBy switch
+                {
+                    "level" => App.Leaderboard.Entries.OrderByDescending(x => x.Level).ThenByDescending(x => x.Xp).ToList(),
+                    "xp" => App.Leaderboard.Entries.OrderByDescending(x => x.Xp).ToList(),
+                    "is_patreon" => App.Leaderboard.Entries.OrderByDescending(x => x.PatreonTier).ThenByDescending(x => x.Level).ToList(),
+                    _ => App.Leaderboard.Entries.OrderByDescending(x => x.Xp).ToList()
+                };
+            }
 
             // Re-number ranks
             for (int i = 0; i < sorted.Count; i++)
@@ -6534,6 +6727,10 @@ namespace ConditioningControlPanel
                 }
 
                 TxtRemoteCode.Text = string.Join(" ", code.ToCharArray());
+                var pin = App.RemoteControl?.ConnectPin;
+                TxtRemotePin.Text = !string.IsNullOrEmpty(pin) ? $"PIN: {pin}" : "";
+                TxtRemotePin.Visibility = !string.IsNullOrEmpty(pin)
+                    ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
                 RemoteLinkPanel.Visibility = System.Windows.Visibility.Visible;
                 RemoteCodePanel.Visibility = System.Windows.Visibility.Visible;
                 RemoteStatusPanel.Visibility = System.Windows.Visibility.Visible;
@@ -6625,6 +6822,10 @@ namespace ConditioningControlPanel
                 if (code != null)
                 {
                     TxtRemoteCode.Text = string.Join(" ", code.ToCharArray());
+                    var reconnectPin = App.RemoteControl?.ConnectPin;
+                    TxtRemotePin.Text = !string.IsNullOrEmpty(reconnectPin) ? $"PIN: {reconnectPin}" : "";
+                    TxtRemotePin.Visibility = !string.IsNullOrEmpty(reconnectPin)
+                        ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
                     UpdateRemoteStatus(false);
                 }
 
@@ -6643,7 +6844,9 @@ namespace ConditioningControlPanel
             {
                 try
                 {
-                    System.Windows.Clipboard.SetText(code);
+                    var pin = App.RemoteControl?.ConnectPin;
+                    var copyText = !string.IsNullOrEmpty(pin) ? $"{code} (PIN: {pin})" : code;
+                    System.Windows.Clipboard.SetText(copyText);
                     BtnCopyRemoteCode.Content = "Copied!";
                 }
                 catch (Exception ex)
@@ -6773,9 +6976,13 @@ namespace ConditioningControlPanel
         private void ShowRemoteControlOverlay()
         {
             var code = App.RemoteControl?.SessionCode;
-            TxtOverlaySessionCode.Text = !string.IsNullOrEmpty(code)
+            var overlayPin = App.RemoteControl?.ConnectPin;
+            var sessionText = !string.IsNullOrEmpty(code)
                 ? $"Session: {string.Join(" ", code.ToCharArray())}"
                 : "";
+            if (!string.IsNullOrEmpty(overlayPin))
+                sessionText += $"  PIN: {overlayPin}";
+            TxtOverlaySessionCode.Text = sessionText;
 
             // Hide browser to avoid WebView2 airspace issue (renders on top of WPF overlays)
             BrowserContainer.Visibility = System.Windows.Visibility.Hidden;
@@ -9087,6 +9294,7 @@ namespace ConditioningControlPanel
             SetHelpContent(HelpBtnAssetBrowser, "AssetBrowser");
 
             // Lab tab
+            SetHelpContent(HelpBtnQuiz, "Quiz");
             SetHelpContent(HelpBtnKeywordTriggers, "KeywordTriggers");
             SetHelpContent(HelpBtnScreenOcr, "ScreenOcr");
             SetHelpContent(HelpBtnRemoteControl, "RemoteControl");
@@ -9850,7 +10058,7 @@ namespace ConditioningControlPanel
                     var session = _sessionEngine.CurrentSession;
 
                     // Update session button with remaining time
-                    BtnStartSession.Content = $"STOP SESSION ({remaining.Minutes:D2}:{remaining.Seconds:D2})";
+                    BtnStartSession.Content = $"STOP SESSION ({((int)remaining.TotalMinutes):D2}:{remaining.Seconds:D2})";
 
                     // Update Start button label with session name + timer
                     var mName = session.GetModeAwareName();
@@ -9858,7 +10066,7 @@ namespace ConditioningControlPanel
                         ? mName.Substring(0, 11) + "..."
                         : mName;
                     var pauseIndicator = _sessionEngine.IsPaused ? " [PAUSED]" : "";
-                    TxtStartLabel.Text = $"{name} {remaining.Minutes:D2}:{remaining.Seconds:D2}{pauseIndicator}";
+                    TxtStartLabel.Text = $"{name} {((int)remaining.TotalMinutes):D2}:{remaining.Seconds:D2}{pauseIndicator}";
                 }
             });
         }
@@ -9932,6 +10140,13 @@ namespace ConditioningControlPanel
         {
             if (_sessionEngine == null || !_sessionEngine.IsRunning) return;
 
+            if (App.Lockdown?.IsActive == true)
+            {
+                MessageBox.Show("YOU ARE IN LOCKDOWN MODE.\nYou cannot end a session during lockdown!", "LOCKDOWN",
+                    MessageBoxButton.OK, MessageBoxImage.Stop);
+                return;
+            }
+
             var session = _sessionEngine.CurrentSession;
             var elapsed = _sessionEngine.ElapsedTime;
             var remaining = _sessionEngine.RemainingTime;
@@ -9949,8 +10164,8 @@ namespace ConditioningControlPanel
                 "⚠ Stop Session?",
                 $"You're currently in a session:\n" +
                 $"{session?.Icon} {session?.Name}\n\n" +
-                $"Time elapsed: {elapsed.Minutes:D2}:{elapsed.Seconds:D2}\n" +
-                $"Time remaining: {remaining.Minutes:D2}:{remaining.Seconds:D2}\n\n" +
+                $"Time elapsed: {((int)elapsed.TotalMinutes):D2}:{elapsed.Seconds:D2}\n" +
+                $"Time remaining: {((int)remaining.TotalMinutes):D2}:{remaining.Seconds:D2}\n\n" +
                 $"If you stop now, you will lose ALL {potentialXP} XP.{penaltyText}\n\n" +
                 "Are you sure you want to quit?",
                 "Yes, stop session", "Keep going");
@@ -9964,6 +10179,13 @@ namespace ConditioningControlPanel
         private void BtnPauseSession_Click(object sender, RoutedEventArgs e)
         {
             if (_sessionEngine == null || !_sessionEngine.IsRunning) return;
+
+            if (App.Lockdown?.IsActive == true)
+            {
+                MessageBox.Show("YOU ARE IN LOCKDOWN MODE.\nYou cannot pause during lockdown!", "LOCKDOWN",
+                    MessageBoxButton.OK, MessageBoxImage.Stop);
+                return;
+            }
 
             if (_sessionEngine.IsPaused)
             {
@@ -12321,7 +12543,8 @@ namespace ConditioningControlPanel
 
             // Stats from local data
             var level = App.Settings?.Current?.PlayerLevel ?? 1;
-            var xp = App.Settings?.Current?.PlayerXP ?? 0;
+            var localXp = App.Settings?.Current?.PlayerXP ?? 0;
+            var xp = App.Progression?.GetTotalXP(level, localXp) ?? localXp;
             var progress = App.Achievements?.Progress;
 
             if (TxtProfileViewerLevel != null) TxtProfileViewerLevel.Text = level.ToString();
@@ -12329,21 +12552,30 @@ namespace ConditioningControlPanel
             // Rank (own rank from leaderboard, if available)
             if (TxtProfileViewerRank != null)
             {
-                // Try to find own rank: unified_id first, then display name fallback
-                var unifiedId = App.UnifiedUserId;
-                var displayName = App.Settings?.Current?.UserDisplayName;
+                // Prefer server-provided rank (works even beyond top 200)
+                var serverRank = App.Leaderboard?.YourRank;
+                if (serverRank.HasValue && serverRank.Value > 0)
+                {
+                    TxtProfileViewerRank.Text = $"#{serverRank.Value}";
+                }
+                else
+                {
+                    // Fallback: scan local entries by unified_id or display name
+                    var unifiedId = App.UnifiedUserId;
+                    var displayName = App.Settings?.Current?.UserDisplayName;
 
-                var ownEntry = !string.IsNullOrEmpty(unifiedId)
-                    ? App.Leaderboard?.Entries?.FirstOrDefault(e =>
-                        e.UnifiedId == unifiedId)
-                    : null;
+                    var ownEntry = !string.IsNullOrEmpty(unifiedId)
+                        ? App.Leaderboard?.Entries?.FirstOrDefault(e =>
+                            e.UnifiedId == unifiedId)
+                        : null;
 
-                ownEntry ??= !string.IsNullOrEmpty(displayName)
-                    ? App.Leaderboard?.Entries?.FirstOrDefault(e =>
-                        e.DisplayName?.Equals(displayName, StringComparison.OrdinalIgnoreCase) == true)
-                    : null;
+                    ownEntry ??= !string.IsNullOrEmpty(displayName)
+                        ? App.Leaderboard?.Entries?.FirstOrDefault(e =>
+                            e.DisplayName?.Equals(displayName, StringComparison.OrdinalIgnoreCase) == true)
+                        : null;
 
-                TxtProfileViewerRank.Text = ownEntry?.Rank > 0 ? $"#{ownEntry.Rank}" : "#-";
+                    TxtProfileViewerRank.Text = ownEntry?.Rank > 0 ? $"#{ownEntry.Rank}" : "#-";
+                }
             }
             if (TxtProfileViewerXp != null) TxtProfileViewerXp.Text = FormatNumber(xp);
             if (TxtProfileViewerBubbles != null) TxtProfileViewerBubbles.Text = FormatNumber(progress?.TotalBubblesPopped ?? 0);
@@ -12358,7 +12590,7 @@ namespace ConditioningControlPanel
             {
                 var unlocked = App.Achievements?.GetUnlockedCount() ?? 0;
                 var total = Models.Achievement.All.Values.Count;
-                TxtProfileViewerAchievements.Text = $"{unlocked}/{total}";
+                TxtProfileViewerAchievements.Text = $"{unlocked} / {total}";
             }
 
             // Patreon badge - use settings tier (works for Discord-only login with linked Patreon)
@@ -13127,6 +13359,13 @@ namespace ConditioningControlPanel
             // Don't allow manual start/stop while remote controller is connected
             if (App.RemoteControl?.ControllerConnected == true) return;
 
+            if (_isRunning && App.Lockdown?.IsActive == true)
+            {
+                MessageBox.Show("YOU ARE IN LOCKDOWN MODE.\nYou cannot stop during lockdown!", "LOCKDOWN",
+                    MessageBoxButton.OK, MessageBoxImage.Stop);
+                return;
+            }
+
             if (_isRunning)
             {
                 // Check if a session is running
@@ -13152,8 +13391,8 @@ namespace ConditioningControlPanel
                         "⚠ Stop Session?",
                         $"You're currently in a session:\n" +
                         $"{session?.Icon} {session?.Name}\n\n" +
-                        $"Time elapsed: {elapsed.Minutes:D2}:{elapsed.Seconds:D2}\n" +
-                        $"Time remaining: {remaining.Minutes:D2}:{remaining.Seconds:D2}\n\n" +
+                        $"Time elapsed: {((int)elapsed.TotalMinutes):D2}:{elapsed.Seconds:D2}\n" +
+                        $"Time remaining: {((int)remaining.TotalMinutes):D2}:{remaining.Seconds:D2}\n\n" +
                         $"If you stop now, you will lose ALL {potentialXP} XP.{penaltyText}\n\n" +
                         "Are you sure you want to quit?",
                         "Yes, stop session", "Keep going");
@@ -13941,7 +14180,12 @@ namespace ConditioningControlPanel
             SliderLockCardRepeats.Value = s.LockCardRepeats;
             ChkLockCardStrict.IsChecked = s.LockCardStrict;
             ChkBubbleCountEnabled.IsChecked = s.BubbleCountEnabled;
+            ChkBubbleCountStrict.IsChecked = s.BubbleCountStrictLock;
+            SliderBubbleCountFreq.Value = s.BubbleCountFrequency;
+            TxtBubbleCountFreq.Text = s.BubbleCountFrequency.ToString();
+            CmbBubbleCountDifficulty.SelectedIndex = s.BubbleCountDifficulty;
             ChkBouncingTextEnabled.IsChecked = s.BouncingTextEnabled;
+            ChkBouncingTextAlwaysOnTop.IsChecked = s.BouncingTextAlwaysOnTop;
 
             // Mind Wipe
             ChkMindWipeEnabled.IsChecked = s.MindWipeEnabled;
@@ -15565,9 +15809,13 @@ namespace ConditioningControlPanel
 
                 if (!confirmed)
                 {
-                    _isLoading = true;
+                    // Detach handlers before reverting to avoid re-entrancy
+                    // (_isLoading can be clobbered by other methods during the dialog's message pump)
+                    ChkBubbleCountStrict.Checked -= ChkBubbleCountStrict_Changed;
+                    ChkBubbleCountStrict.Unchecked -= ChkBubbleCountStrict_Changed;
                     ChkBubbleCountStrict.IsChecked = false;
-                    _isLoading = false;
+                    ChkBubbleCountStrict.Checked += ChkBubbleCountStrict_Changed;
+                    ChkBubbleCountStrict.Unchecked += ChkBubbleCountStrict_Changed;
                     return;
                 }
             }
@@ -15639,13 +15887,20 @@ namespace ConditioningControlPanel
         {
             var editor = new TextEditorDialog("Bouncing Text Phrases", App.Settings.Current.BouncingTextPool);
             editor.Owner = this;
-            
+
             if (editor.ShowDialog() == true && editor.ResultData != null)
             {
                 App.Settings.Current.BouncingTextPool = editor.ResultData;
                 App.Logger?.Information("Bouncing text phrases updated: {Count} items", editor.ResultData.Count);
                 App.Settings.Save();
             }
+        }
+
+        private void ChkBouncingTextAlwaysOnTop_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            App.Settings.Current.BouncingTextAlwaysOnTop = ChkBouncingTextAlwaysOnTop.IsChecked ?? false;
+            App.Settings.Save();
         }
 
         #endregion
@@ -16644,32 +16899,33 @@ namespace ConditioningControlPanel
             dialog.ShowDialog();
         }
 
-        private void ChkLockCardStrict_Checked(object sender, RoutedEventArgs e)
+        private void ChkLockCardStrict_Changed(object sender, RoutedEventArgs e)
         {
             if (_isLoading) return;
 
-            // Show warning
-            var confirmed = WarningDialog.ShowDoubleWarning(this,
-                "Strict Lock Card",
-                "• You will NOT be able to escape lock cards with ESC\n" +
-                "• You MUST type the phrase the required number of times\n" +
-                "• This can be very restrictive!");
+            var isEnabled = ChkLockCardStrict.IsChecked ?? false;
 
-            if (!confirmed)
+            // Show warning when enabling strict mode
+            if (isEnabled)
             {
-                ChkLockCardStrict.IsChecked = false;
-            }
-            else
-            {
-                App.Settings.Current.LockCardStrict = true;
-                App.Settings?.Save();
-            }
-        }
+                var confirmed = WarningDialog.ShowDoubleWarning(this,
+                    "Strict Lock Card",
+                    "• You will NOT be able to escape lock cards with ESC\n" +
+                    "• You MUST type the phrase the required number of times\n" +
+                    "• This can be very restrictive!");
 
-        private void ChkLockCardStrict_Unchecked(object sender, RoutedEventArgs e)
-        {
-            if (_isLoading) return;
-            App.Settings.Current.LockCardStrict = false;
+                if (!confirmed)
+                {
+                    ChkLockCardStrict.Checked -= ChkLockCardStrict_Changed;
+                    ChkLockCardStrict.Unchecked -= ChkLockCardStrict_Changed;
+                    ChkLockCardStrict.IsChecked = false;
+                    ChkLockCardStrict.Checked += ChkLockCardStrict_Changed;
+                    ChkLockCardStrict.Unchecked += ChkLockCardStrict_Changed;
+                    return;
+                }
+            }
+
+            App.Settings.Current.LockCardStrict = isEnabled;
             App.Settings?.Save();
         }
 
@@ -16991,17 +17247,15 @@ namespace ConditioningControlPanel
         {
             Dispatcher.Invoke(() =>
             {
-                // Show login prompt
-                var result = MessageBox.Show(
-                    $"{message}\n\nWould you like to log in with Patreon now?",
-                    "Patreon Login Required (Free Account Works!)",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Information);
-
-                if (result == MessageBoxResult.Yes)
+                // Show login prompt — direct to appropriate login method
+                if (App.HasCloudIdentity)
                 {
-                    // Trigger Patreon login
-                    _ = App.Patreon?.StartOAuthFlowAsync();
+                    // User is logged in but token may be expired
+                    MessageBox.Show(message, "Authentication Required", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    MessageBox.Show($"{message}\n\nPlease log in from the Settings tab.", "Login Required", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
             });
         }
@@ -18549,10 +18803,22 @@ namespace ConditioningControlPanel
                 }
                 else
                 {
-                    // External packs open in browser (e.g. MEGA link)
+                    // External packs: fetch URL via authenticated endpoint, then open in browser
                     if (pack.IsExternal)
                     {
-                        Process.Start(new ProcessStartInfo(pack.ExternalUrl!) { UseShellExecute = true });
+                        try
+                        {
+                            var externalUrl = pack.ExternalUrl ?? await App.ContentPacks!.GetExternalPackDownloadUrlAsync(pack.Id);
+                            if (!string.IsNullOrEmpty(externalUrl))
+                            {
+                                Process.Start(new ProcessStartInfo(externalUrl) { UseShellExecute = true });
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            App.Logger?.Error(ex, "Failed to get external pack URL for {PackId}", pack.Id);
+                            MessageBox.Show($"Failed to get download link: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                        }
                         return;
                     }
 
@@ -18914,54 +19180,63 @@ namespace ConditioningControlPanel
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
-        private void ChkStrictLock_Checked(object sender, RoutedEventArgs e)
+        private void ChkStrictLock_Changed(object sender, RoutedEventArgs e)
         {
             if (_isLoading) return;
 
-            // Show double warning
-            var confirmed = WarningDialog.ShowDoubleWarning(this,
-                "Strict Lock",
-                "• You will NOT be able to skip or close videos\n" +
-                "• Videos MUST be watched to completion\n" +
-                "• The only way out is the panic key (if enabled)\n" +
-                "• This can be very intense and restrictive");
+            var isEnabled = ChkStrictLock.IsChecked ?? false;
 
-            if (!confirmed)
+            // Show warning when enabling strict mode
+            if (isEnabled)
             {
-                ChkStrictLock.IsChecked = false;
-            }
-            else
-            {
-                App.Settings.Current.StrictLockEnabled = true;
-                App.Settings?.Save();
-            }
-        }
+                var confirmed = WarningDialog.ShowDoubleWarning(this,
+                    "Strict Lock",
+                    "• You will NOT be able to skip or close videos\n" +
+                    "• Videos MUST be watched to completion\n" +
+                    "• The only way out is the panic key (if enabled)\n" +
+                    "• This can be very intense and restrictive");
 
-        private void ChkStrictLock_Unchecked(object sender, RoutedEventArgs e)
-        {
-            if (_isLoading) return;
-            App.Settings.Current.StrictLockEnabled = false;
+                if (!confirmed)
+                {
+                    ChkStrictLock.Checked -= ChkStrictLock_Changed;
+                    ChkStrictLock.Unchecked -= ChkStrictLock_Changed;
+                    ChkStrictLock.IsChecked = false;
+                    ChkStrictLock.Checked += ChkStrictLock_Changed;
+                    ChkStrictLock.Unchecked += ChkStrictLock_Changed;
+                    return;
+                }
+            }
+
+            App.Settings.Current.StrictLockEnabled = isEnabled;
             App.Settings?.Save();
         }
 
-        private void ChkNoPanic_Checked(object sender, RoutedEventArgs e)
+        private void ChkNoPanic_Changed(object sender, RoutedEventArgs e)
         {
             if (_isLoading) return;
 
-            // Show double warning
-            var confirmed = WarningDialog.ShowDoubleWarning(this,
-                "Disable Panic Key",
-                "• You will have NO emergency escape option\n" +
-                "• The ONLY way to exit will be the Exit button\n" +
-                "• Combined with Strict Lock, this is VERY restrictive\n" +
-                "• Make sure you know what you're doing!");
+            var isNoPanic = ChkNoPanic.IsChecked ?? false;
 
-            if (!confirmed)
+            // Show warning when enabling no-panic mode
+            if (isNoPanic)
             {
-                ChkNoPanic.IsChecked = false;
-            }
-            else
-            {
+                var confirmed = WarningDialog.ShowDoubleWarning(this,
+                    "Disable Panic Key",
+                    "• You will have NO emergency escape option\n" +
+                    "• The ONLY way to exit will be the Exit button\n" +
+                    "• Combined with Strict Lock, this is VERY restrictive\n" +
+                    "• Make sure you know what you're doing!");
+
+                if (!confirmed)
+                {
+                    ChkNoPanic.Checked -= ChkNoPanic_Changed;
+                    ChkNoPanic.Unchecked -= ChkNoPanic_Changed;
+                    ChkNoPanic.IsChecked = false;
+                    ChkNoPanic.Checked += ChkNoPanic_Changed;
+                    ChkNoPanic.Unchecked += ChkNoPanic_Changed;
+                    return;
+                }
+
                 // Stop keyboard hook when panic key is disabled (privacy improvement)
                 // But keep it running if keyword triggers need it
                 if (App.Settings.Current.KeywordTriggersEnabled != true)
@@ -18970,17 +19245,14 @@ namespace ConditioningControlPanel
                 App.Settings?.Save();
                 App.Logger?.Information("Keyboard hook stopped - panic key disabled");
             }
-        }
-
-        private void ChkNoPanic_Unchecked(object sender, RoutedEventArgs e)
-        {
-            if (_isLoading) return;
-
-            // Start keyboard hook when panic key is re-enabled
-            _keyboardHook?.Start();
-            App.Settings.Current.PanicKeyEnabled = true;
-            App.Settings?.Save();
-            App.Logger?.Information("Keyboard hook started - panic key enabled");
+            else
+            {
+                // Start keyboard hook when panic key is re-enabled
+                _keyboardHook?.Start();
+                App.Settings.Current.PanicKeyEnabled = true;
+                App.Settings?.Save();
+                App.Logger?.Information("Keyboard hook started - panic key enabled");
+            }
         }
 
         private void ChkOfflineMode_Changed(object sender, RoutedEventArgs e)

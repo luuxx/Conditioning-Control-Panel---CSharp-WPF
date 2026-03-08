@@ -1738,8 +1738,8 @@
                             </Style>
                         </ComboBox.ItemContainerStyle>
                     </ComboBox>
-                    <Button x:Name="BtnUpdateAvailable" Content="💖 v5.6.8 IS OUT! 💖"
-                            Click="BtnUpdateAvailable_Click" ToolTip="v5.6.8 - Security Transparency Update"
+                    <Button x:Name="BtnUpdateAvailable" Content="💖 v5.6.14 IS OUT! 💖"
+                            Click="BtnUpdateAvailable_Click" ToolTip="v5.6.14 - Quiz Training Update"
                             FontSize="11" FontWeight="Bold" Cursor="Hand">
                         <Button.Style>
                             <Style TargetType="Button">
@@ -2250,7 +2250,7 @@
                                     <TextBlock Style="{StaticResource SettingLabel}" Text="Enable" Margin="6,0,15,0"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" ToolTip="Strict mode: videos cannot be skipped, must watch entirely">
-                                    <CheckBox x:Name="ChkStrictLock" Style="{StaticResource ToggleStyle}" Checked="ChkStrictLock_Checked" Unchecked="ChkStrictLock_Unchecked"/>
+                                    <CheckBox x:Name="ChkStrictLock" Style="{StaticResource ToggleStyle}" Checked="ChkStrictLock_Changed" Unchecked="ChkStrictLock_Changed"/>
                                     <TextBlock Style="{StaticResource SettingLabel}" Text="⚠ Strict" Foreground="#FFB347" Margin="6,0,15,0"/>
                                 </StackPanel>
                                 <Slider Grid.Column="2" x:Name="SliderPerHour" Minimum="1" Maximum="20" Value="2" ValueChanged="SliderPerHour_Changed"
@@ -2454,7 +2454,7 @@
                                 </StackPanel>
                                 <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,3"
                                             ToolTip="⚠ DANGER: Completely disables panic key!&#x0a;You won't be able to emergency stop.&#x0a;Use with extreme caution.">
-                                    <CheckBox x:Name="ChkNoPanic" Style="{StaticResource ToggleStyle}" Checked="ChkNoPanic_Checked" Unchecked="ChkNoPanic_Unchecked"/>
+                                    <CheckBox x:Name="ChkNoPanic" Style="{StaticResource ToggleStyle}" Checked="ChkNoPanic_Changed" Unchecked="ChkNoPanic_Changed"/>
                                     <TextBlock Style="{StaticResource SettingLabel}" Text="⚠ No Panic" Margin="6,0,0,0" Foreground="#FF6B6B"/>
                                 </StackPanel>
 
@@ -3839,7 +3839,7 @@
                                     <TextBlock Style="{StaticResource SettingLabel}" Text="Strict Lock"
                                                ToolTip="Prevent ESC key from closing the lock card"/>
                                     <CheckBox x:Name="ChkLockCardStrict" Style="{StaticResource ToggleStyle}"
-                                              HorizontalAlignment="Right" Checked="ChkLockCardStrict_Checked" Unchecked="ChkLockCardStrict_Unchecked"
+                                              HorizontalAlignment="Right" Checked="ChkLockCardStrict_Changed" Unchecked="ChkLockCardStrict_Changed"
                                               ToolTip="⚠ Cannot escape - must complete typing!"/>
                                 </Grid>
                                 <Grid Margin="0,10,0,0">
@@ -4024,11 +4024,20 @@
                                                HorizontalAlignment="Center" Margin="0,8,0,0"/>
                                     
                                     <!-- Edit Phrases -->
-                                    <Button Content="✏ Edit Phrases" 
-                                            Background="#40FFFFFF" Foreground="White" 
+                                    <Button Content="✏ Edit Phrases"
+                                            Background="#40FFFFFF" Foreground="White"
                                             BorderThickness="0" Padding="10,5" Margin="0,10,0,0"
                                             Cursor="Hand" Click="BtnEditBouncingText_Click"
                                             ToolTip="Customize the bouncing text phrases"/>
+
+                                    <!-- Show Over Videos -->
+                                    <Grid Margin="0,10,0,0">
+                                        <TextBlock Text="Show Over Videos" Style="{StaticResource SettingLabel}"
+                                                   ToolTip="Keep bouncing text visible on top of fullscreen videos"/>
+                                        <CheckBox x:Name="ChkBouncingTextAlwaysOnTop" Style="{StaticResource ToggleStyle}"
+                                                  HorizontalAlignment="Right"
+                                                  Checked="ChkBouncingTextAlwaysOnTop_Changed" Unchecked="ChkBouncingTextAlwaysOnTop_Changed"/>
+                                    </Grid>
                                 </StackPanel>
                             </StackPanel>
                             </Grid>
@@ -4454,7 +4463,7 @@
                             <!-- Season Title Banner -->
                             <Border Background="#1A1A2E" CornerRadius="12" Padding="20,14" Margin="0,0,0,18"
                                     BorderThickness="1" BorderBrush="#3D3D60">
-                                <TextBlock x:Name="TxtSeasonTitle" Text="Fucked-up February"
+                                <TextBlock x:Name="TxtSeasonTitle" Text="Mindless March"
                                            FontSize="28" FontWeight="ExtraBold" FontStyle="Italic"
                                            HorizontalAlignment="Center" TextAlignment="Center">
                                     <TextBlock.Foreground>
@@ -6129,9 +6138,13 @@
                                                 <StackPanel HorizontalAlignment="Center">
                                                     <TextBlock Text="S E S S I O N   C O D E" Foreground="#808080" FontSize="10" FontWeight="Bold"
                                                                HorizontalAlignment="Center" Margin="0,0,0,6"/>
-                                                    <TextBlock x:Name="TxtRemoteCode" Text="- - - - - -" Foreground="#FF69B4"
-                                                               FontSize="32" FontWeight="Bold" FontFamily="Consolas"
+                                                    <TextBlock x:Name="TxtRemoteCode" Text="- - - - - - - -" Foreground="#FF69B4"
+                                                               FontSize="28" FontWeight="Bold" FontFamily="Consolas"
                                                                HorizontalAlignment="Center"/>
+                                                    <TextBlock x:Name="TxtRemotePin" Text="" Foreground="#9B59B6"
+                                                               FontSize="16" FontWeight="Bold" FontFamily="Consolas"
+                                                               HorizontalAlignment="Center" Margin="0,4,0,0"
+                                                               Visibility="Collapsed"/>
                                                 </StackPanel>
                                                 <Button x:Name="BtnCopyRemoteCode" Content="Copy" Background="#353550" Foreground="White"
                                                         FontSize="11" Padding="10,4" BorderThickness="0" Cursor="Hand"
@@ -7430,11 +7443,58 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Placeholder Card 2 -->
-                        <Border Background="#12FFFFFF" CornerRadius="12" Margin="6" BorderBrush="#404060" BorderThickness="1">
-                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <TextBlock Text="🔒" FontSize="32" HorizontalAlignment="Center" Margin="0,0,0,8"/>
-                                <TextBlock Text="Coming Soon" Foreground="#505070" FontSize="14" HorizontalAlignment="Center"/>
+                        <!-- Quiz Training Card -->
+                        <Border CornerRadius="12" Margin="6" Padding="15">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#1A1A32" Offset="0"/>
+                                    <GradientStop Color="#201A38" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <Border.BorderBrush>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#9B59B6" Offset="0"/>
+                                    <GradientStop Color="#FF69B4" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.BorderBrush>
+                            <Border.BorderThickness>
+                                <Thickness>2</Thickness>
+                            </Border.BorderThickness>
+                            <StackPanel>
+                                <Grid Margin="0,0,0,6">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Quiz Training" Foreground="White" FontWeight="Bold" FontSize="16"/>
+                                        <TextBlock Text="[BETA]" Foreground="#9B59B6" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    </StackPanel>
+                                    <Button x:Name="HelpBtnQuiz" Style="{StaticResource HelpButtonStyle}" HorizontalAlignment="Right" Tag="Quiz"/>
+                                </Grid>
+                                <TextBlock Text="AI-generated personality quiz. 10 questions that get spicier based on your answers. Find out who you really are."
+                                           Foreground="#808090" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                                <CheckBox x:Name="ChkQuizFullscreen" Content="Fullscreen" IsChecked="True"
+                                          Foreground="#808090" FontSize="12" Margin="0,0,0,4"/>
+                                <CheckBox x:Name="ChkQuizDrone" Content="Play drone in background" IsChecked="False"
+                                          Foreground="#808090" FontSize="12" Margin="0,0,0,10"/>
+
+                                <Button x:Name="BtnStartQuiz" Content="Start Quiz" Cursor="Hand"
+                                        Background="#9B59B6" Foreground="White" FontWeight="Bold" FontSize="12"
+                                        BorderThickness="0" Padding="12,8" HorizontalAlignment="Left"
+                                        Click="BtnStartQuiz_Click">
+                                    <Button.Resources>
+                                        <Style TargetType="Border">
+                                            <Setter Property="CornerRadius" Value="8"/>
+                                        </Style>
+                                    </Button.Resources>
+                                </Button>
+
+                                <TextBlock Text="Past Quizzes" Foreground="#808090" FontSize="11" Margin="0,10,0,4"
+                                           x:Name="TxtPastQuizzesHeader" Visibility="Collapsed"/>
+                                <Border MaxHeight="130" CornerRadius="6" x:Name="PastQuizzesPanel" Visibility="Collapsed"
+                                        Background="#10FFFFFF" BorderBrush="#20FFFFFF" BorderThickness="1">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel x:Name="PastQuizzesList"/>
+                                    </ScrollViewer>
+                                </Border>
                             </StackPanel>
                         </Border>
 
@@ -7507,15 +7567,50 @@
                                 </Border>
                             </StackPanel>
 
-                            <!-- Big LEADERBOARD title with stroke effect -->
-                            <Grid Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <!-- Shadow/outline layer -->
-                                <TextBlock Text="LEADERBOARD" FontSize="38" FontWeight="ExtraBold" FontFamily="Segoe Print"
-                                           Foreground="#80000000" Margin="2,2,0,0"/>
-                                <!-- Main text -->
-                                <TextBlock Text="LEADERBOARD" FontSize="38" FontWeight="ExtraBold" FontFamily="Segoe Print"
-                                           Foreground="#FF69B4"/>
-                            </Grid>
+                            <!-- Big LEADERBOARD title with stroke effect + mode toggle -->
+                            <StackPanel Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Grid HorizontalAlignment="Center">
+                                    <!-- Shadow/outline layer -->
+                                    <TextBlock Text="LEADERBOARD" FontSize="38" FontWeight="ExtraBold" FontFamily="Segoe Print"
+                                               Foreground="#80000000" Margin="2,2,0,0"/>
+                                    <!-- Main text -->
+                                    <TextBlock Text="LEADERBOARD" FontSize="38" FontWeight="ExtraBold" FontFamily="Segoe Print"
+                                               Foreground="#FF69B4"/>
+                                </Grid>
+                                <!-- Monthly / All-Time toggle buttons -->
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,2,0,0">
+                                    <Button x:Name="BtnLeaderboardMonthly" Content="Monthly" Padding="16,5" FontSize="12" FontWeight="SemiBold"
+                                            Background="#FF69B4" Foreground="White" Cursor="Hand" Click="BtnLeaderboardMode_Click" Tag="monthly">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="MonthlyBorder" Background="{TemplateBinding Background}" CornerRadius="10,0,0,10" Padding="{TemplateBinding Padding}" BorderBrush="#FF69B4" BorderThickness="1">
+                                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter Property="Opacity" Value="0.85"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
+                                    <Button x:Name="BtnLeaderboardAllTime" Content="All-Time" Padding="16,5" FontSize="12" FontWeight="SemiBold"
+                                            Background="#352545" Foreground="#FF69B4" Cursor="Hand" Click="BtnLeaderboardMode_Click" Tag="all-time">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="AllTimeBorder" Background="{TemplateBinding Background}" CornerRadius="0,10,10,0" Padding="{TemplateBinding Padding}" BorderBrush="#FF69B4" BorderThickness="1">
+                                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter Property="Opacity" Value="0.85"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
+                                </StackPanel>
+                            </StackPanel>
 
                             <StackPanel Grid.Column="2" VerticalAlignment="Center">
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
@@ -7523,7 +7618,7 @@
                                         <StackPanel>
                                             <TextBlock x:Name="TxtLeaderboardSeason" Text="season 1 ~ prove your devotion~"
                                                        FontStyle="Italic" FontSize="15" FontWeight="Bold" Foreground="#9988AACC"/>
-                                            <TextBlock Text="resets monthly — your rank is everything~" FontStyle="Italic" FontSize="13" FontWeight="Bold"
+                                            <TextBlock x:Name="TxtLeaderboardSubtitle" Text="resets monthly — your rank is everything~" FontStyle="Italic" FontSize="13" FontWeight="Bold"
                                                        Foreground="#6688AACC" Margin="0,2,0,0"/>
                                         </StackPanel>
                                     </Border>
@@ -7691,6 +7786,8 @@
                                 <GridViewColumn Header="Level" Width="100" DisplayMemberBinding="{Binding Level}"/>
                                 <GridViewColumn Header="XP" Width="100" DisplayMemberBinding="{Binding XpDisplay}"/>
                                 <GridViewColumn Header="Achievements" Width="130" DisplayMemberBinding="{Binding AchievementsDisplay}"/>
+                                <!-- Seasons column (shown only in All-Time mode) -->
+                                <GridViewColumn Header="Seasons" Width="0" DisplayMemberBinding="{Binding SeasonsCompleted}"/>
                                 <!-- Trophy Case Columns (shown only when skill unlocked) -->
                                 <GridViewColumn x:Name="ColLongestSession" Header="Best Session" Width="110">
                                     <GridViewColumn.CellTemplate>

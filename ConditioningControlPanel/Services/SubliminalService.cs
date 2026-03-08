@@ -412,10 +412,16 @@ namespace ConditioningControlPanel.Services
                 _audioFile.Volume = curvedVol;
                 
                 _audioPlayer.Init(_audioFile);
+                // Capture duck generation so stale callbacks after ForceUnduck are ignored
+                var duckGen = App.Audio?.DuckGeneration ?? -1;
                 _audioPlayer.PlaybackStopped += (s, e) =>
                 {
                     // Unduck after playback + small delay
-                    Task.Delay(500).ContinueWith(_ => App.Audio.Unduck());
+                    Task.Delay(500).ContinueWith(_ =>
+                    {
+                        try { App.Audio?.Unduck(duckGen); }
+                        catch (Exception ex) { App.Logger?.Debug("Unduck failed in PlaybackStopped: {Error}", ex.Message); }
+                    });
                 };
                 _audioPlayer.Play();
                 
@@ -464,6 +470,9 @@ namespace ConditioningControlPanel.Services
 
         private void ShowSubliminalVisuals(string text, int? opacity = null)
         {
+            // Prevent memory explosion from too many concurrent subliminal windows
+            if (_activeWindows.Count >= 15) return;
+
             // Increment counter and fire event
             _subliminalCount++;
             SubliminalDisplayed?.Invoke(this, EventArgs.Empty);

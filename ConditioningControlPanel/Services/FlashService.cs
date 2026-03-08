@@ -61,6 +61,13 @@ namespace ConditioningControlPanel.Services
         private string _imagesPath = "";
         private readonly string _soundsPath;
 
+        // Image decode cache: avoids reloading/re-decoding the same images every flash
+        // Key = file path, Value = (data, lastAccess)
+        private readonly Dictionary<string, (LoadedImageData data, DateTime lastAccess)> _imageDecodeCache = new();
+        private const int MAX_IMAGE_CACHE_ENTRIES = 50;
+        private const long MAX_IMAGE_CACHE_BYTES = 200L * 1024 * 1024; // 200 MB cap
+        private long _imageCacheBytes;
+
         #endregion
 
         #region Events
@@ -202,6 +209,7 @@ namespace ConditioningControlPanel.Services
                 CleanupTempPackFiles();
             }
             ClearFileCache();  // Performance: Clear cached file listings to pick up new files
+            lock (_imageDecodeCache) { _imageDecodeCache.Clear(); _imageCacheBytes = 0; }
             App.Logger.Information("Assets reloaded");
         }
 
@@ -338,6 +346,16 @@ namespace ConditioningControlPanel.Services
         {
             try
             {
+                // Check decode cache first (frozen BitmapSources are thread-safe)
+                lock (_imageDecodeCache)
+                {
+                    if (_imageDecodeCache.TryGetValue(path, out var cached))
+                    {
+                        _imageDecodeCache[path] = (cached.data, DateTime.UtcNow);
+                        return CloneImageData(cached.data);
+                    }
+                }
+
                 return await Task.Run(() =>
                 {
                     var extension = Path.GetExtension(path).ToLowerInvariant();
@@ -360,7 +378,44 @@ namespace ConditioningControlPanel.Services
                         data.FrameDelay = TimeSpan.FromMilliseconds(100);
                     }
 
-                    return data.Frames.Count > 0 ? data : null;
+                    if (data.Frames.Count == 0) return null;
+
+                    // Estimate memory: width × height × 4 bytes × frame count
+                    var entryBytes = (long)data.Width * data.Height * 4 * data.Frames.Count;
+
+                    lock (_imageDecodeCache)
+                    {
+                        // Evict if over limits
+                        while (_imageDecodeCache.Count >= MAX_IMAGE_CACHE_ENTRIES ||
+                               _imageCacheBytes + entryBytes > MAX_IMAGE_CACHE_BYTES)
+                        {
+                            if (_imageDecodeCache.Count == 0) break;
+                            // Evict least recently accessed
+                            string? oldest = null;
+                            var oldestTime = DateTime.MaxValue;
+                            long oldestBytes = 0;
+                            foreach (var kvp in _imageDecodeCache)
+                            {
+                                if (kvp.Value.lastAccess < oldestTime)
+                                {
+                                    oldestTime = kvp.Value.lastAccess;
+                                    oldest = kvp.Key;
+                                    oldestBytes = (long)kvp.Value.data.Width * kvp.Value.data.Height * 4 * kvp.Value.data.Frames.Count;
+                                }
+                            }
+                            if (oldest != null)
+                            {
+                                _imageDecodeCache.Remove(oldest);
+                                _imageCacheBytes -= oldestBytes;
+                            }
+                            else break;
+                        }
+
+                        _imageDecodeCache[path] = (data, DateTime.UtcNow);
+                        _imageCacheBytes += entryBytes;
+                    }
+
+                    return CloneImageData(data);
                 });
             }
             catch (Exception ex)
@@ -368,6 +423,24 @@ namespace ConditioningControlPanel.Services
                 App.Logger.Debug("Could not load image {Path}: {Error}", path, ex.Message);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Creates a shallow clone of LoadedImageData with its own Frames list.
+        /// BitmapSource references are shared (they're frozen/immutable), but the list
+        /// is independent so SafeCloseFlashWindow can clear it without affecting the cache.
+        /// </summary>
+        private static LoadedImageData CloneImageData(LoadedImageData source)
+        {
+            var clone = new LoadedImageData
+            {
+                FilePath = source.FilePath,
+                Width = source.Width,
+                Height = source.Height,
+                FrameDelay = source.FrameDelay,
+            };
+            clone.Frames.AddRange(source.Frames);
+            return clone;
         }
 
         private void LoadGifFrames(string path, LoadedImageData data)
@@ -526,19 +599,14 @@ namespace ConditioningControlPanel.Services
                     if (settings.AudioDuckingEnabled)
                     {
                         App.Audio.Duck(settings.DuckingLevel);
-                        
+                        var duckGen = App.Audio?.DuckGeneration ?? -1;
+
                         // Schedule unduck
                         var unduckDelay = (int)(duration * 1000) + 1500;
                         Task.Delay(unduckDelay).ContinueWith(_ =>
                         {
-                            try
-                            {
-                                System.Windows.Application.Current?.Dispatcher?.BeginInvoke(() =>
-                                {
-                                    App.Audio.Unduck();
-                                });
-                            }
-                            catch { }
+                            try { App.Audio?.Unduck(duckGen); }
+                            catch (Exception ex) { App.Logger?.Debug("FlashService unduck failed: {Error}", ex.Message); }
                         });
                     }
                 }
@@ -607,6 +675,12 @@ namespace ConditioningControlPanel.Services
         private void SpawnFlashWindow(LoadedImageData imageData, AppSettings settings, int? opacity = null)
         {
             if (!_isRunning && !_oneShotActive) return;
+
+            // Prevent memory explosion from too many concurrent flash windows
+            lock (_lockObj)
+            {
+                if (_activeWindows.Count >= 30) return;
+            }
 
             var geom = imageData.Geometry;
             
@@ -681,7 +755,7 @@ namespace ConditioningControlPanel.Services
             }
             
             // Award XP for viewing
-            var xpAmount = _soundPlayingForCurrentFlash ? 5 : 2;
+            var xpAmount = _soundPlayingForCurrentFlash ? 8 : 4;
 
             // Roll for lucky flash (5% chance for 5x XP if skill unlocked)
             var multiplier = App.SkillTree?.RollLuckyFlash() ?? 1;
@@ -1203,7 +1277,7 @@ namespace ConditioningControlPanel.Services
                             using var outputDevice = new WaveOutEvent();
 
                             var masterVolume = App.Settings.Current.MasterVolume / 100f;
-                            var volume = (float)Math.Pow(masterVolume, 1.5);
+                            var volume = (float)Math.Pow(masterVolume, 1.5) * 0.5f;
                             audioFile.Volume = volume;
 
                             outputDevice.Init(audioFile);
@@ -1214,7 +1288,7 @@ namespace ConditioningControlPanel.Services
                                 Thread.Sleep(50);
                             }
 
-                            App.Logger?.Information("🎉 Lucky Flash! 5x XP!");
+                            App.Logger?.Information("🎉 Lucky Flash! 10x XP!");
                         }
                         catch (Exception ex)
                         {
@@ -1379,6 +1453,16 @@ namespace ConditioningControlPanel.Services
         {
             try
             {
+                // Release bitmap references before closing to prevent memory accumulation
+                // Without this, closed windows hold BitmapSource frames until GC collects them,
+                // causing multi-GB memory growth over long sessions
+                if (window.ImageControl != null)
+                {
+                    window.ImageControl.Source = null;
+                    window.ImageControl = null;
+                }
+                window.Frames.Clear();
+
                 window.Close();
             }
             catch (Exception ex)
@@ -1471,6 +1555,7 @@ namespace ConditioningControlPanel.Services
             _cancellationSource?.Dispose();
             StopCurrentSound();
             CleanupTempPackFiles();
+            lock (_imageDecodeCache) { _imageDecodeCache.Clear(); _imageCacheBytes = 0; }
         }
 
         #endregion

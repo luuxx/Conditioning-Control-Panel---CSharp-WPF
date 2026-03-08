@@ -86,6 +86,8 @@ namespace ConditioningControlPanel.Services
         {
             _httpClient = new HttpClient();
             _httpClient.Timeout = TimeSpan.FromMinutes(30); // Allow long downloads for large packs
+            _httpClient.DefaultRequestHeaders.Add("X-Client-Version", UpdateService.AppVersion);
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"ConditioningControlPanel/{UpdateService.AppVersion}");
 
             // Use hidden folder in user's chosen assets folder (where they want heavy files)
             _packsFolder = Path.Combine(App.EffectiveAssetsPath, ".packs");
@@ -633,6 +635,69 @@ namespace ConditioningControlPanel.Services
                 packId, successResponse.RateLimit?.Remaining ?? -1);
 
             return successResponse.DownloadUrl;
+        }
+
+        /// <summary>
+        /// Gets the authenticated download URL for an external pack (e.g. Mega.nz).
+        /// Any authenticated user can download external packs (V2 auth).
+        /// Returns null if not authenticated.
+        /// </summary>
+        public async Task<string?> GetExternalPackDownloadUrlAsync(string packId)
+        {
+            // External packs use V2 auth — any authenticated user (invite code, Discord, Patreon)
+            var unifiedId = App.UnifiedUserId;
+            var authToken = App.Settings?.Current?.AuthToken;
+
+            if (string.IsNullOrEmpty(unifiedId) || string.IsNullOrEmpty(authToken))
+            {
+                AuthenticationRequired?.Invoke(this, "Please log in to download content packs.");
+                return null;
+            }
+
+            try
+            {
+                var requestUrl = $"{ProxyBaseUrl}/pack/download-url";
+                var requestBody = new { packId, unified_id = unifiedId };
+                var jsonContent = new StringContent(
+                    JsonConvert.SerializeObject(requestBody),
+                    Encoding.UTF8,
+                    "application/json");
+
+                using var request = new HttpRequestMessage(HttpMethod.Post, requestUrl);
+                request.Headers.Add("X-Auth-Token", authToken);
+                request.Content = jsonContent;
+
+                using var response = await _httpClient.SendAsync(request);
+                var responseJson = await response.Content.ReadAsStringAsync();
+
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                {
+                    App.Logger?.Warning("External pack download auth failed for pack {PackId}", packId);
+                    AuthenticationRequired?.Invoke(this, "Your session has expired. Please log in again.");
+                    return null;
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorResponse = JsonConvert.DeserializeObject<PackDownloadErrorResponse>(responseJson);
+                    App.Logger?.Warning("External pack download failed: {Status} - {Message}", response.StatusCode, errorResponse?.Message);
+                    throw new Exception(errorResponse?.Message ?? $"Failed to get download URL: {response.StatusCode}");
+                }
+
+                var successResponse = JsonConvert.DeserializeObject<PackDownloadUrlResponse>(responseJson);
+                if (string.IsNullOrEmpty(successResponse?.DownloadUrl))
+                {
+                    throw new Exception("Server returned empty download URL");
+                }
+
+                App.Logger?.Information("Got external download URL for pack: {PackId}", packId);
+                return successResponse.DownloadUrl;
+            }
+            catch (Exception ex) when (ex is not UnauthorizedAccessException)
+            {
+                App.Logger?.Error(ex, "Failed to get external pack download URL for {PackId}", packId);
+                throw;
+            }
         }
 
         /// <summary>

@@ -13,7 +13,7 @@
 ; - Store install path in registry for Velopack updates
 
 #define MyAppName "Conditioning Control Panel"
-#define MyAppVersion "5.6.8"
+#define MyAppVersion "5.6.14"
 #define MyAppPublisher "CodeBambi"
 #define MyAppURL "https://github.com/CodeBambi/Conditioning-Control-Panel---CSharp-WPF"
 #define MyAppExeName "ConditioningControlPanel.exe"
@@ -86,7 +86,7 @@ Name: "startmenuicon"; Description: "Create a Start Menu shortcut"; GroupDescrip
 Source: "{#PublishDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 ; All other files from publish directory
-Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pdb"
+Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pdb,cs\*,de\*,es\*,fr\*,it\*,ja\*,ko\*,pl\*,pt-BR\*,ru\*,tr\*,zh-Hans\*,zh-Hant\*"
 
 ; NOTE: Don't include user data files - those go to %APPDATA%
 

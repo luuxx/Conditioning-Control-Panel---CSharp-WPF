@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 using ConditioningControlPanel.Models;
@@ -71,6 +72,8 @@ namespace ConditioningControlPanel.Services
             {
                 Timeout = TimeSpan.FromSeconds(30)
             };
+            _httpClient.DefaultRequestHeaders.Add("X-Client-Version", UpdateService.AppVersion);
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"ConditioningControlPanel/{UpdateService.AppVersion}");
         }
 
         #region Heartbeat
@@ -196,6 +199,13 @@ namespace ConditioningControlPanel.Services
                 var accessToken = GetAccessToken();
                 if (string.IsNullOrEmpty(accessToken))
                 {
+                    // For V2 invite-code users: no OAuth token, but we can load via V2 sync
+                    var unifiedId = App.Settings?.Current?.UnifiedId;
+                    if (!string.IsNullOrEmpty(unifiedId))
+                    {
+                        App.Logger?.Information("No OAuth token — loading profile via V2 sync for invite-code user");
+                        return await SyncProfileAsync();
+                    }
                     App.Logger?.Warning("No access token available for profile sync");
                     return false;
                 }
@@ -447,10 +457,10 @@ namespace ConditioningControlPanel.Services
                             settings.PendingSkillsResetAck = false;
                             App.Settings?.Save();
                         }
-                        else if (v2Result?.SkillPoints.HasValue == true && v2Result.SkillPoints.Value != settings.SkillPoints)
+                        else if (v2Result?.SkillPoints.HasValue == true && v2Result.SkillPoints.Value > settings.SkillPoints)
                         {
-                            // Server is source of truth for skill points
-                            App.Logger?.Information("V2 Sync: Skill points server={Server} local={Local} — using server value",
+                            // Take higher value to prevent progress loss
+                            App.Logger?.Information("V2 Sync: Skill points server={Server} > local={Local} — syncing DOWN",
                                 v2Result.SkillPoints.Value, settings.SkillPoints);
                             settings.SkillPoints = v2Result.SkillPoints.Value;
                             App.Settings?.Save();
@@ -539,6 +549,29 @@ namespace ConditioningControlPanel.Services
                                     serverHighest, settings.HighestLevelEver);
                                 settings.HighestLevelEver = serverHighest;
                                 App.Settings?.Save();
+                            }
+                        }
+
+                        // Merge achievements from server (union — never lose achievements)
+                        if (v2Result?.User?.Achievements != null && v2Result.User.Achievements.Count > 0)
+                        {
+                            var achievementSvc = App.Achievements;
+                            if (achievementSvc?.Progress != null)
+                            {
+                                var restoredCount = 0;
+                                foreach (var achievementId in v2Result.User.Achievements)
+                                {
+                                    if (!achievementSvc.Progress.IsUnlocked(achievementId))
+                                    {
+                                        achievementSvc.Progress.Unlock(achievementId);
+                                        restoredCount++;
+                                    }
+                                }
+                                if (restoredCount > 0)
+                                {
+                                    App.Logger?.Information("V2 Sync: Restored {Count} achievements from server", restoredCount);
+                                    achievementSvc.Save();
+                                }
                             }
                         }
 
@@ -834,6 +867,160 @@ namespace ConditioningControlPanel.Services
                         needsSave = true;
                     }
                 }
+                if (cloudProfile.Stats.TryGetValue("total_video_minutes", out var videoMin))
+                {
+                    var v = Convert.ToDouble(videoMin);
+                    if (v > progress.TotalVideoMinutes)
+                    {
+                        progress.TotalVideoMinutes = v;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_lock_cards_completed", out var lockCards))
+                {
+                    var lc = Convert.ToInt32(lockCards);
+                    if (lc > progress.TotalLockCardsCompleted)
+                    {
+                        progress.TotalLockCardsCompleted = lc;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("highest_streak", out var hStreak))
+                {
+                    var hs = Convert.ToInt32(hStreak);
+                    var settings2 = App.Settings?.Current;
+                    if (settings2 != null && hs > settings2.HighestStreak)
+                    {
+                        settings2.HighestStreak = hs;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_attention_checks_passed", out var attPassed))
+                {
+                    var ap = Convert.ToInt32(attPassed);
+                    if (ap > progress.TotalAttentionChecksPassed)
+                    {
+                        progress.TotalAttentionChecksPassed = ap;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("video_attention_checks_passed", out var vidAttPassed))
+                {
+                    var vap = Convert.ToInt32(vidAttPassed);
+                    if (vap > progress.VideoAttentionChecksPassed)
+                    {
+                        progress.VideoAttentionChecksPassed = vap;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("video_attention_checks_failed", out var vidAttFailed))
+                {
+                    var vaf = Convert.ToInt32(vidAttFailed);
+                    if (vaf > progress.VideoAttentionChecksFailed)
+                    {
+                        progress.VideoAttentionChecksFailed = vaf;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_attention_check_failures", out var attFail))
+                {
+                    var af = Convert.ToInt32(attFail);
+                    if (af > progress.AttentionCheckFailures)
+                    {
+                        progress.AttentionCheckFailures = af;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_bubble_count_games", out var bcGames))
+                {
+                    var bg = Convert.ToInt32(bcGames);
+                    if (bg > progress.TotalBubbleCountGames)
+                    {
+                        progress.TotalBubbleCountGames = bg;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_bubble_count_correct", out var bcCorrect))
+                {
+                    var bc = Convert.ToInt32(bcCorrect);
+                    if (bc > progress.TotalBubbleCountCorrect)
+                    {
+                        progress.TotalBubbleCountCorrect = bc;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_bubble_count_failed", out var bcFailed))
+                {
+                    var bf = Convert.ToInt32(bcFailed);
+                    if (bf > progress.TotalBubbleCountFailed)
+                    {
+                        progress.TotalBubbleCountFailed = bf;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("bubble_count_best_streak", out var bcStreak))
+                {
+                    var bs = Convert.ToInt32(bcStreak);
+                    if (bs > progress.BubbleCountBestStreak)
+                    {
+                        progress.BubbleCountBestStreak = bs;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_sessions_started", out var sessStarted))
+                {
+                    var ss = Convert.ToInt32(sessStarted);
+                    if (ss > progress.TotalSessionsStarted)
+                    {
+                        progress.TotalSessionsStarted = ss;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_sessions_abandoned", out var sessAbandoned))
+                {
+                    var sa = Convert.ToInt32(sessAbandoned);
+                    if (sa > progress.TotalSessionsAbandoned)
+                    {
+                        progress.TotalSessionsAbandoned = sa;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_xp_earned", out var xpEarned))
+                {
+                    var xe = Convert.ToDouble(xpEarned);
+                    if (xe > progress.TotalXPEarned)
+                    {
+                        progress.TotalXPEarned = xe;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_skill_points_earned", out var spEarned))
+                {
+                    var sp = Convert.ToInt32(spEarned);
+                    if (sp > progress.TotalSkillPointsEarned)
+                    {
+                        progress.TotalSkillPointsEarned = sp;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_pink_filter_minutes", out var pinkMin))
+                {
+                    var pm = Convert.ToDouble(pinkMin);
+                    if (pm > progress.TotalPinkFilterMinutes)
+                    {
+                        progress.TotalPinkFilterMinutes = pm;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_spiral_minutes", out var spiralMin))
+                {
+                    var sm = Convert.ToDouble(spiralMin);
+                    if (sm > progress.TotalSpiralMinutes)
+                    {
+                        progress.TotalSpiralMinutes = sm;
+                        needsSave = true;
+                    }
+                }
             }
 
             // Merge quest streak data (skip if force_streak_override is active - handled separately)
@@ -934,15 +1121,20 @@ namespace ConditioningControlPanel.Services
                 }
             }
 
-            // Merge skill tree data - server is source of truth for skill points
+            // Merge skill tree data - take HIGHER value to prevent progress loss
             if (cloudProfile.SkillPoints.HasValue)
             {
-                if (cloudProfile.SkillPoints.Value != settings.SkillPoints)
+                if (cloudProfile.SkillPoints.Value > settings.SkillPoints)
                 {
-                    App.Logger?.Information("Skill tree sync: Server has {Cloud} skill points, local has {Local} — using server value",
+                    App.Logger?.Information("Skill tree sync: Cloud has more skill points ({Cloud}) > local ({Local}), syncing DOWN",
                         cloudProfile.SkillPoints.Value, settings.SkillPoints);
                     settings.SkillPoints = cloudProfile.SkillPoints.Value;
                     needsSave = true;
+                }
+                else if (settings.SkillPoints > cloudProfile.SkillPoints.Value)
+                {
+                    App.Logger?.Information("Skill tree sync: Local has more skill points ({Local}) > cloud ({Cloud}), will sync UP",
+                        settings.SkillPoints, cloudProfile.SkillPoints.Value);
                 }
             }
 
@@ -1349,7 +1541,10 @@ namespace ConditioningControlPanel.Services
                 if (App.Settings?.Current != null)
                 {
                     App.Settings.Current.AuthToken = null;
-                    App.Settings.Save();
+                    // Save to disk but suppress the cloud backup that Save() normally triggers —
+                    // we just cleared the auth token, so any backup attempt would 401 again,
+                    // creating a 401 → Save() → backup → 401 storm loop.
+                    App.Settings.Save(suppressCloudBackup: true);
                 }
                 return true;
             }
@@ -1383,8 +1578,8 @@ namespace ConditioningControlPanel.Services
 
         #region Settings Backup/Restore
 
-        private DateTime _lastSettingsBackupTime = DateTime.MinValue;
-        private static readonly TimeSpan SettingsBackupDebounce = TimeSpan.FromMinutes(5);
+        private long _lastSettingsBackupTicks = 0;
+        private static readonly long SettingsBackupDebounceTicks = TimeSpan.FromMinutes(5).Ticks;
 
         /// <summary>
         /// Properties to exclude from settings backup (server-authoritative or identity fields).
@@ -1421,17 +1616,44 @@ namespace ConditioningControlPanel.Services
             if (string.IsNullOrEmpty(unifiedId)) return false;
 
             // Debounce: skip if backed up recently (unless forced)
-            if (!force && (DateTime.Now - _lastSettingsBackupTime) < SettingsBackupDebounce)
+            // Uses Interlocked for thread safety — multiple async paths can call this concurrently
+            var nowTicks = DateTime.UtcNow.Ticks;
+            if (force)
             {
-                App.Logger?.Debug("Settings backup skipped (debounce, last backup {Ago}s ago)",
-                    (int)(DateTime.Now - _lastSettingsBackupTime).TotalSeconds);
-                return false;
+                // Forced backup (user-initiated): skip debounce, just stamp the time
+                Interlocked.Exchange(ref _lastSettingsBackupTicks, nowTicks);
+            }
+            else
+            {
+                var lastTicks = Interlocked.Read(ref _lastSettingsBackupTicks);
+                if ((nowTicks - lastTicks) < SettingsBackupDebounceTicks)
+                {
+                    App.Logger?.Debug("Settings backup skipped (debounce, last backup {Ago}s ago)",
+                        (nowTicks - lastTicks) / TimeSpan.TicksPerSecond);
+                    return false;
+                }
+
+                // Atomically claim this backup slot — if another thread won the race, bail out.
+                // Set timestamp BEFORE the HTTP call to prevent concurrent/retry storms.
+                if (Interlocked.CompareExchange(ref _lastSettingsBackupTicks, nowTicks, lastTicks) != lastTicks)
+                {
+                    App.Logger?.Debug("Settings backup skipped (another thread claimed the slot)");
+                    return false;
+                }
             }
 
             try
             {
                 var settings = App.Settings?.Current;
                 if (settings == null) return false;
+
+                // Bail early if no auth token — request would just 401
+                var authToken = settings.AuthToken;
+                if (string.IsNullOrEmpty(authToken))
+                {
+                    App.Logger?.Debug("Settings backup skipped (no auth token)");
+                    return false;
+                }
 
                 // Serialize settings, then strip excluded properties
                 var fullJson = JsonConvert.SerializeObject(settings, Formatting.None);
@@ -1487,7 +1709,6 @@ namespace ConditioningControlPanel.Services
                     return false;
                 }
 
-                _lastSettingsBackupTime = DateTime.Now;
                 App.Logger?.Information("Settings backed up to cloud ({Size} bytes compressed)", compressedBytes.Length);
                 return true;
             }
@@ -1802,6 +2023,9 @@ namespace ConditioningControlPanel.Services
 
             [JsonProperty("highest_level_ever")]
             public int? HighestLevelEver { get; set; }
+
+            [JsonProperty("achievements")]
+            public List<string>? Achievements { get; set; }
         }
 
         private class OopsieSuccessResponse

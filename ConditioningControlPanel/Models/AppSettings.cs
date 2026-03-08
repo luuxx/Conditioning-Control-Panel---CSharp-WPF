@@ -1509,6 +1509,13 @@ namespace ConditioningControlPanel.Models
             set { _bouncingTextPool = value ?? new(); OnPropertyChanged(); }
         }
 
+        private bool _bouncingTextAlwaysOnTop = false;
+        public bool BouncingTextAlwaysOnTop
+        {
+            get => _bouncingTextAlwaysOnTop;
+            set { _bouncingTextAlwaysOnTop = value; OnPropertyChanged(); }
+        }
+
         #endregion
 
         #region Pink Filter (Unlocks Lv.10)
@@ -1805,14 +1812,33 @@ namespace ConditioningControlPanel.Models
 
         #region AI Configuration
 
-        private string _openRouterApiKey = "";
         /// <summary>
-        /// OpenRouter API key for AI chat features
+        /// OpenRouter API key for AI chat features.
+        /// Stored in DPAPI-encrypted file, NOT in settings.json.
         /// </summary>
+        [JsonIgnore]
         public string OpenRouterApiKey
         {
-            get => _openRouterApiKey;
-            set { _openRouterApiKey = value ?? ""; OnPropertyChanged(); }
+            get => Services.SecureApiKeyStore.Retrieve() ?? "";
+            set { Services.SecureApiKeyStore.Store(string.IsNullOrEmpty(value) ? null : value); OnPropertyChanged(); }
+        }
+
+        /// <summary>
+        /// Legacy plaintext key — only used for one-time migration to DPAPI.
+        /// After migration this will be null in settings.json.
+        /// </summary>
+        [JsonProperty("OpenRouterApiKey")]
+        public string? OpenRouterApiKeyLegacy
+        {
+            get => null; // Never write back to JSON
+            set
+            {
+                // Migrate: if there's a plaintext key in settings.json, move it to DPAPI
+                if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(Services.SecureApiKeyStore.Retrieve()))
+                {
+                    Services.SecureApiKeyStore.Store(value);
+                }
+            }
         }
 
         private bool _slutModeEnabled = false;
@@ -2419,6 +2445,16 @@ namespace ConditioningControlPanel.Models
             set { _highestLevelEver = Math.Max(0, value); OnPropertyChanged(); }
         }
 
+        private bool _hasAcceptedAgeVerification = false;
+        /// <summary>
+        /// Whether the user has accepted the 18+ age verification prompt.
+        /// </summary>
+        public bool HasAcceptedAgeVerification
+        {
+            get => _hasAcceptedAgeVerification;
+            set { _hasAcceptedAgeVerification = value; OnPropertyChanged(); }
+        }
+
         private bool _hasShownOgWelcome = false;
         /// <summary>
         /// Whether the OG welcome popup has been shown to this user.
@@ -2587,6 +2623,39 @@ namespace ConditioningControlPanel.Models
 
         [JsonProperty]
         public string? CurrentPhrasePresetId { get; set; }
+
+        #endregion
+
+        #region Mantra Lab
+
+        private List<string> _mantraPool = new()
+        {
+            "I am deeply relaxed",
+            "My mind is open and receptive",
+            "I feel calm and peaceful",
+            "I surrender to the process",
+            "Every breath takes me deeper"
+        };
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public List<string> MantraPool
+        {
+            get => _mantraPool;
+            set { _mantraPool = value ?? new(); OnPropertyChanged(); }
+        }
+
+        private int _mantraDefaultCount = 10;
+        public int MantraDefaultCount
+        {
+            get => _mantraDefaultCount;
+            set { _mantraDefaultCount = Math.Clamp(value, 1, 100); OnPropertyChanged(); }
+        }
+
+        private double _mantraDroneVolume = 30;
+        public double MantraDroneVolume
+        {
+            get => _mantraDroneVolume;
+            set { _mantraDroneVolume = Math.Clamp(value, 0, 100); OnPropertyChanged(); }
+        }
 
         #endregion
 

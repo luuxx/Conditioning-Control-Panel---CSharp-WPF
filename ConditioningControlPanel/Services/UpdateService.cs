@@ -22,43 +22,40 @@ namespace ConditioningControlPanel.Services
         /// <summary>
         /// Current application version - UPDATE THIS WHEN BUMPING VERSION
         /// </summary>
-        public const string AppVersion = "5.6.8";
+        public const string AppVersion = "5.6.14";
 
         /// <summary>
         /// Patch notes for the current version - UPDATE THIS WHEN BUMPING VERSION
         /// These are shown in the update dialog and can be used when GitHub release notes are unavailable.
         /// </summary>
-        public const string CurrentPatchNotes = @"v5.6.8 - Security Transparency Update
+        public const string CurrentPatchNotes = @"v5.6.14 - Quiz Training Update
 
-🛡️ SECURITY FIXES
-• All server endpoints now require authenticated sessions
-• Remote session endpoints secured with full auth validation
-• Admin endpoints hardened with timing-safe token verification
-• Rate limiting and request monitoring on all routes
-• CORS restricted to known origins
-• Request body size limits enforced
+🧠 QUIZ TRAINING [BETA]
+• New AI-powered personality quiz — 10 questions that adapt to your answers in real time
+• Each quiz is unique: the AI reads your responses and tailors follow-up questions to dig deeper
+• Fullscreen mode with ambient drone audio option for deeper immersion
+• Personality breakdown with category scores, personality type, and written summary
+• Past quiz results saved and viewable from the main UI
+• Detailed report window with per-question score breakdowns
+• Added (?) help tooltip explaining how the quiz works
 
-🔒 DATA PRIVACY
-• All stored email addresses replaced with secure hashes
-• Whitelist migrated from source code to encrypted database
-• Git history scrubbed of any accidentally committed data
-• All server credentials rotated
-• Added Terms of Service page
+🏆 ALL-TIME LEADERBOARD
+• New monthly/all-time toggle on the leaderboard — both in-app and on the web page
+• All-time leaderboard tracks your total XP earned across every season
+• Your lifetime dedication is now permanently recorded — seasonal resets no longer erase history
+• Hall of Fame view on the GitHub Pages leaderboard
 
-🛠️ FIXES & IMPROVEMENTS
-• Bubble pop volume slider added
-• Session subliminal phrases now respect content mode
-• Flash/video windows no longer steal focus
-• Fixed Knowledge Link dialog buttons being cut off
-• Fixed progress reset on login (cloud profile now loads before syncing)
-• Fixed remote control sessions failing (missing auth token after security hardening)
-• Restored server.js after git history cleanup
+🛠️ BUG FIXES
+• Fixed audio ducking getting permanently stuck at 0% for other programs after repeated duck/unduck cycles
+• Fixed XP exploit via custom session editor — duplicate feature counting and unbounded multipliers
+• Fixed memory leak from unbounded flash and subliminal windows accumulating over long sessions
 
-📝 A security researcher publicly disclosed several vulnerabilities
-in CCP. The concerns were valid — endpoints lacked proper auth,
-some data was committed to git history, and admin access wasn't
-properly secured. Everything was patched within 24 hours. Full
-details in the Discord announcement and on our website.";
+🔒 SECURITY
+• Validated Discord webhook achievement names against server-side allowlist
+• Validated level-up webhook requests against actual stored user level
+• Capped session XP multiplier at 5.0x and bonus XP at 2500 before multiplier
+• Capped concurrent flash windows at 30 and subliminal windows at 15
+• Installer now excludes unnecessary locale folders — smaller, cleaner install";
 
         private const string GitHubOwner = "CodeBambi";
         private const string GitHubRepo = "Conditioning-Control-Panel---CSharp-WPF";

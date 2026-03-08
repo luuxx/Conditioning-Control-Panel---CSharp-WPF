@@ -47,6 +47,7 @@ namespace ConditioningControlPanel
         private const string MutexName = "ConditioningControlPanel_SingleInstance_Mutex";
         private const string ShowSignalName = "ConditioningControlPanel_ShowWindow_Signal";
         private static EventWaitHandle? _showSignal;
+        private SplashScreen? _splash;
         private static Thread? _showSignalThread;
 
         /// <summary>
@@ -211,11 +212,13 @@ namespace ConditioningControlPanel
         public static RemoteControlService RemoteControl { get; private set; } = null!;
         public static CompanionPhraseService CompanionPhrases { get; private set; } = null!;
         public static LockdownService Lockdown { get; private set; } = null!;
+        public static MantraService Mantra { get; private set; } = null!;
 
         /// <summary>
-        /// Whether user is logged in with either Patreon or Discord (required for progression tracking)
+        /// Whether user is logged in with Patreon, Discord, or email (required for progression tracking).
+        /// HasCloudIdentity covers email login (has UnifiedId) and restored sessions.
         /// </summary>
-        public static bool IsLoggedIn => (Patreon?.IsAuthenticated == true) || (Discord?.IsAuthenticated == true);
+        public static bool IsLoggedIn => (Patreon?.IsAuthenticated == true) || (Discord?.IsAuthenticated == true) || HasCloudIdentity;
 
         /// <summary>
         /// Whether a conditioning session is currently running. Set by MainWindow.
@@ -365,6 +368,9 @@ namespace ConditioningControlPanel
                 // Stop lock card if active
                 LockCard?.Stop();
 
+                // Stop mantra lab audio
+                Mantra?.Dispose();
+
                 // Stop autonomy mode
                 Autonomy?.Stop();
 
@@ -386,7 +392,8 @@ namespace ConditioningControlPanel
         {
             // Show splash screen IMMEDIATELY - before anything else
             // This ensures users see feedback right away after update/launch
-            var splash = new SplashScreen();
+            _splash = new SplashScreen();
+            var splash = _splash;
             splash.Show();
             splash.SetProgress(0.0, "Starting...");
 
@@ -488,6 +495,11 @@ namespace ConditioningControlPanel
                 if (!errorDialogShown)
                 {
                     errorDialogShown = true;
+
+                    // Close splash screen if still open so error dialog is visible
+                    try { _splash?.Close(); } catch { }
+                    _splash = null;
+
                     try
                     {
                         MessageBox.Show($"An error occurred:\n\n{args.Exception.Message}\n\nDetails logged to crash log.",
@@ -634,9 +646,10 @@ namespace ConditioningControlPanel
                 _ = AutoConnectHapticsAsync();
             }
 
-            // Initialize Discord Rich Presence
+            // Initialize Discord Rich Presence (only if Discord is linked — prevents
+            // accidental exposure for users who chose anonymous invite-code accounts)
             DiscordRpc = new DiscordRichPresenceService();
-            if (Settings.Current.DiscordRichPresenceEnabled)
+            if (Settings.Current.DiscordRichPresenceEnabled && Settings.Current.HasLinkedDiscord)
             {
                 DiscordRpc.IsEnabled = true;
             }
@@ -656,6 +669,9 @@ namespace ConditioningControlPanel
 
             // Initialize lockdown service (ephemeral — not persisted)
             Lockdown = new LockdownService();
+
+            // Initialize mantra lab service
+            Mantra = new MantraService();
 
             // Initialize Patreon (validate subscription in background)
             // Then load cloud profile if authenticated
@@ -692,16 +708,55 @@ namespace ConditioningControlPanel
 
             splash.SetProgress(0.95, "Opening main window...");
 
-            // Show main window
-            var mainWindow = new MainWindow();
-            mainWindow.Show();
+            // Show main window — wrapped in try-catch to ensure splash closes on failure
+            MainWindow mainWindow;
+            try
+            {
+                mainWindow = new MainWindow();
+                mainWindow.Show();
+            }
+            catch (Exception ex)
+            {
+                Logger?.Error(ex, "Failed to create main window");
+                try { splash.Close(); } catch { }
+                _splash = null;
+                throw; // Re-throw to let DispatcherUnhandledException show the error
+            }
 
             // Give RemoteControlService a direct reference (Application.Current.MainWindow is null when hidden to tray)
             if (RemoteControl != null) RemoteControl.MainWindowRef = mainWindow;
 
             // Close splash screen with fade animation
+            // Drop Topmost FIRST so deferred dialogs (What's New, Age Verification) aren't hidden behind it
+            splash.Topmost = false;
             splash.SetProgress(1.0, "Ready!");
             splash.FadeOutAndClose();
+            _splash = null;
+
+            // Age verification gate (first launch only, deferred to ensure splash is fully closed)
+            if (Settings?.Current?.HasAcceptedAgeVerification != true)
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    var result = MessageBox.Show(mainWindow,
+                        "This application contains adult content intended for users aged 18 and older.\n\n" +
+                        "By clicking \"Yes\", you confirm that you are at least 18 years old and that viewing adult content is legal in your jurisdiction.\n\n" +
+                        "Do you wish to continue?",
+                        "Age Verification",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning,
+                        MessageBoxResult.No);
+
+                    if (result != MessageBoxResult.Yes)
+                    {
+                        Shutdown();
+                        return;
+                    }
+
+                    Settings.Current.HasAcceptedAgeVerification = true;
+                    Settings.Save();
+                }), System.Windows.Threading.DispatcherPriority.Loaded);
+            }
         }
         
         private void OnAchievementUnlocked(object? sender, Models.Achievement achievement)
@@ -745,6 +800,39 @@ namespace ConditioningControlPanel
                 // If authenticated, load cloud profile and start heartbeat
                 if (Patreon.IsAuthenticated)
                 {
+                    // Auto-upgrade: if Patreon is authenticated but no V2 identity, migrate via /v2/auth/patreon
+                    if (string.IsNullOrEmpty(UnifiedUserId) || string.IsNullOrEmpty(Settings?.Current?.AuthToken))
+                    {
+                        try
+                        {
+                            var accessToken = Patreon.GetAccessToken();
+                            if (!string.IsNullOrEmpty(accessToken))
+                            {
+                                Logger?.Information("Auto-upgrading Patreon user to V2...");
+                                var v2Auth = new V2AuthService();
+                                var result = await v2Auth.AuthenticateWithPatreonAsync(accessToken);
+                                if (result.Success && result.User != null)
+                                {
+                                    v2Auth.ApplyUserDataToSettings(result.User, result.AuthToken);
+                                    UnifiedUserId = result.User.UnifiedId;
+                                    Logger?.Information("Auto-upgrade complete: {Id}", UnifiedUserId);
+                                }
+                                else if (result.NeedsRegistration)
+                                {
+                                    Logger?.Information("Patreon auto-upgrade: needs registration (new user), skipping");
+                                }
+                                else
+                                {
+                                    Logger?.Warning("Patreon auto-upgrade failed: {Error}", result.Error);
+                                }
+                            }
+                        }
+                        catch (Exception upgradeEx)
+                        {
+                            Logger?.Warning(upgradeEx, "Patreon auto-upgrade failed (non-fatal, will retry next launch)");
+                        }
+                    }
+
                     Logger?.Information("Patreon authenticated, loading cloud profile...");
                     await ProfileSync.LoadProfileAsync();
                     ProfileSync.StartHeartbeat();
@@ -781,6 +869,39 @@ namespace ConditioningControlPanel
                 if (Discord.IsAuthenticated)
                 {
                     Logger?.Information("Discord authenticated: {Id}", Discord.UserId);
+
+                    // Auto-upgrade: if Discord is authenticated but no V2 identity, migrate via /v2/auth/discord
+                    if (string.IsNullOrEmpty(UnifiedUserId))
+                    {
+                        try
+                        {
+                            var accessToken = Discord.GetAccessToken();
+                            if (!string.IsNullOrEmpty(accessToken))
+                            {
+                                Logger?.Information("Auto-upgrading Discord user to V2...");
+                                var v2Auth = new V2AuthService();
+                                var result = await v2Auth.AuthenticateWithDiscordAsync(accessToken);
+                                if (result.Success && result.User != null)
+                                {
+                                    v2Auth.ApplyUserDataToSettings(result.User, result.AuthToken);
+                                    UnifiedUserId = result.User.UnifiedId;
+                                    Logger?.Information("Auto-upgrade complete: {Id}", UnifiedUserId);
+                                }
+                                else if (result.NeedsRegistration)
+                                {
+                                    Logger?.Information("Discord auto-upgrade: needs registration (new user), skipping");
+                                }
+                                else
+                                {
+                                    Logger?.Warning("Discord auto-upgrade failed: {Error}", result.Error);
+                                }
+                            }
+                        }
+                        catch (Exception upgradeEx)
+                        {
+                            Logger?.Warning(upgradeEx, "Discord auto-upgrade failed (non-fatal, will retry next launch)");
+                        }
+                    }
 
                     // If not already syncing via Patreon, load cloud profile and start heartbeat for Discord-only users
                     if (Patreon?.IsAuthenticated != true && ProfileSync != null)
@@ -865,11 +986,29 @@ namespace ConditioningControlPanel
                 }
                 else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
                 {
-                    Logger?.Warning("Restored session rejected (invalid token). Clearing auth token.");
-                    if (Settings?.Current != null)
+                    // Check if this is a legacy user that needs full re-auth
+                    var errorJson = await response.Content.ReadAsStringAsync();
+                    var isLegacyReauth = errorJson.Contains("legacy_user_reauth_required");
+
+                    if (isLegacyReauth)
                     {
-                        Settings.Current.AuthToken = null;
-                        Settings.Save();
+                        Logger?.Warning("Restored session rejected (legacy user, no token ever issued). Clearing all auth state — user must re-login via OAuth.");
+                        UnifiedUserId = null;
+                        if (Settings?.Current != null)
+                        {
+                            Settings.Current.UnifiedId = null;
+                            Settings.Current.AuthToken = null;
+                            Settings.Save(suppressCloudBackup: true);
+                        }
+                    }
+                    else
+                    {
+                        Logger?.Warning("Restored session rejected (invalid token). Clearing auth token.");
+                        if (Settings?.Current != null)
+                        {
+                            Settings.Current.AuthToken = null;
+                            Settings.Save(suppressCloudBackup: true);
+                        }
                     }
                 }
                 else
@@ -1976,6 +2115,10 @@ Application State:
             SkillTree?.Dispose();
             QuestDefinitions?.Dispose();
             Audio?.Dispose();
+
+            // Clear in-memory secrets before exit to reduce memory exposure
+            SecureAuthTokenStore.ClearMemoryCache();
+            SecureApiKeyStore.ClearMemoryCache();
 
             // Close and flush the logger
             Log.CloseAndFlush();
