@@ -61,7 +61,7 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <CheckBox Grid.Column="0" Style="{StaticResource ItemCheckBox}"
-                                              IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                                              IsChecked="{Binding On, Mode=TwoWay}"
                                               Checked="CheckBox_Changed" Unchecked="CheckBox_Changed"
                                               Margin="0,0,10,0"/>
                                     <TextBlock Grid.Column="1" Text="{Binding Text}" 

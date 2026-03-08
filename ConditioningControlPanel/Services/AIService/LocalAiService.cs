@@ -26,7 +26,7 @@ public class LocalAiService : IAiService, IDisposable
         DailyRequestsRemaining = -1;
         _bambiSprite = new BambiSprite();
         AiService = new OllamaApiClient(_localUri);
-        AiService.SelectedModel = "bambi-model-v4:t";
+        AiService.SelectedModel = "bambi-model-v5:t";
         _chat = new Chat(AiService);
     }
     
@@ -89,7 +89,8 @@ public class LocalAiService : IAiService, IDisposable
     private bool _isWorkingOnResponse = false;
     private async Task<string?> GetAiResponseAsync(string userInput, string systemPrompt)
     {
-        var timeAwareInput = $"{userInput}";
+        var currentTime = DateTime.Now.ToString("yy-MMM-dd dddd h:mm:ss tt");
+        var timeAwareInput = $"{userInput} <time>{currentTime}</time>";
         if (_isWorkingOnResponse) return null;
         string response = "";
         _isWorkingOnResponse = false;
@@ -196,6 +197,12 @@ public class LocalAiService : IAiService, IDisposable
                 {
                     MainWindowRef?.EnablePinkFilter(true);
                     App.Settings.Current.PinkFilterOpacity = (command.Data as SpiralPinkFiler)?.Intensity ?? 5;
+                    // Start overlay service if needed
+                    if (App.Overlay?.IsRunning != true)
+                    {
+                        App.Overlay?.Start();
+                        App.Logger?.Information("AIService: Pink - started overlay service");
+                    }
                 }
                 else
                     MainWindowRef?.EnablePinkFilter(false);
@@ -205,6 +212,12 @@ public class LocalAiService : IAiService, IDisposable
                 {
                     MainWindowRef?.EnableSpiral(true);
                     App.Settings.Current.SpiralOpacity = (command.Data as SpiralPinkFiler)?.Intensity ?? 5;
+                    // Start overlay service if needed
+                    if (App.Overlay?.IsRunning != true)
+                    {
+                        App.Overlay?.Start();
+                        App.Logger?.Information("AutonomyService: Spiral - started overlay service");
+                    }
                 }
                 else
                     MainWindowRef?.EnableSpiral(false);
@@ -236,7 +249,7 @@ public class LocalAiService : IAiService, IDisposable
     private async Task SendTokenMessage(string token, bool jsonOnly = false)
     {
         Console.WriteLine($"Sending token: {token}");
-        await GetAiResponseAsync($"[{token}, {jsonOnly}]", "");
+        await GetAiResponseAsync($"[Token={token}, JsonOnly={jsonOnly}]", "");
     }
 
     public void Dispose()

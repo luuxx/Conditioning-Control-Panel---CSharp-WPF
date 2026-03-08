@@ -16,9 +16,17 @@ public class AICommand
             ReadCommentHandling = JsonCommentHandling.Skip,
             AllowTrailingCommas = true
         };
-        
-        options.Converters.Add(new AICommandConverter());
-        return JsonSerializer.Deserialize<AICommand>(json, options);
+        try
+        {
+            options.Converters.Add(new AICommandConverter());
+            return JsonSerializer.Deserialize<AICommand>(json, options);
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine("Error parsing AI command:" + json);
+            Console.WriteLine(e);
+            return null;
+        }
     }
 }
 
