@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel.Models;
 
@@ -27,6 +28,13 @@ public class SkillDefinition
     /// Numeric value for the effect (e.g., 0.10 for 10% XP boost)
     /// </summary>
     public double EffectValue { get; set; }
+
+    /// <summary>Localized skill name (falls back to hardcoded Name)</summary>
+    public string LocalizedName => Loc.Get($"skill_{Id}_name");
+    /// <summary>Localized skill description (falls back to hardcoded Description)</summary>
+    public string LocalizedDescription => Loc.Get($"skill_{Id}_desc");
+    /// <summary>Localized skill flavor text (falls back to hardcoded FlavorText)</summary>
+    public string LocalizedFlavorText => Loc.Get($"skill_{Id}_flavor");
 
     /// <summary>
     /// All skill definitions in the bimbo enhancement tree
@@ -74,7 +82,7 @@ public class SkillDefinition
             Cost = 8,
             PrerequisiteId = "pink_hours",
             FlavorText = "Good girls deserve extra sparkles! You're just THAT special, sweetie~",
-            Description = "+10% XP from all sources",
+            Description = "+10% XP from all sources. Adds pink glow to flashes and sparkle particles on bubble pops",
             EffectType = SkillEffectType.XpMultiplier,
             EffectValue = 0.10
         },
@@ -115,7 +123,7 @@ public class SkillDefinition
             Icon = "🏆✨",
             Tier = 3,
             Cost = 10,
-            PrerequisiteId = "ditzy_data",
+            PrerequisiteId = "hive_mind",
             FlavorText = "Look at all your pretty accomplishments! Longest session, biggest streak... you're doing SO well!",
             Description = "Shows personal best records",
             EffectType = SkillEffectType.StatDisplay,
@@ -130,7 +138,7 @@ public class SkillDefinition
             Cost = 15,
             PrerequisiteId = "sparkle_boost_1",
             FlavorText = "Even MORE sparkles?! +15% extra (25% total!) You're practically GLOWING~",
-            Description = "+15% more XP (stacks to 25%)",
+            Description = "+15% more XP (stacks to 25%). Stronger pink glow on flashes",
             EffectType = SkillEffectType.XpMultiplier,
             EffectValue = 0.15
         },
@@ -142,8 +150,8 @@ public class SkillDefinition
             Tier = 3,
             Cost = 15,
             PrerequisiteId = "sparkle_boost_2",
-            FlavorText = "Being an airhead pays off sometimes! 5% chance any flash gives 5x XP~ Tee-hee!",
-            Description = "5% chance for 5x XP on flash images",
+            FlavorText = "Being an airhead pays off sometimes! 5% chance any flash gives 10x XP~ Tee-hee!",
+            Description = "5% chance for 10x XP on flash images with golden pulsing glow",
             EffectType = SkillEffectType.LuckyFlash,
             EffectValue = 0.05
         },
@@ -167,7 +175,7 @@ public class SkillDefinition
             Icon = "💕🩹",
             Tier = 3,
             Cost = 12,
-            PrerequisiteId = "good_girl_streak",
+            PrerequisiteId = "milestone_rewards",
             FlavorText = "Everyone forgets sometimes, silly! Pay 500 XP to fix a broken streak once per season~",
             Description = "Restore broken streak for 500 XP (once per season)",
             EffectType = SkillEffectType.StreakRecovery,
@@ -184,7 +192,7 @@ public class SkillDefinition
             Icon = "👑💅",
             Tier = 4,
             Cost = 15,
-            PrerequisiteId = "hive_mind",
+            PrerequisiteId = "trophy_case",
             FlavorText = "OMG find out how pretty you are compared to everyone! Top X%... are you the PRETTIEST?",
             Description = "Shows your rank percentile",
             EffectType = SkillEffectType.StatDisplay,
@@ -197,7 +205,7 @@ public class SkillDefinition
             Icon = "🔄💫",
             Tier = 4,
             Cost = 15,
-            PrerequisiteId = "trophy_case",
+            PrerequisiteId = "popular_girl",
             FlavorText = "Don't like your quest? Swap it for free once a day! Good bimbos get choices~",
             Description = "1 free daily quest reroll",
             EffectType = SkillEffectType.FreeReroll,
@@ -210,7 +218,7 @@ public class SkillDefinition
             Icon = "✨📜",
             Tier = 4,
             Cost = 20,
-            PrerequisiteId = "trophy_case",
+            PrerequisiteId = "quest_refresh",
             FlavorText = "Your rerolled quests are extra rewarding now! +25% XP on any quest you refresh~",
             Description = "+25% XP on rerolled quests",
             EffectType = SkillEffectType.RerollBonus,
@@ -223,9 +231,9 @@ public class SkillDefinition
             Icon = "💖👸",
             Tier = 4,
             Cost = 25,
-            PrerequisiteId = "sparkle_boost_2",
+            PrerequisiteId = "lucky_bimbo",
             FlavorText = "THE MOST SPARKLES POSSIBLE! +20% more (45% total!) You're basically made of glitter now~",
-            Description = "+20% more XP (stacks to 45%)",
+            Description = "+20% more XP (stacks to 45%). Maximum pink glow on flashes",
             EffectType = SkillEffectType.XpMultiplier,
             EffectValue = 0.20
         },
@@ -237,8 +245,8 @@ public class SkillDefinition
             Tier = 4,
             Cost = 20,
             PrerequisiteId = "sparkle_boost_3",
-            FlavorText = "Pop pop POP! 5% chance bubbles give 10x points! Empty heads LOVE bubbles~",
-            Description = "5% chance for 10x bubble points",
+            FlavorText = "Pop pop POP! 5% chance bubbles give 20x points! Empty heads LOVE bubbles~",
+            Description = "5% chance for 20x bubble points with golden sparkle burst",
             EffectType = SkillEffectType.LuckyBubble,
             EffectValue = 0.05
         },
@@ -262,7 +270,7 @@ public class SkillDefinition
             Icon = "💪🔥",
             Tier = 4,
             Cost = 20,
-            PrerequisiteId = "milestone_rewards",
+            PrerequisiteId = "oopsie_insurance",
             FlavorText = "Each day you're good adds +0.5% XP! At 30 days that's +15%! Consistency is SO hot~",
             Description = "+0.5% XP per streak day (max 15%)",
             EffectType = SkillEffectType.StreakMultiplier,
@@ -275,7 +283,7 @@ public class SkillDefinition
             Icon = "🎰💕",
             Tier = 4,
             Cost = 15,
-            PrerequisiteId = "milestone_rewards",
+            PrerequisiteId = "streak_power",
             FlavorText = "Can't stop rerolling? Now you have 2 EXTRA rerolls every day! Spin spin spin~",
             Description = "+2 extra daily quest rerolls",
             EffectType = SkillEffectType.ExtraRerolls,
@@ -288,7 +296,7 @@ public class SkillDefinition
             Icon = "⭐👼",
             Tier = 4,
             Cost = 20,
-            PrerequisiteId = "oopsie_insurance",
+            PrerequisiteId = "reroll_addict",
             FlavorText = "Presents for persistent princesses! Earn huge XP bonuses at 7, 14, and 30 day daily quest streaks! ✨",
             Description = "3000/6000/10000 XP at 7/14/30 day streaks (scales with level +2%/lv)",
             EffectType = SkillEffectType.PerfectWeek,

@@ -1,10 +1,6 @@
-using System;
-using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
-using System.Threading.Tasks;
-using Serilog;
 
 namespace ConditioningControlPanel.Services.Haptics
 {
@@ -39,12 +35,33 @@ namespace ConditioningControlPanel.Services.Haptics
         {
             var handler = new HttpClientHandler
             {
-                ServerCertificateCustomValidationCallback = (msg, cert, chain, errors) => true
+                // Only bypass SSL validation for localhost connections (Lovense local API uses self-signed certs).
+                // Remote/LAN connections must use proper certificate validation.
+                ServerCertificateCustomValidationCallback = (msg, cert, chain, errors) =>
+                {
+                    if (errors == System.Net.Security.SslPolicyErrors.None) return true;
+                    var host = msg.RequestUri?.Host;
+                    return host == "127.0.0.1" || host == "localhost";
+                }
             };
             _client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
         }
 
-        public void SetUrl(string url) => _baseUrl = url.TrimEnd('/');
+        public void SetUrl(string url)
+        {
+            url = url.Trim().TrimEnd('/');
+
+            // Add http:// if no scheme present
+            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                url = "http://" + url;
+
+            // Parse and normalize — if valid, use just the authority (scheme+host+port)
+            if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                _baseUrl = uri.GetLeftPart(UriPartial.Authority);
+            else
+                _baseUrl = url;
+        }
         public void SetMode(LovenseConnectionMode mode) => _mode = mode;
 
         public async Task<bool> ConnectAsync()

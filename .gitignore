@@ -1,3 +1,13 @@
+# Project briefing (contains operational details)
+project-briefing.md
+
+# Claude Code local config
+.claude/
+ConditioningControlPanel/.claude/
+
+# Build logs
+build-output.log
+
 # Build outputs
 bin/
 obj/
@@ -17,7 +27,7 @@ release/
 # User data (don't commit personal settings or content)
 settings.json
 logs/
-.claude/settings.local.json
+**/.claude/settings.local.json
 
 # Asset folders (users add their own content)
 assets/images/*
@@ -67,8 +77,7 @@ obj/
 *.user
 crash_log.txt
 
-# Patreon proxy server (deploy separately, contains sensitive config)
-patreon-proxy-server/
+# Server code lives in private repo (CC-Labs-llc/CCP-Server)
 ConditioningControlPanel_Release/
 *.zip
 ConditioningControlPanel_v4.1/
@@ -97,6 +106,7 @@ lb_*.json
 
 # Temp scripts and data dumps (often contain tokens/PII)
 tmp_*
+temp*
 find_*.js
 merge_*.js
 fix_*.js
@@ -107,6 +117,15 @@ investigate_*.js
 check_*.js
 reset_*.js
 set_force_*.js
+
+# Mod packages (built artifacts, too large for git)
+*.ccpmod
+
+# DroneMod (distributed separately)
+ConditioningControlPanel/DroneMod/
+
+# MSBuild temp files
+*_wpftmp.csproj
 
 # Environment and secrets
 *.env

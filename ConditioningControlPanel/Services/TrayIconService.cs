@@ -1,8 +1,6 @@
-using System;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Windows;
 using System.Windows.Forms;
 
 namespace ConditioningControlPanel.Services;
@@ -92,8 +90,7 @@ namespace ConditioningControlPanel.Services;
             showItem.Click += (s, e) => ShowWindow();
             contextMenu.Items.Add(showItem);
 
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var wakeLabel = mode == Models.ContentMode.BambiSleep ? "Wake Bambi Up!" : "Wake Up!";
+            var wakeLabel = App.Mods?.IsBaseMod == true ? "Wake Bambi Up!" : "Wake Up!";
             var wakeBambiItem = new ToolStripMenuItem(wakeLabel);
             wakeBambiItem.Click += (s, e) => OnWakeBambiRequested?.Invoke();
             contextMenu.Items.Add(wakeBambiItem);

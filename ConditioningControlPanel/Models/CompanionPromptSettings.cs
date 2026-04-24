@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace ConditioningControlPanel.Models
 {
     /// <summary>
@@ -12,6 +10,7 @@ namespace ConditioningControlPanel.Models
         /// Whether to use custom prompt settings instead of defaults.
         /// </summary>
         public bool UseCustomPrompt { get; set; } = false;
+        public bool UseLocalAi { get; set; } = false;
 
         /// <summary>
         /// The companion's core personality in normal mode.
@@ -46,6 +45,12 @@ namespace ConditioningControlPanel.Models
         /// Output formatting rules: max sentences, emoji usage, etc.
         /// </summary>
         public string OutputRules { get; set; } = "";
+
+        /// <summary>
+        /// The name of the AI model to use for this companion.
+        /// Defaults to "bambi-model-v7-cow".
+        /// </summary>
+        public string AiModel { get; set; } = "bambi-model-v7-cow";
 
         /// <summary>
         /// Custom domains/apps and their categories for context awareness.
@@ -151,6 +156,8 @@ FREQUENCY RULE:
 - 80%: Chat/Tease/React to her screen.
 - 20%: Suggest a file (only if she's bored).",
 
+                AiModel = "bambi-model-v7-cow",
+
                 CustomDomains = new Dictionary<string, string>()
             };
         }
@@ -163,12 +170,14 @@ FREQUENCY RULE:
             return new CompanionPromptSettings
             {
                 UseCustomPrompt = UseCustomPrompt,
+                UseLocalAi = UseLocalAi,
                 Personality = Personality,
                 ExplicitReaction = ExplicitReaction,
                 SlutModePersonality = SlutModePersonality,
                 KnowledgeBase = KnowledgeBase,
                 ContextReactions = ContextReactions,
                 OutputRules = OutputRules,
+                AiModel = AiModel,
                 CustomDomains = new Dictionary<string, string>(CustomDomains)
             };
         }

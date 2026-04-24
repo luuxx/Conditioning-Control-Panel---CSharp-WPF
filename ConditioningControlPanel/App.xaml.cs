@@ -1,18 +1,14 @@
-using System;
-using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Media;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Net.Http;
 using System.Text;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Media;
 using Microsoft.Win32;
+using ConditioningControlPanel.Localization;
 using ConditioningControlPanel.Models;
 using ConditioningControlPanel.Services;
+using ConditioningControlPanel.Services.AIService;
+using ConditioningControlPanel.Services.Commands;
 using Serilog;
 using Velopack;
 
@@ -46,7 +42,9 @@ namespace ConditioningControlPanel
         private const string MutexName = "ConditioningControlPanel_SingleInstance_Mutex";
         private const string ShowSignalName = "ConditioningControlPanel_ShowWindow_Signal";
         private static EventWaitHandle? _showSignal;
+        private SplashScreen? _splash;
         private static Thread? _showSignalThread;
+        private readonly TaskCompletionSource _patreonInitDone = new();
 
         /// <summary>
         /// User data folder path in LocalAppData - persists across updates
@@ -175,6 +173,7 @@ namespace ConditioningControlPanel
         public static OverlayService Overlay { get; private set; } = null!;
         public static BubbleService Bubbles { get; private set; } = null!;
         public static LockCardService LockCard { get; private set; } = null!;
+        public static PopQuizService PopQuiz { get; private set; } = null!;
         public static BubbleCountService BubbleCount { get; private set; } = null!;
         public static BouncingTextService BouncingText { get; private set; } = null!;
         public static MindWipeService MindWipe { get; private set; } = null!;
@@ -183,7 +182,8 @@ namespace ConditioningControlPanel
         public static QuestDefinitionService QuestDefinitions { get; private set; } = null!;
         public static QuestService Quests { get; private set; } = null!;
         public static TutorialService Tutorial { get; private set; } = null!;
-        public static AiService Ai { get; private set; } = null!;
+        public static IAiService Ai { get; private set; } = null!;
+        public static IAiCommandService Commands { get; private set; } = null!;
         public static WindowAwarenessService WindowAwareness { get; private set; } = null!;
         public static PatreonService Patreon { get; private set; } = null!;
         public static UpdateService Update { get; private set; } = null!;
@@ -204,17 +204,23 @@ namespace ConditioningControlPanel
         public static RoadmapService Roadmap { get; private set; } = null!;
         public static SkillTreeService SkillTree { get; private set; } = null!;
         public static KeywordTriggerService KeywordTriggers { get; private set; } = null!;
+        public static KeywordTriggerPresetService KeywordPresets { get; private set; } = null!;
         public static ScreenOcrService ScreenOcr { get; private set; } = null!;
         public static KeywordHighlightService? KeywordHighlight { get; private set; }
         public static ActivityTracker ActivityTracker { get; private set; } = null!;
         public static RemoteControlService RemoteControl { get; private set; } = null!;
         public static CompanionPhraseService CompanionPhrases { get; private set; } = null!;
         public static LockdownService Lockdown { get; private set; } = null!;
+        public static MantraService Mantra { get; private set; } = null!;
+        public static ModService Mods { get; private set; } = null!;
+        public static BugReportService BugReport { get; private set; } = null!;
+        public static WallpaperService? Wallpaper { get; private set; }
 
         /// <summary>
-        /// Whether user is logged in with either Patreon or Discord (required for progression tracking)
+        /// Whether user is logged in with Patreon, Discord, or email (required for progression tracking).
+        /// HasCloudIdentity covers email login (has UnifiedId) and restored sessions.
         /// </summary>
-        public static bool IsLoggedIn => (Patreon?.IsAuthenticated == true) || (Discord?.IsAuthenticated == true);
+        public static bool IsLoggedIn => (Patreon?.IsAuthenticated == true) || (Discord?.IsAuthenticated == true) || HasCloudIdentity;
 
         /// <summary>
         /// Whether a conditioning session is currently running. Set by MainWindow.
@@ -315,6 +321,104 @@ namespace ConditioningControlPanel
             }
         }
 
+        // --- CCP window rect cache (used by Awareness Engine self-exclusion) ---
+        private static System.Drawing.Rectangle[]? _cachedCcpWindowRects;
+        private static DateTime _ccpWindowRectsCacheTime = DateTime.MinValue;
+        private static readonly TimeSpan CcpWindowRectsCacheDuration = TimeSpan.FromMilliseconds(250);
+        private static readonly object _ccpWindowRectsLock = new();
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool GetWindowRect(IntPtr hWnd, out CcpRect lpRect);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct CcpRect { public int Left, Top, Right, Bottom; }
+
+        /// <summary>
+        /// Returns screen rectangles of all currently visible CCP-owned windows
+        /// (MainWindow, avatar, overlays, dialogs) in PHYSICAL pixels on the
+        /// virtual desktop. Used by ScreenOcrService to drop OCR word hits that
+        /// fall inside our own UI, preventing feedback loops.
+        ///
+        /// Uses Win32 <c>GetWindowRect</c> directly rather than WPF Window.Left/Top
+        /// multiplied by CompositionTarget scale — the latter is unreliable on
+        /// PerMonitorV2 + multi-monitor setups because Left/Top is anchored to
+        /// primary's DIP space while the scale is the current window's monitor
+        /// scale, producing oversized rects that incorrectly swallow external
+        /// OCR hits. <c>GetWindowRect</c> returns physical virtual-desktop pixels
+        /// in one call, which is what OCR hits are already expressed in.
+        ///
+        /// Cached for a short interval to stay cheap under per-scan filtering.
+        /// </summary>
+        public static System.Drawing.Rectangle[] GetCcpWindowRectsCached()
+        {
+            lock (_ccpWindowRectsLock)
+            {
+                if (_cachedCcpWindowRects != null &&
+                    DateTime.Now - _ccpWindowRectsCacheTime <= CcpWindowRectsCacheDuration)
+                {
+                    return _cachedCcpWindowRects;
+                }
+
+                var rects = new System.Collections.Generic.List<System.Drawing.Rectangle>();
+                try
+                {
+                    // Must run on the UI thread to enumerate Application.Current.Windows safely.
+                    var dispatcher = Current?.Dispatcher;
+                    if (dispatcher == null || dispatcher.HasShutdownStarted)
+                    {
+                        _cachedCcpWindowRects = Array.Empty<System.Drawing.Rectangle>();
+                        _ccpWindowRectsCacheTime = DateTime.Now;
+                        return _cachedCcpWindowRects;
+                    }
+
+                    // Collect the HWNDs on the UI thread, then call GetWindowRect
+                    // outside the dispatcher lock — GetWindowRect is a thread-safe
+                    // Win32 call and doesn't need dispatcher affinity.
+                    var hwnds = new System.Collections.Generic.List<IntPtr>();
+                    dispatcher.Invoke(() =>
+                    {
+                        foreach (var w in Current!.Windows.OfType<Window>())
+                        {
+                            try
+                            {
+                                if (!w.IsVisible) continue;
+                                if (w.WindowState == WindowState.Minimized) continue;
+
+                                var hwnd = new System.Windows.Interop.WindowInteropHelper(w).Handle;
+                                if (hwnd != IntPtr.Zero) hwnds.Add(hwnd);
+                            }
+                            catch { /* skip malformed window */ }
+                        }
+                    });
+
+                    foreach (var hwnd in hwnds)
+                    {
+                        if (!IsWindowVisible(hwnd)) continue;
+                        if (!GetWindowRect(hwnd, out var r)) continue;
+
+                        int w = r.Right - r.Left;
+                        int h = r.Bottom - r.Top;
+                        if (w <= 0 || h <= 0) continue;
+
+                        rects.Add(new System.Drawing.Rectangle(r.Left, r.Top, w, h));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger?.Debug("GetCcpWindowRectsCached failed: {Error}", ex.Message);
+                }
+
+                _cachedCcpWindowRects = rects.ToArray();
+                _ccpWindowRectsCacheTime = DateTime.Now;
+                return _cachedCcpWindowRects;
+            }
+        }
+
         /// <summary>
         /// Flag to indicate if an update dialog is currently being shown.
         /// Used to delay tutorial until update is handled.
@@ -361,11 +465,18 @@ namespace ConditioningControlPanel
                 // Stop all visual overlays (spiral, pink filter, etc.)
                 Overlay?.Stop();
 
-                // Stop lock card if active
+                // Stop lock card and pop quiz if active
                 LockCard?.Stop();
+                PopQuiz?.Stop();
+
+                // Stop mantra lab audio
+                Mantra?.Dispose();
 
                 // Stop autonomy mode
                 Autonomy?.Stop();
+
+                // Restore wallpaper
+                Wallpaper?.Deactivate();
 
                 // Stop avatar voice lines
                 AvatarWindow?.StopVoiceLineAudio();
@@ -385,7 +496,8 @@ namespace ConditioningControlPanel
         {
             // Show splash screen IMMEDIATELY - before anything else
             // This ensures users see feedback right away after update/launch
-            var splash = new SplashScreen();
+            _splash = new SplashScreen();
+            var splash = _splash;
             splash.Show();
             splash.SetProgress(0.0, "Starting...");
 
@@ -445,6 +557,13 @@ namespace ConditioningControlPanel
 
             base.OnStartup(e);
 
+            // Cap all WPF animations to 30 FPS (default 60) to reduce idle CPU usage.
+            // Decorative animations (glows, shimmers, particles) look identical at 30 FPS.
+            // Feature animations using DispatcherTimers are unaffected.
+            System.Windows.Media.Animation.Timeline.DesiredFrameRateProperty.OverrideMetadata(
+                typeof(System.Windows.Media.Animation.Timeline),
+                new FrameworkPropertyMetadata(30));
+
             splash.SetProgress(0.05, "Initializing logging...");
 
             // Setup logging - use UserDataPath (writable) instead of BaseDirectory (may be in Program Files)
@@ -487,6 +606,11 @@ namespace ConditioningControlPanel
                 if (!errorDialogShown)
                 {
                     errorDialogShown = true;
+
+                    // Close splash screen if still open so error dialog is visible
+                    try { _splash?.Close(); } catch { }
+                    _splash = null;
+
                     try
                     {
                         MessageBox.Show($"An error occurred:\n\n{args.Exception.Message}\n\nDetails logged to crash log.",
@@ -533,6 +657,7 @@ namespace ConditioningControlPanel
             // Create user assets directories in LocalAppData (persists across updates)
             Directory.CreateDirectory(Path.Combine(UserAssetsPath, "images"));
             Directory.CreateDirectory(Path.Combine(UserAssetsPath, "videos"));
+            Directory.CreateDirectory(Path.Combine(UserAssetsPath, "wallpapers"));
             Directory.CreateDirectory(Path.Combine(UserDataPath, "Spirals"));
 
             // Migrate assets from old location (install dir) to new location (user data) in background
@@ -562,8 +687,16 @@ namespace ConditioningControlPanel
             // Clean up stale temp files from previous sessions (crash recovery, leaked files)
             CleanupStaleTempFiles();
 
+            // Initialize localization (must be after settings, before UI)
+            LocalizationManager.Instance.Initialize(Settings?.Current?.Language ?? "en");
+
+            // Initialize mod system (must be after settings, before services that use content config)
+            Mods = new ModService();
+            Mods.Initialize(Settings?.Current?.ActiveModId);
+
             splash.SetProgress(0.3, "Initializing audio...");
             Audio = new AudioService();
+            Audio.RunStartupDiagnostics();
 
             splash.SetProgress(0.4, "Initializing flash service...");
             Flash = new FlashService();
@@ -590,6 +723,7 @@ namespace ConditioningControlPanel
             Bubbles = new BubbleService();
             InteractionQueue = new InteractionQueueService();
             LockCard = new LockCardService();
+            PopQuiz = new PopQuizService();
             BubbleCount = new BubbleCountService();
             BouncingText = new BouncingTextService();
             MindWipe = new MindWipeService();
@@ -614,7 +748,8 @@ namespace ConditioningControlPanel
             Achievements?.Progress?.AwardDeferredStreakBonus();
 
             splash.SetProgress(0.85, "Initializing companion...");
-            Ai = new AiService();
+            Ai = new AiServiceStrategy();
+            Commands = new AiCommandService();
             WindowAwareness = new WindowAwarenessService();
             Patreon = new PatreonService();
             ProfileSync = new ProfileSyncService();
@@ -622,6 +757,27 @@ namespace ConditioningControlPanel
             Haptics = new HapticService(Settings.Current.Haptics);
             AudioSync = new AudioSyncService(Haptics, Settings.Current.Haptics.AudioSync);
             KeywordTriggers = new KeywordTriggerService();
+            KeywordPresets = new KeywordTriggerPresetService();
+
+            // Drain any preset re-installs queued by SettingsService.MergeBuiltInAwarenessPresets
+            // when a built-in preset's version was bumped on this launch. This re-clones the
+            // new triggers into KeywordTriggers so version bumps actually reach the live list
+            // instead of only refreshing card metadata.
+            if (Settings?.PendingPresetReinstalls.Count > 0)
+            {
+                foreach (var presetId in Settings.PendingPresetReinstalls.ToList())
+                {
+                    try
+                    {
+                        KeywordPresets.InstallPreset(presetId);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger?.Warning("Pending preset re-install failed for {Id}: {Error}", presetId, ex.Message);
+                    }
+                }
+                Settings.PendingPresetReinstalls.Clear();
+            }
             ScreenOcr = new ScreenOcrService();
             KeywordHighlight = new KeywordHighlightService();
             RemoteControl = new RemoteControlService();
@@ -633,9 +789,10 @@ namespace ConditioningControlPanel
                 _ = AutoConnectHapticsAsync();
             }
 
-            // Initialize Discord Rich Presence
+            // Initialize Discord Rich Presence (only if Discord is linked — prevents
+            // accidental exposure for users who chose anonymous invite-code accounts)
             DiscordRpc = new DiscordRichPresenceService();
-            if (Settings.Current.DiscordRichPresenceEnabled)
+            if (Settings.Current.DiscordRichPresenceEnabled && Settings.Current.HasLinkedDiscord)
             {
                 DiscordRpc.IsEnabled = true;
             }
@@ -656,6 +813,12 @@ namespace ConditioningControlPanel
             // Initialize lockdown service (ephemeral — not persisted)
             Lockdown = new LockdownService();
 
+            // Initialize mantra lab service
+            Mantra = new MantraService();
+
+            // Initialize wallpaper override service
+            Wallpaper = new WallpaperService();
+
             // Initialize Patreon (validate subscription in background)
             // Then load cloud profile if authenticated
             _ = InitializePatreonAndSyncAsync();
@@ -672,6 +835,9 @@ namespace ConditioningControlPanel
             // Initialize Update service and check for updates in background
             Update = new UpdateService();
             _ = CheckForUpdatesInBackgroundAsync();
+
+            // Initialize bug report service (stateless, just holds an HttpClient)
+            BugReport = new BugReportService();
 
             // Wire up achievement popup BEFORE checking any achievements
             Achievements.AchievementUnlocked += OnAchievementUnlocked;
@@ -691,16 +857,55 @@ namespace ConditioningControlPanel
 
             splash.SetProgress(0.95, "Opening main window...");
 
-            // Show main window
-            var mainWindow = new MainWindow();
-            mainWindow.Show();
+            // Show main window — wrapped in try-catch to ensure splash closes on failure
+            MainWindow mainWindow;
+            try
+            {
+                mainWindow = new MainWindow();
+                mainWindow.Show();
+            }
+            catch (Exception ex)
+            {
+                Logger?.Error(ex, "Failed to create main window");
+                try { splash.Close(); } catch { }
+                _splash = null;
+                throw; // Re-throw to let DispatcherUnhandledException show the error
+            }
 
             // Give RemoteControlService a direct reference (Application.Current.MainWindow is null when hidden to tray)
             if (RemoteControl != null) RemoteControl.MainWindowRef = mainWindow;
 
             // Close splash screen with fade animation
+            // Drop Topmost FIRST so deferred dialogs (What's New, Age Verification) aren't hidden behind it
+            splash.Topmost = false;
             splash.SetProgress(1.0, "Ready!");
             splash.FadeOutAndClose();
+            _splash = null;
+
+            // Age verification gate (first launch only, deferred to ensure splash is fully closed)
+            if (Settings?.Current?.HasAcceptedAgeVerification != true)
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    var result = MessageBox.Show(mainWindow,
+                        "This application contains adult content intended for users aged 18 and older.\n\n" +
+                        "By clicking \"Yes\", you confirm that you are at least 18 years old and that viewing adult content is legal in your jurisdiction.\n\n" +
+                        "Do you wish to continue?",
+                        "Age Verification",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning,
+                        MessageBoxResult.No);
+
+                    if (result != MessageBoxResult.Yes)
+                    {
+                        Shutdown();
+                        return;
+                    }
+
+                    Settings.Current.HasAcceptedAgeVerification = true;
+                    Settings.Save();
+                }), System.Windows.Threading.DispatcherPriority.Loaded);
+            }
         }
         
         private void OnAchievementUnlocked(object? sender, Models.Achievement achievement)
@@ -744,6 +949,39 @@ namespace ConditioningControlPanel
                 // If authenticated, load cloud profile and start heartbeat
                 if (Patreon.IsAuthenticated)
                 {
+                    // Auto-upgrade: if Patreon is authenticated but no V2 identity, migrate via /v2/auth/patreon
+                    if (string.IsNullOrEmpty(UnifiedUserId) || string.IsNullOrEmpty(Settings?.Current?.AuthToken))
+                    {
+                        try
+                        {
+                            var accessToken = Patreon.GetAccessToken();
+                            if (!string.IsNullOrEmpty(accessToken))
+                            {
+                                Logger?.Information("Auto-upgrading Patreon user to V2...");
+                                var v2Auth = new V2AuthService();
+                                var result = await v2Auth.AuthenticateWithPatreonAsync(accessToken);
+                                if (result.Success && result.User != null)
+                                {
+                                    v2Auth.ApplyUserDataToSettings(result.User, result.AuthToken);
+                                    UnifiedUserId = result.User.UnifiedId;
+                                    Logger?.Information("Auto-upgrade complete: {Id}", UnifiedUserId);
+                                }
+                                else if (result.NeedsRegistration)
+                                {
+                                    Logger?.Information("Patreon auto-upgrade: needs registration (new user), skipping");
+                                }
+                                else
+                                {
+                                    Logger?.Warning("Patreon auto-upgrade failed: {Error}", result.Error);
+                                }
+                            }
+                        }
+                        catch (Exception upgradeEx)
+                        {
+                            Logger?.Warning(upgradeEx, "Patreon auto-upgrade failed (non-fatal, will retry next launch)");
+                        }
+                    }
+
                     Logger?.Information("Patreon authenticated, loading cloud profile...");
                     await ProfileSync.LoadProfileAsync();
                     ProfileSync.StartHeartbeat();
@@ -752,7 +990,7 @@ namespace ConditioningControlPanel
                 // Start autonomy service if it should be enabled
                 // (might have been skipped during LoadSettings if whitelist wasn't loaded yet)
                 var s = Settings?.Current;
-                if (s != null && s.AutonomyModeEnabled && s.AutonomyConsentGiven && s.IsLevelUnlocked(100))
+                if (s != null && s.AutonomyModeEnabled && s.AutonomyConsentGiven)
                 {
                     var hasPatreonAccess = s.PatreonTier >= 1 || Patreon?.IsWhitelisted == true;
                     if (hasPatreonAccess && Autonomy?.IsEnabled != true)
@@ -765,6 +1003,10 @@ namespace ConditioningControlPanel
             catch (Exception ex)
             {
                 Logger?.Error(ex, "Failed to initialize Patreon and sync profile");
+            }
+            finally
+            {
+                _patreonInitDone.TrySetResult();
             }
         }
 
@@ -780,6 +1022,46 @@ namespace ConditioningControlPanel
                 if (Discord.IsAuthenticated)
                 {
                     Logger?.Information("Discord authenticated: {Id}", Discord.UserId);
+
+                    // Auto-upgrade: if Discord is authenticated but no V2 identity OR no auth token, migrate via /v2/auth/discord
+                    // (legacy users created before Feb 2026 may have a UnifiedUserId but no auth_token_hash on the server —
+                    // re-running /v2/auth/discord bootstraps a fresh token for them)
+                    if (string.IsNullOrEmpty(UnifiedUserId) || string.IsNullOrEmpty(Settings?.Current?.AuthToken))
+                    {
+                        try
+                        {
+                            var accessToken = Discord.GetAccessToken();
+                            if (!string.IsNullOrEmpty(accessToken))
+                            {
+                                Logger?.Information("Auto-upgrading Discord user to V2...");
+                                var v2Auth = new V2AuthService();
+                                var result = await v2Auth.AuthenticateWithDiscordAsync(accessToken);
+                                if (result.Success && result.User != null)
+                                {
+                                    v2Auth.ApplyUserDataToSettings(result.User, result.AuthToken);
+                                    UnifiedUserId = result.User.UnifiedId;
+                                    Logger?.Information("Auto-upgrade complete: {Id}", UnifiedUserId);
+                                }
+                                else if (result.NeedsRegistration)
+                                {
+                                    Logger?.Information("Discord auto-upgrade: needs registration (new user), skipping");
+                                }
+                                else
+                                {
+                                    Logger?.Warning("Discord auto-upgrade failed: {Error}", result.Error);
+                                }
+                            }
+                        }
+                        catch (Exception upgradeEx)
+                        {
+                            Logger?.Warning(upgradeEx, "Discord auto-upgrade failed (non-fatal, will retry next launch)");
+                        }
+                    }
+
+                    // Wait for Patreon init to finish (up to 10s) before deciding whether to load profile
+                    // This prevents a race where Discord init finishes first and calls LoadProfileAsync
+                    // while Patreon is still initializing — causing duplicate profile loads
+                    await Task.WhenAny(_patreonInitDone.Task, Task.Delay(10_000));
 
                     // If not already syncing via Patreon, load cloud profile and start heartbeat for Discord-only users
                     if (Patreon?.IsAuthenticated != true && ProfileSync != null)
@@ -864,11 +1146,29 @@ namespace ConditioningControlPanel
                 }
                 else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
                 {
-                    Logger?.Warning("Restored session rejected (invalid token). Clearing auth token.");
-                    if (Settings?.Current != null)
+                    // Check if this is a legacy user that needs full re-auth
+                    var errorJson = await response.Content.ReadAsStringAsync();
+                    var isLegacyReauth = errorJson.Contains("legacy_user_reauth_required");
+
+                    if (isLegacyReauth)
                     {
-                        Settings.Current.AuthToken = null;
-                        Settings.Save();
+                        Logger?.Warning("Restored session rejected (legacy user, no token ever issued). Clearing all auth state — user must re-login via OAuth.");
+                        UnifiedUserId = null;
+                        if (Settings?.Current != null)
+                        {
+                            Settings.Current.UnifiedId = null;
+                            Settings.Current.AuthToken = null;
+                            Settings.Save(suppressCloudBackup: true);
+                        }
+                    }
+                    else
+                    {
+                        Logger?.Warning("Restored session rejected (invalid token). Clearing auth token.");
+                        if (Settings?.Current != null)
+                        {
+                            Settings.Current.AuthToken = null;
+                            Settings.Save(suppressCloudBackup: true);
+                        }
                     }
                 }
                 else
@@ -1926,7 +2226,8 @@ Application State:
 
             // Save settings FIRST (before cloud sync) to persist the user's current local state.
             // This prevents cloud sync from overwriting local values with stale data before save.
-            Settings?.Save();
+            // Use SaveImmediate to flush any pending debounced writes and ensure final state is on disk.
+            Settings?.SaveImmediate();
 
             // Sync profile to cloud on exit (short timeout to avoid blocking shutdown)
             if (ProfileSync?.IsSyncEnabled == true)
@@ -1954,6 +2255,7 @@ Application State:
             Overlay?.Dispose();
             Bubbles?.Dispose();
             LockCard?.Dispose();
+            PopQuiz?.Dispose();
             BubbleCount?.Dispose();
             BouncingText?.Dispose();
             MindWipe?.Dispose();
@@ -1970,11 +2272,22 @@ Application State:
             DualMonitorVideo?.Dispose();
             ScreenMirror?.Dispose();
             Autonomy?.Dispose();
+            Wallpaper?.Dispose();
             ContentPacks?.Dispose();
             Roadmap?.Dispose();
             SkillTree?.Dispose();
             QuestDefinitions?.Dispose();
+            Quests?.Dispose();
+            Companion?.Dispose();
+            CommunityPrompts?.Dispose();
+            ActivityTracker?.Dispose();
+            Haptics?.Dispose();
+            AudioSync?.Dispose();
             Audio?.Dispose();
+
+            // Clear in-memory secrets before exit to reduce memory exposure
+            SecureAuthTokenStore.ClearMemoryCache();
+            SecureApiKeyStore.ClearMemoryCache();
 
             // Close and flush the logger
             Log.CloseAndFlush();

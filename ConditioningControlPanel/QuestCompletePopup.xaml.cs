@@ -1,5 +1,3 @@
-using System;
-using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
@@ -81,8 +79,7 @@ public partial class QuestCompletePopup : Window
 
     private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        try { DragMove(); }
-        catch { }
+        FadeOutAndClose();
     }
 
     protected override void OnClosed(EventArgs e)

@@ -1,10 +1,8 @@
-using System;
 using System.Net.Http;
-using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using Newtonsoft.Json.Linq;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel
 {
@@ -23,37 +21,9 @@ namespace ConditioningControlPanel
         /// </summary>
         public string? ChosenDisplayName { get; private set; }
 
-        /// <summary>
-        /// Whether this is a legacy/OG user
-        /// </summary>
-        public bool IsLegacyUser { get; set; }
-
-        /// <summary>
-        /// Suggested name from legacy data
-        /// </summary>
-        public string? SuggestedName { get; set; }
-
         public UsernamePickerDialog()
         {
             InitializeComponent();
-        }
-
-        /// <summary>
-        /// Show the dialog configured for a legacy user returning
-        /// </summary>
-        public void ConfigureForLegacyUser(string? suggestedName)
-        {
-            IsLegacyUser = true;
-            SuggestedName = suggestedName;
-
-            OgWelcomePanel.Visibility = Visibility.Visible;
-            TxtSubtitle.Text = "Your Season 0 data has been found! Choose your display name for the new season.";
-
-            if (!string.IsNullOrWhiteSpace(suggestedName))
-            {
-                SuggestionPanel.Visibility = Visibility.Visible;
-                BtnUseSuggestion.Content = $"Use \"{suggestedName}\"";
-            }
         }
 
         /// <summary>
@@ -61,10 +31,9 @@ namespace ConditioningControlPanel
         /// </summary>
         public void ConfigureForNewUser()
         {
-            IsLegacyUser = false;
             OgWelcomePanel.Visibility = Visibility.Collapsed;
             SuggestionPanel.Visibility = Visibility.Collapsed;
-            TxtSubtitle.Text = "This name will be shown on the leaderboard and to other users.";
+            TxtSubtitle.Text = Loc.Get("label_this_name_will_be_shown_on_the_leaderboard_an");
         }
 
         private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -85,24 +54,24 @@ namespace ConditioningControlPanel
             // Validate locally first
             if (string.IsNullOrWhiteSpace(name))
             {
-                SetAvailabilityStatus("Enter a unique display name (3-30 characters)", Brushes.Gray, false);
+                SetAvailabilityStatus(Loc.Get("login_enter_unique_display_name"), Brushes.Gray, false);
                 return;
             }
 
             if (name.Length < 3)
             {
-                SetAvailabilityStatus("Name must be at least 3 characters", Brushes.Orange, false);
+                SetAvailabilityStatus(Loc.Get("login_name_min_3_chars"), Brushes.Orange, false);
                 return;
             }
 
             if (name.Length > 30)
             {
-                SetAvailabilityStatus("Name must be 30 characters or less", Brushes.Orange, false);
+                SetAvailabilityStatus(Loc.Get("login_name_max_30_chars"), Brushes.Orange, false);
                 return;
             }
 
             // Check server availability after a short delay
-            SetAvailabilityStatus("Checking availability...", Brushes.Gray, false);
+            SetAvailabilityStatus(Loc.Get("login_checking_availability"), Brushes.Gray, false);
 
             try
             {
@@ -115,11 +84,11 @@ namespace ConditioningControlPanel
 
                 if (available)
                 {
-                    SetAvailabilityStatus($"\"{name}\" is available!", Brushes.LightGreen, true);
+                    SetAvailabilityStatus(Loc.GetF("login_name_available", name), Brushes.LightGreen, true);
                 }
                 else
                 {
-                    SetAvailabilityStatus($"\"{name}\" is already taken", Brushes.Orange, false);
+                    SetAvailabilityStatus(Loc.GetF("login_name_already_taken", name), Brushes.Orange, false);
                 }
             }
             catch (TaskCanceledException)
@@ -128,7 +97,7 @@ namespace ConditioningControlPanel
             }
             catch (Exception ex)
             {
-                SetAvailabilityStatus($"Could not check: {ex.Message}", Brushes.Orange, false);
+                SetAvailabilityStatus(Loc.GetF("login_could_not_check", ex.Message), Brushes.Orange, false);
             }
         }
 
@@ -153,18 +122,24 @@ namespace ConditioningControlPanel
                 }
                 return false;
             }
-            catch
+            catch (Exception ex)
             {
+                App.Logger?.Warning("Name availability check failed: {Error}", ex.Message);
                 return false;
             }
         }
 
+        protected override void OnClosed(EventArgs e)
+        {
+            _checkCts?.Cancel();
+            _checkCts?.Dispose();
+            _checkCts = null;
+            base.OnClosed(e);
+        }
+
         private void BtnUseSuggestion_Click(object sender, RoutedEventArgs e)
         {
-            if (!string.IsNullOrWhiteSpace(SuggestedName))
-            {
-                TxtUsername.Text = SuggestedName;
-            }
+            // Legacy suggestion panel - always collapsed, kept for XAML compatibility
         }
 
         private void BtnCancel_Click(object sender, RoutedEventArgs e)

@@ -1,13 +1,9 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using ConditioningControlPanel.Models;
 using Microsoft.Win32;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel
 {
@@ -61,9 +57,6 @@ namespace ConditioningControlPanel
             RefreshPhraseList();
         }
 
-        private ContentMode CurrentMode =>
-            App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
-
         private void PopulateCategoryFilter()
         {
             CmbCategoryFilter.Items.Add(new ComboBoxItem { Content = "All Categories", Tag = "All Categories" });
@@ -78,7 +71,7 @@ namespace ConditioningControlPanel
             PhraseListPanel.Children.Clear();
             _allPhrases.Clear();
 
-            var allPhrases = App.CompanionPhrases?.GetAllPhrases(CurrentMode) ?? new List<CompanionPhrase>();
+            var allPhrases = App.CompanionPhrases?.GetAllPhrases() ?? new List<CompanionPhrase>();
             // Restore selection state from tracked IDs
             foreach (var p in allPhrases)
                 p.IsSelected = _selectedIds.Contains(p.Id);

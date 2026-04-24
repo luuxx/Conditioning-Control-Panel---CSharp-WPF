@@ -1,10 +1,5 @@
-using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -14,6 +9,7 @@ using NAudio.Wave;
 using LibVLCSharp.Shared;
 using LibVLCSharp.WPF;
 using ConditioningControlPanel.Services;
+using ConditioningControlPanel.Localization;
 using Screen = System.Windows.Forms.Screen;
 
 namespace ConditioningControlPanel
@@ -296,10 +292,10 @@ namespace ConditioningControlPanel
                     }
                 }
 
-                // Wait for LibVLC to stop rendering
+                // Wait for LibVLC to stop rendering (pump messages to avoid deadlock)
                 if (playersCopy.Count > 0)
                 {
-                    Thread.Sleep(100);
+                    WaitWithMessagePump(100);
                 }
 
                 // Detach VideoViews from players
@@ -319,10 +315,10 @@ namespace ConditioningControlPanel
                     }
                 }
 
-                // Small delay after detaching
+                // Small delay after detaching (pump messages to avoid deadlock)
                 if (windowsCopy.Count > 0)
                 {
-                    Thread.Sleep(50);
+                    WaitWithMessagePump(50);
                 }
 
                 // Close all windows
@@ -577,13 +573,22 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var resourceUri = new Uri("pack://application:,,,/Resources/bubble.png", UriKind.Absolute);
-                _bubbleImage = new BitmapImage();
-                _bubbleImage.BeginInit();
-                _bubbleImage.UriSource = resourceUri;
-                _bubbleImage.CacheOption = BitmapCacheOption.OnLoad;
-                _bubbleImage.EndInit();
-                _bubbleImage.Freeze();
+                var resolved = Services.ModResourceResolver.ResolveImage("bubble.png");
+                if (resolved is BitmapImage bmp)
+                {
+                    _bubbleImage = bmp.IsFrozen ? bmp : bmp.Clone();
+                    if (!_bubbleImage.IsFrozen) _bubbleImage.Freeze();
+                }
+                else
+                {
+                    var resourceUri = new Uri("pack://application:,,,/Resources/bubble.png", UriKind.Absolute);
+                    _bubbleImage = new BitmapImage();
+                    _bubbleImage.BeginInit();
+                    _bubbleImage.UriSource = resourceUri;
+                    _bubbleImage.CacheOption = BitmapCacheOption.OnLoad;
+                    _bubbleImage.EndInit();
+                    _bubbleImage.Freeze();
+                }
             }
             catch (Exception ex)
             {
@@ -697,12 +702,14 @@ namespace ConditioningControlPanel
         {
             try
             {
-                // Convert relative position to screen coordinates, then to WPF DIPs
+                // Convert relative position to screen coordinates (WPF DIPs)
+                // Use WorkingArea (excludes taskbar) and divide each component by DPI separately
                 var dpiScale = GetDpiForScreen(_screen);
-                var screenX = (_screen.Bounds.X + (relX * _screen.Bounds.Width) - size / 2) / dpiScale;
-                var screenY = (_screen.Bounds.Y + (relY * _screen.Bounds.Height) - size / 2) / dpiScale;
+                var area = _screen.WorkingArea;
+                var screenX = area.X / dpiScale + (relX * area.Width / dpiScale) - size / 2.0;
+                var screenY = area.Y / dpiScale + (relY * area.Height / dpiScale) - size / 2.0;
 
-                PlayPopSound();
+                // Sound plays on pop (in StartPopping), not on spawn
 
                 // Bubble is now a separate window (doesn't block video rendering)
                 var bubble = new CountBubble(_bubbleImage, size, screenX, screenY, _random,
@@ -839,7 +846,7 @@ namespace ConditioningControlPanel
                     try { player.Stop(); } catch { }
                 }
 
-                if (playersCopy.Count > 0) Thread.Sleep(100);
+                if (playersCopy.Count > 0) WaitWithMessagePump(100);
 
                 // Detach VideoViews
                 var windowsCopy = _allWindows.ToList();
@@ -853,7 +860,7 @@ namespace ConditioningControlPanel
                     catch { }
                 }
 
-                if (windowsCopy.Count > 0) Thread.Sleep(50);
+                if (windowsCopy.Count > 0) WaitWithMessagePump(50);
 
                 // Close windows
                 _allWindows.Clear();
@@ -909,9 +916,32 @@ namespace ConditioningControlPanel
             base.OnClosed(e);
         }
 
+        /// <summary>
+        /// Waits for the specified duration while pumping WPF messages,
+        /// preventing UI deadlocks with LibVLC callbacks.
+        /// </summary>
+        private static void WaitWithMessagePump(int milliseconds)
+        {
+            var endTime = DateTime.UtcNow.AddMilliseconds(milliseconds);
+            while (DateTime.UtcNow < endTime)
+            {
+                try
+                {
+                    Application.Current?.Dispatcher?.Invoke(
+                        DispatcherPriority.Background,
+                        new Action(() => { }));
+                }
+                catch
+                {
+                    return;
+                }
+                Thread.Sleep(10);
+            }
+        }
+
         #region Per-Screen DPI
 
-        private static double GetDpiForScreen(Screen screen)
+        internal static double GetDpiForScreen(Screen screen)
         {
             try
             {

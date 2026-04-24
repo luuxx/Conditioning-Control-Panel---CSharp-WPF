@@ -9,14 +9,14 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>ConditioningControlPanel</AssemblyName>
     <RootNamespace>ConditioningControlPanel</RootNamespace>
-    <Version>5.6.8</Version>
+    <Version>5.8.3</Version>
     <Company>CodeBambi</Company>
     <Product>Conditioning Control Panel</Product>
     <Description>A professional visual conditioning application with gamification features.</Description>
     <Copyright>Copyright © 2024-2026 CodeBambi</Copyright>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <PublishSingleFile>true</PublishSingleFile>
+    <PublishSingleFile>false</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
@@ -64,6 +64,7 @@
     <!-- Audio Control -->
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <PackageReference Include="OllamaSharp" Version="5.4.16" />
     
     <!-- Logging -->
     <PackageReference Include="Serilog" Version="3.1.1" />
@@ -98,22 +99,59 @@
 
     <!-- Auto-Update -->
     <PackageReference Include="Velopack" Version="0.0.1298" />
+
+    <!-- QR Code Generation (used by Remote Control tab for mobile pairing) -->
+    <PackageReference Include="QRCoder" Version="1.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Localization language files - must be on disk for File.ReadAllText() -->
+    <Content Include="Localization\Languages\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Localization language files -->
+    <Content Include="Localization\Languages\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>
     <Content Include="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Session files -->
+    <!-- Knowledge and Session files -->
+    <Content Include="assets\knowledge.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
     <Content Include="assets\sessions\*.session.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
   </ItemGroup>
+
+  <!-- WebView2Loader.dll must be on disk - the WebView2 SDK loads it outside .NET's single-file extraction -->
+  <Target Name="IncludeWebView2LoaderInPublish" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(NuGetPackageRoot)microsoft.web.webview2\1.0.2535.41\runtimes\win-x64\native\WebView2Loader.dll">
+        <RelativePath>WebView2Loader.dll</RelativePath>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
 
 
   <ItemGroup>
@@ -225,6 +263,12 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
+    <!-- Awareness Engine preset packs -->
+    <Content Include="Resources\AwarenessPresets\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
     <!-- Custom spirals folder -->
     <Content Include="Spirals\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -242,11 +286,15 @@
     <ItemGroup>
       <SoundFiles Include="$(ProjectDir)Resources\sounds\**\*" />
       <SubAudioFiles Include="$(ProjectDir)Resources\sub_audio\**\*" />
+      <AwarenessPresetFiles Include="$(ProjectDir)Resources\AwarenessPresets\**\*" />
       <SpiralFiles Include="$(ProjectDir)Spirals\**\*" />
+      <AssetFiles Include="$(ProjectDir)assets\**\*" />
     </ItemGroup>
     <Copy SourceFiles="@(SoundFiles)" DestinationFolder="$(PublishDir)Resources\sounds\%(RecursiveDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(SubAudioFiles)" DestinationFolder="$(PublishDir)Resources\sub_audio\%(RecursiveDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(AwarenessPresetFiles)" DestinationFolder="$(PublishDir)Resources\AwarenessPresets\%(RecursiveDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(SpiralFiles)" DestinationFolder="$(PublishDir)Spirals\%(RecursiveDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(AssetFiles)" DestinationFolder="$(PublishDir)assets\%(RecursiveDir)" SkipUnchangedFiles="true" />
     <Message Importance="High" Text="Copied content files to publish folder" />
   </Target>
 
@@ -258,8 +306,8 @@
     <ItemGroup>
       <LibVLCFiles Include="$(LibVLCPath)**\*" />
     </ItemGroup>
-    <Copy SourceFiles="@(LibVLCFiles)" DestinationFolder="$(PublishDir)libvlc\%(RecursiveDir)" SkipUnchangedFiles="true" />
-    <Message Importance="High" Text="Copied LibVLC files from $(LibVLCPath) to $(PublishDir)libvlc\" />
+    <Copy SourceFiles="@(LibVLCFiles)" DestinationFolder="$(PublishDir)libvlc\win-x64\%(RecursiveDir)" SkipUnchangedFiles="true" />
+    <Message Importance="High" Text="Copied LibVLC files from $(LibVLCPath) to $(PublishDir)libvlc\win-x64\" />
   </Target>
 
 </Project>

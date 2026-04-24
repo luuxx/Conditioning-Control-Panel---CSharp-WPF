@@ -1,9 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Threading;
+using ConditioningControlPanel.Helpers;
 
 namespace ConditioningControlPanel.Services
 {
@@ -24,7 +20,8 @@ namespace ConditioningControlPanel.Services
         PinkFilterPulse,
         BouncingText,
         BubbleCount,
-        WebVideo
+        WebVideo,
+        WallpaperShuffle
     }
 
     /// <summary>
@@ -96,6 +93,7 @@ namespace ConditioningControlPanel.Services
         private bool _bubblesPulseActive = false;
         private bool _bouncingTextPulseActive = false;
         private bool _webVideoActive = false; // Blocks all actions while web video plays fullscreen
+        private int _webVideoWatchdogGeneration = 0; // Invalidates stale watchdog callbacks
         private HashSet<string> _shownWebVideos = new(); // Track shown videos to avoid repeats
         // Separate generation counters for each pulse type to avoid cross-invalidation
         private int _spiralPulseGeneration = 0;
@@ -198,6 +196,12 @@ namespace ConditioningControlPanel.Services
                 "Sit back and let it sink in~",
                 "Watch and absorb~",
                 "Fullscreen time~"
+            }},
+            { AutonomyActionType.WallpaperShuffle, new[] {
+                "New scenery for you~",
+                "Let me redecorate~",
+                "A little change of view~",
+                "How about this one?~"
             }}
         };
 
@@ -287,13 +291,7 @@ namespace ConditioningControlPanel.Services
         {
             App.Logger?.Warning("AutonomyService: FORCE START called - bypassing all checks!");
 
-            if (Application.Current?.Dispatcher == null)
-            {
-                App.Logger?.Error("AutonomyService: ForceStart failed - no dispatcher");
-                return;
-            }
-
-            Application.Current.Dispatcher.Invoke(() =>
+            DispatcherHelper.RunOnUISync(() =>
             {
                 _isEnabled = true;
                 _forceTestMode = true; // Keep using 30s interval even after timer fires
@@ -335,16 +333,17 @@ namespace ConditioningControlPanel.Services
             }
 
             // CRITICAL: Must create timers on UI thread or they won't fire!
-            if (Application.Current?.Dispatcher == null)
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher == null || dispatcher.HasShutdownStarted)
             {
                 App.Logger?.Error("AutonomyService: Cannot start - Application.Dispatcher is null!");
                 return;
             }
 
-            if (!Application.Current.Dispatcher.CheckAccess())
+            if (!dispatcher.CheckAccess())
             {
                 App.Logger?.Information("AutonomyService: Start() called from non-UI thread, dispatching to UI thread...");
-                Application.Current.Dispatcher.Invoke(() => Start());
+                DispatcherHelper.RunOnUISync(() => Start());
                 return;
             }
 
@@ -389,6 +388,9 @@ namespace ConditioningControlPanel.Services
             _isEnabled = false;
             _forceTestMode = false; // Reset test mode
             StopAllTimers();
+
+            // Restore any active pulse settings (spiral, pink filter, etc.) before cleanup
+            CancelActivePulses();
 
             // Reset all pulse flags to prevent stale callbacks from running
             _spiralPulseActive = false;
@@ -607,12 +609,20 @@ namespace ConditioningControlPanel.Services
                 var nextRandomTick = _randomTimer?.IsEnabled == true ? "active" : "STOPPED";
                 var nextIdleTick = _idleTimer?.IsEnabled == true ? "active" : "STOPPED";
 
+                var timeSinceLast = (DateTime.Now - _lastActionTime).TotalSeconds;
+                var cooldownSec = settings?.AutonomyCooldownSeconds ?? 0;
+                var timeCooldownActive = timeSinceLast < cooldownSec;
+
                 App.Logger?.Information(
-                    "AutonomyService HEARTBEAT: Enabled={Enabled}, RandomTimer={Random}, IdleTimer={Idle}, Cooldown={Cooldown}, QueueBusy={Busy}",
+                    "AutonomyService HEARTBEAT: Enabled={Enabled}, RandomTimer={Random}, IdleTimer={Idle}, Cooldown={Cooldown}, TimeCooldown={TimeCooldown} ({Elapsed:F0}s/{Required}s), WebVideo={WebVideo}, QueueBusy={Busy}",
                     _isEnabled,
                     nextRandomTick,
                     nextIdleTick,
                     _isOnCooldown,
+                    timeCooldownActive,
+                    timeSinceLast,
+                    cooldownSec,
+                    _webVideoActive,
                     App.InteractionQueue?.IsBusy == true);
             };
             _heartbeatTimer.Start();
@@ -739,12 +749,18 @@ namespace ConditioningControlPanel.Services
                 return false;
             }
 
-            // Check cooldown
+            // Check time-based cooldown
             var settings = App.Settings?.Current;
             if (settings == null) return false;
 
             var timeSinceLast = (DateTime.Now - _lastActionTime).TotalSeconds;
-            return timeSinceLast >= settings.AutonomyCooldownSeconds;
+            if (timeSinceLast < settings.AutonomyCooldownSeconds)
+            {
+                App.Logger?.Debug("AutonomyService: CanTakeAction=false - time cooldown ({Elapsed:F0}s / {Required}s)",
+                    timeSinceLast, settings.AutonomyCooldownSeconds);
+                return false;
+            }
+            return true;
         }
 
         /// <summary>
@@ -828,33 +844,37 @@ namespace ConditioningControlPanel.Services
             if (settings.AutonomyCanTriggerSubliminal)
                 candidates.Add((AutonomyActionType.Subliminal, 25));
 
-            if (settings.AutonomyCanTriggerBrainDrain && settings.IsLevelUnlocked(70))
+            if (settings.AutonomyCanTriggerBrainDrain)
                 candidates.Add((AutonomyActionType.BrainDrainPulse, 10));
 
-            if (settings.AutonomyCanTriggerBubbles && settings.IsLevelUnlocked(20))
+            if (settings.AutonomyCanTriggerBubbles)
                 candidates.Add((AutonomyActionType.StartBubbles, 15));
 
             if (settings.AutonomyCanComment)
                 candidates.Add((AutonomyActionType.Comment, 20));
 
             // New progression features
-            if (settings.AutonomyCanTriggerMindWipe && settings.IsLevelUnlocked(80))
+            if (settings.AutonomyCanTriggerMindWipe)
                 candidates.Add((AutonomyActionType.MindWipe, 15));
 
-            if (settings.AutonomyCanTriggerLockCard && settings.IsLevelUnlocked(35))
+            if (settings.AutonomyCanTriggerLockCard)
                 candidates.Add((AutonomyActionType.LockCard, 10)); // Lower weight - very disruptive
 
             // Note: SpiralPulse removed from autonomy - can interfere with user experience
 
-            if (settings.AutonomyCanTriggerPinkFilter && settings.IsLevelUnlocked(10))
+            if (settings.AutonomyCanTriggerPinkFilter)
                 candidates.Add((AutonomyActionType.PinkFilterPulse, 20));
 
-            if (settings.AutonomyCanTriggerBouncingText && settings.IsLevelUnlocked(60))
+            if (settings.AutonomyCanTriggerBouncingText)
                 candidates.Add((AutonomyActionType.BouncingText, 15));
 
             // Web video - plays random HypnoTube video fullscreen in browser
             if (settings.AutonomyCanTriggerWebVideo && !_webVideoActive)
                 candidates.Add((AutonomyActionType.WebVideo, 20));
+
+            // Wallpaper shuffle - subtle desktop wallpaper change
+            if (settings.AutonomyCanTriggerWallpaper)
+                candidates.Add((AutonomyActionType.WallpaperShuffle, 10));
 
             // Note: BubbleCount removed from autonomy - too disruptive and unreliable
 
@@ -954,15 +974,9 @@ namespace ConditioningControlPanel.Services
 
         private void PerformAction(AutonomyActionType actionType, AutonomyTriggerSource source, string? context)
         {
-            if (Application.Current?.Dispatcher == null)
-            {
-                App.Logger?.Warning("AutonomyService: PerformAction failed - Dispatcher is null");
-                return;
-            }
-
             App.Logger?.Information("AutonomyService: PerformAction starting - {Action}", actionType);
 
-            Application.Current.Dispatcher.BeginInvoke(() =>
+            DispatcherHelper.RunOnUI(() =>
             {
                 try
                 {
@@ -1071,6 +1085,37 @@ namespace ConditioningControlPanel.Services
                         case AutonomyActionType.WebVideo:
                             TriggerWebVideoFullscreen();
                             break;
+
+                        case AutonomyActionType.WallpaperShuffle:
+                            if (App.Wallpaper != null)
+                            {
+                                if (App.Wallpaper.IsActive)
+                                {
+                                    // Already active — just shuffle
+                                    App.Wallpaper.Shuffle();
+                                }
+                                else
+                                {
+                                    // Pulse: activate, wait 30s, deactivate (unless user toggled it on manually)
+                                    App.Wallpaper.Activate();
+                                    var userEnabled = App.Settings?.Current?.WallpaperEnabled == true;
+                                    if (!userEnabled)
+                                    {
+                                        _ = Task.Delay(30000).ContinueWith(_ =>
+                                        {
+                                            try
+                                            {
+                                                if (Application.Current?.Dispatcher == null) return;
+                                                // Only deactivate if user hasn't manually enabled it since
+                                                if (App.Settings?.Current?.WallpaperEnabled != true)
+                                                    App.Wallpaper?.Deactivate();
+                                            }
+                                            catch { }
+                                        });
+                                    }
+                                }
+                            }
+                            break;
                     }
 
                     App.Logger?.Information("Autonomy: Performed {Action} (Source: {Source})",
@@ -1170,6 +1215,18 @@ namespace ConditioningControlPanel.Services
 
             // Mark video as active - blocks other autonomy actions
             _webVideoActive = true;
+            var watchdogGen = ++_webVideoWatchdogGeneration;
+
+            // Safety watchdog: auto-reset after 30 seconds if OnWebVideoEnded never fires
+            // (page should load within ~10s; 30s is generous but doesn't block autonomy for ages)
+            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ =>
+            {
+                if (_webVideoActive && _webVideoWatchdogGeneration == watchdogGen)
+                {
+                    _webVideoActive = false;
+                    App.Logger?.Warning("AutonomyService: Web video watchdog fired - resetting stuck _webVideoActive after 30s");
+                }
+            });
 
             // Navigate to video with fullscreen autoplay
             if (mainWindow.NavigateToUrlInBrowser(videoUrl, autoPlayFullscreen: true))
@@ -1227,11 +1284,10 @@ namespace ConditioningControlPanel.Services
         /// </summary>
         private void PulseSpiralOverlay()
         {
-            // Skip if session engine is running - it controls overlays itself
-            // (Flash service running indicates the engine is active)
-            if (App.Flash?.IsRunning == true)
+            // Skip if AI session is running - it controls overlays itself
+            if (App.IsSessionRunning)
             {
-                App.Logger?.Information("AutonomyService: Spiral pulse skipped - session engine is running");
+                App.Logger?.Information("AutonomyService: Spiral pulse skipped - AI session is running");
                 return;
             }
 
@@ -1335,11 +1391,10 @@ namespace ConditioningControlPanel.Services
         /// </summary>
         private void PulsePinkFilter()
         {
-            // Skip if session engine is running - it controls overlays itself
-            // (Flash service running indicates the engine is active)
-            if (App.Flash?.IsRunning == true)
+            // Skip if AI session is running - it controls overlays itself
+            if (App.IsSessionRunning)
             {
-                App.Logger?.Information("AutonomyService: Pink filter pulse skipped - session engine is running");
+                App.Logger?.Information("AutonomyService: Pink filter pulse skipped - AI session is running");
                 return;
             }
 
@@ -1488,10 +1543,7 @@ namespace ConditioningControlPanel.Services
                 var response = await App.Ai!.GetBambiReplyAsync(prompt);
                 if (!string.IsNullOrEmpty(response))
                 {
-                    Application.Current?.Dispatcher?.BeginInvoke(() =>
-                    {
-                        App.AvatarWindow?.GigglePriority(response, false);
-                    });
+                    AvatarTubeWindow.ShowAvatarLine(response, false);
                 }
             }
             catch (Exception ex)
@@ -1517,7 +1569,7 @@ namespace ConditioningControlPanel.Services
 
             var phrase = phrases[_random.Next(phrases.Length)];
 
-            App.AvatarWindow?.GigglePriority(phrase, false);
+            AvatarTubeWindow.ShowAvatarLine(phrase, false);
             AnnouncementMade?.Invoke(this, phrase);
         }
 

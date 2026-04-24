@@ -1,8 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Windows;
 using System.Windows.Threading;
+using ConditioningControlPanel.Helpers;
 
 namespace ConditioningControlPanel.Services
 {
@@ -25,13 +22,6 @@ namespace ConditioningControlPanel.Services
             
             var settings = App.Settings.Current;
 
-            // Check level requirement
-            if (!settings.IsLevelUnlocked(35))
-            {
-                App.Logger?.Information("LockCardService: Level {Level} is below 35, not available", settings.PlayerLevel);
-                return;
-            }
-            
             if (!settings.LockCardEnabled)
             {
                 App.Logger?.Information("LockCardService: Disabled in settings");
@@ -84,15 +74,15 @@ namespace ConditioningControlPanel.Services
             }
             
             // Check if enabled
-            if (!settings.LockCardEnabled || !settings.IsLevelUnlocked(35)) return;
+            if (!settings.LockCardEnabled) return;
             
             // Show the lock card
             ShowLockCard();
         }
 
-        public void ShowLockCard()
+        public void ShowLockCard(string? customPhrase = null, int customRepeats = -1, bool customStrict = false, bool isTest = false)
         {
-            Application.Current.Dispatcher.Invoke(() =>
+            DispatcherHelper.RunOnUISync(() =>
             {
                 // Prevent stacking multiple lock cards
                 if (Application.Current.Windows.OfType<LockCardWindow>().Any())
@@ -141,12 +131,16 @@ namespace ConditioningControlPanel.Services
                     }
 
                     // Pick a random phrase
-                    var phrase = enabledPhrases[_random.Next(enabledPhrases.Count)];
+                    var phrase = customPhrase ?? enabledPhrases[_random.Next(enabledPhrases.Count)];
                     var repeats = settings.LockCardRepeats;
+                    if(customRepeats >= 0)
+                        repeats = customRepeats;
                     var strict = settings.LockCardStrict;
+                    if(customStrict)
+                        strict = customStrict;
 
                     // Show on all monitors with synced input
-                    LockCardWindow.ShowOnAllMonitors(phrase, repeats, strict);
+                    LockCardWindow.ShowOnAllMonitors(phrase, repeats, strict, isTest);
 
                     _lastShown = DateTime.Now;
 
@@ -165,7 +159,7 @@ namespace ConditioningControlPanel.Services
         /// </summary>
         public void TestLockCard()
         {
-            ShowLockCard();
+            ShowLockCard(isTest: true);
         }
 
         public void Dispose()

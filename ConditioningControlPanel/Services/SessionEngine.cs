@@ -1,11 +1,6 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using ConditioningControlPanel.Models;
@@ -59,7 +54,6 @@ namespace ConditioningControlPanel.Services
         private double _currentFlashOpacity;
         private double _currentPinkOpacity;
         private double _currentSpiralOpacity;
-        private double _currentBrainDrainIntensity;
         private bool _brainDrainActive;
 
         // Randomized start times (±3 min from session defaults)
@@ -77,14 +71,13 @@ namespace ConditioningControlPanel.Services
 
         // Reference to main window for service access
         private readonly MainWindow _mainWindow;
-        private bool _mainWindowClosed = false;
 
         public bool IsRunning => _isRunning;
 
         /// <summary>
         /// Safely check if main window is still valid and available
         /// </summary>
-        private bool IsMainWindowValid => _mainWindow != null && !_mainWindowClosed && _mainWindow.IsLoaded;
+        private bool IsMainWindowValid => _mainWindow != null && _mainWindow.IsLoaded;
         public bool IsPaused => _isPaused;
         public int CurrentPhaseIndex => _currentPhaseIndex;
         public int PauseCount => _pauseCount;
@@ -235,6 +228,9 @@ namespace ConditioningControlPanel.Services
             // Stop Mind Wipe
             App.MindWipe?.Stop();
 
+            // Stop Pop Quiz
+            App.PopQuiz?.Stop();
+
             // Stop Bubbles
             App.Bubbles?.Stop();
 
@@ -244,6 +240,9 @@ namespace ConditioningControlPanel.Services
                 App.BrainDrain?.Stop();
                 _brainDrainActive = false;
             }
+
+            // Force-unduck audio before restoring settings (subliminals/flashes may have left it ducked)
+            App.Audio?.ForceUnduck();
 
             // Restore original settings
             RestoreSettings();
@@ -263,14 +262,20 @@ namespace ConditioningControlPanel.Services
             if (completed && _currentSession != null)
             {
                 // Calculate XP with pause penalty (100 XP per pause)
-                App.Logger?.Debug("Session XP calculation: Session={Name}, Source={Source}, BonusXP={BonusXP}, Penalty={Penalty}",
-                    _currentSession.Name, _currentSession.Source, _currentSession.BonusXP, XPPenalty);
+                App.Logger?.Debug("Session XP calculation: Session={Name}, Source={Source}, BonusXP={BonusXP}, Penalty={Penalty}, Duration={Duration:F1}min",
+                    _currentSession.Name, _currentSession.Source, _currentSession.BonusXP, XPPenalty, finalElapsedTime.TotalMinutes);
 
-                int baseXP = Math.Max(0, _currentSession.BonusXP - XPPenalty);
+                int baseXP = Math.Max(0, Math.Min(2500, _currentSession.BonusXP) - XPPenalty);
 
-                // Apply level-based XP multiplier for high-level players
-                double multiplier = App.Progression?.GetSessionXPMultiplier(App.Settings.Current.PlayerLevel) ?? 1.0;
-                int finalXP = (int)Math.Round(baseXP * multiplier);
+                // Apply level-based XP multiplier
+                int level = App.Settings?.Current?.PlayerLevel ?? 1;
+                double multiplier = App.Progression?.GetSessionXPMultiplier(level) ?? 1.0;
+
+                // Duration bonus: reward time investment (sessions under 2 min don't count)
+                double durationMinutes = Math.Max(0, finalElapsedTime.TotalMinutes - 2);
+                int durationBonus = (int)Math.Round(durationMinutes * (8 + level * 0.15));
+
+                int finalXP = Math.Max(0, (int)Math.Round(baseXP * multiplier) + durationBonus);
 
                 // Track achievement using settings captured at session START (not current settings).
                 // AutonomyService.TriggerVideoSafely() temporarily sets StrictLockEnabled=false mid-session,
@@ -337,6 +342,7 @@ namespace ConditioningControlPanel.Services
             App.Subliminal?.Stop();
             App.Bubbles?.Stop();
             App.LockCard?.Stop();
+            App.PopQuiz?.Stop();
             App.BubbleCount?.Stop();
             App.BouncingText?.Stop();
             App.MindWipe?.Stop();
@@ -368,10 +374,12 @@ namespace ConditioningControlPanel.Services
             if (settings.FlashEnabled) App.Flash?.Start();
             if (settings.SubliminalEnabled) App.Subliminal?.Start();
             if (settings.BubblesEnabled) App.Bubbles?.Start();
-            if (settings.LockCardEnabled && App.Settings.Current.IsLevelUnlocked(35)) App.LockCard?.Start();
-            if (settings.BubbleCountEnabled && App.Settings.Current.IsLevelUnlocked(50)) App.BubbleCount?.Start();
-            if (settings.BouncingTextEnabled && App.Settings.Current.IsLevelUnlocked(60)) App.BouncingText?.Start();
-            if (settings.MindWipeEnabled && App.Settings.Current.IsLevelUnlocked(75))
+            if (settings.LockCardEnabled) App.LockCard?.Start();
+            if (App.Settings.Current.PopQuizEnabled) App.PopQuiz?.Start();
+            if (App.Settings.Current.PopQuizEnabled) App.PopQuiz?.Start();
+            if (settings.BubbleCountEnabled) App.BubbleCount?.Start();
+            if (settings.BouncingTextEnabled) App.BouncingText?.Start();
+            if (settings.MindWipeEnabled)
                 App.MindWipe?.Start(settings.MindWipeBaseMultiplier, settings.MindWipeVolume / 100.0);
             // DISABLED: Brain Drain is up for rework due to performance issues
             // if (_brainDrainActive && App.Settings.Current.IsLevelUnlocked(70)) App.BrainDrain?.Start();
@@ -504,7 +512,7 @@ namespace ConditioningControlPanel.Services
                     if (App.Settings.Current.BubblesFrequency != currentBubbleFreq)
                     {
                         App.Settings.Current.BubblesFrequency = currentBubbleFreq;
-                        App.Bubbles.RefreshFrequency();
+                        App.Bubbles?.RefreshFrequency();
                     }
                 }
             }
@@ -570,7 +578,7 @@ namespace ConditioningControlPanel.Services
                 if (elapsedMinutes >= settings.BubblesStartMinute)
                 {
                     App.Settings.Current.BubblesEnabled = true;
-                    App.Bubbles.Start(bypassLevelCheck: true); // Bypass level check during sessions
+                    App.Bubbles?.Start(bypassLevelCheck: true); // Bypass level check during sessions
                 }
             }
 
@@ -748,12 +756,19 @@ namespace ConditioningControlPanel.Services
             _savedSettings.VideosPerHour = current.VideosPerHour;
             _savedSettings.LockCardEnabled = current.LockCardEnabled;
             _savedSettings.LockCardFrequency = current.LockCardFrequency;
+
+            // Save lock card pool (deep copy)
+            _savedLockCardPool = new Dictionary<string, bool>(current.LockCardPhrases);
+
+            _savedSettings.PopQuizEnabled = current.PopQuizEnabled;
+            _savedSettings.PopQuizFrequency = current.PopQuizFrequency;
             _savedSettings.BubbleCountEnabled = current.BubbleCountEnabled;
             _savedSettings.BubbleCountFrequency = current.BubbleCountFrequency;
         }
         
         private Dictionary<string, bool>? _savedBouncingTextPool;
         private Dictionary<string, bool>? _savedSubliminalPool;
+        private Dictionary<string, bool>? _savedLockCardPool;
         
         private void ApplySessionSettings(SessionSettings settings)
         {
@@ -798,11 +813,10 @@ namespace ConditioningControlPanel.Services
                         current.SubliminalPool[key] = false;
                     }
 
-                    // Add/enable session phrases (mode-aware: transform Bambi triggers for SissyHypno mode)
-                    var contentMode = App.Settings?.Current?.ContentMode ?? ContentMode.BambiSleep;
+                    // Add/enable session phrases (mod-aware: transform triggers for active mod)
                     foreach (var phrase in settings.SubliminalPhrases)
                     {
-                        var modePhrase = Session.MakeModeAware(phrase, contentMode);
+                        var modePhrase = App.Mods?.MakeModAware(phrase) ?? phrase;
                         current.SubliminalPool[modePhrase] = true;
                     }
 
@@ -858,15 +872,15 @@ namespace ConditioningControlPanel.Services
                 }
                 
                 // Start bouncing text (bypass level requirement during sessions)
-                App.BouncingText.Stop(); // Stop first to reset state
-                App.BouncingText.Start(bypassLevelCheck: true);
+                App.BouncingText?.Stop(); // Stop first to reset state
+                App.BouncingText?.Start(bypassLevelCheck: true);
                 App.Logger?.Information("Session: Started bouncing text with phrases: {Phrases}",
                     string.Join(", ", settings.BouncingTextPhrases));
             }
             else
             {
                 // Stop bouncing text if session disables it
-                App.BouncingText.Stop();
+                App.BouncingText?.Stop();
             }
             
             // Pink Filter (delayed start - don't enable yet if delayed)
@@ -933,11 +947,41 @@ namespace ConditioningControlPanel.Services
                 {
                     current.LockCardFrequency = settings.LockCardFrequency.Value;
                 }
+
+                // Override lock card pool with session-specific phrases
+                if (settings.LockCardPhrases.Count > 0)
+                {
+                    var keys = current.LockCardPhrases.Keys.ToList();
+                    foreach (var key in keys)
+                    {
+                        current.LockCardPhrases[key] = false;
+                    }
+
+                    foreach (var phrase in settings.LockCardPhrases)
+                    {
+                        var modePhrase = App.Mods?.MakeModAware(phrase) ?? phrase;
+                        current.LockCardPhrases[modePhrase] = true;
+                    }
+
+                    App.Logger?.Information("Session: Using lock card phrases: {Phrases}",
+                        string.Join(", ", settings.LockCardPhrases));
+                }
+
                 App.LockCard?.Start();
             }
             else
             {
                 App.LockCard?.Stop();
+            }
+
+            // Pop quiz is a user-level toggle (AppSettings), not per-session
+            if (App.Settings.Current.PopQuizEnabled)
+            {
+                App.PopQuiz?.Start();
+            }
+            else
+            {
+                App.PopQuiz?.Stop();
             }
 
             current.BubbleCountEnabled = settings.BubbleCountEnabled;
@@ -1026,6 +1070,20 @@ namespace ConditioningControlPanel.Services
             current.VideosPerHour = _savedSettings.VideosPerHour;
             current.LockCardEnabled = _savedSettings.LockCardEnabled;
             current.LockCardFrequency = _savedSettings.LockCardFrequency;
+
+            // Restore lock card pool
+            if (_savedLockCardPool != null)
+            {
+                current.LockCardPhrases.Clear();
+                foreach (var kvp in _savedLockCardPool)
+                {
+                    current.LockCardPhrases[kvp.Key] = kvp.Value;
+                }
+                _savedLockCardPool = null;
+            }
+
+            current.PopQuizEnabled = _savedSettings.PopQuizEnabled;
+            current.PopQuizFrequency = _savedSettings.PopQuizFrequency;
             current.BubbleCountEnabled = _savedSettings.BubbleCountEnabled;
             current.BubbleCountFrequency = _savedSettings.BubbleCountFrequency;
 
@@ -1063,11 +1121,14 @@ namespace ConditioningControlPanel.Services
                 {
                     try
                     {
-                        gifUri = new Uri("pack://application:,,,/Resources/spiral.gif", UriKind.Absolute);
+                        gifUri = new Uri(ModResourceResolver.ResolveUri("spirals/spiral.gif"), UriKind.Absolute);
                         var resourceInfo = Application.GetResourceStream(gifUri);
                         if (resourceInfo?.Stream != null)
                         {
-                            img = System.Drawing.Image.FromStream(resourceInfo.Stream);
+                            using (resourceInfo.Stream)
+                            {
+                                img = System.Drawing.Image.FromStream(resourceInfo.Stream);
+                            }
                             App.Logger?.Information("Corner GIF not set or found, defaulting to spiral.gif resource");
                         }
                     }
@@ -1163,12 +1224,22 @@ namespace ConditioningControlPanel.Services
                 AnimationBehavior.SetSourceUri(imageElement, gifUri);
                 AnimationBehavior.SetRepeatBehavior(imageElement, System.Windows.Media.Animation.RepeatBehavior.Forever);
 
+                // Catch GIF rendering errors gracefully instead of letting them crash the app
+                AnimationBehavior.AddErrorHandler(imageElement, (s, e) =>
+                {
+                    App.Logger?.Warning("Corner GIF animation error ({Kind}): {Error}",
+                        e.Kind, e.Exception?.Message);
+                });
+
                 _cornerGifImage = imageElement;
                 _cornerGifWindow.Content = imageElement;
-                _cornerGifWindow.Show();
 
-                // Make click-through
-                MakeWindowClickThrough(_cornerGifWindow);
+                // Hook SourceInitialized BEFORE Show() to safely get the hwnd for click-through
+                _cornerGifWindow.SourceInitialized += (s, e) =>
+                {
+                    MakeWindowClickThrough(_cornerGifWindow);
+                };
+                _cornerGifWindow.Show();
 
                 App.Logger?.Information("Corner GIF shown at {Position}: {Path} (pos: {Left},{Top}, size: {Width}x{Height}px, opacity: {Opacity}%)",
                     settings.CornerGifPosition, gifUri.ToString(), left, top, (int)windowWidth, (int)windowHeight, settings.CornerGifOpacity);
@@ -1282,6 +1353,11 @@ namespace ConditioningControlPanel.Services
         private void MakeWindowClickThrough(Window window)
         {
             var hwnd = new System.Windows.Interop.WindowInteropHelper(window).Handle;
+            if (hwnd == IntPtr.Zero)
+            {
+                App.Logger?.Warning("MakeWindowClickThrough: hwnd is zero, window not yet initialized");
+                return;
+            }
             var extendedStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
             // Add TOOLWINDOW to hide from alt-tab, TRANSPARENT and LAYERED for click-through
             SetWindowLong(hwnd, GWL_EXSTYLE, extendedStyle | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOOLWINDOW);

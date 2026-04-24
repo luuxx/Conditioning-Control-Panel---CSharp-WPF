@@ -1,10 +1,6 @@
-using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Media;
 using System.Text.Json;
-using System.Windows;
 using System.Windows.Threading;
 using ConditioningControlPanel.Models;
 
@@ -58,6 +54,7 @@ public class QuestService : IDisposable
     // Accumulators for fractional minutes (time-based quests are called with small increments)
     private double _spiralMinutesAccumulator;
     private double _pinkFilterMinutesAccumulator;
+    private double _brainDrainMinutesAccumulator;
     private double _videoMinutesAccumulator;
     private double _combinedMinutesAccumulator;
 
@@ -88,6 +85,7 @@ public class QuestService : IDisposable
                 _isDirty = false;
                 var json = JsonSerializer.Serialize(Progress, new JsonSerializerOptions { WriteIndented = true });
                 var path = _progressPath;
+                var tmpPath = path + ".tmp";
                 _ = Task.Run(() =>
                 {
                     try
@@ -95,7 +93,9 @@ public class QuestService : IDisposable
                         var dir = Path.GetDirectoryName(path);
                         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                             Directory.CreateDirectory(dir);
-                        File.WriteAllText(path, json);
+                        // Atomic write: write to .tmp first, then rename
+                        File.WriteAllText(tmpPath, json);
+                        File.Move(tmpPath, path, overwrite: true);
                     }
                     catch (Exception ex)
                     {
@@ -110,9 +110,11 @@ public class QuestService : IDisposable
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
         _refreshTimer.Tick += (s, e) =>
         {
-            if (Progress.IsDailyExpired() || Progress.IsWeeklyExpired())
+            var dailyExpired = Progress.IsDailyExpired();
+            var weeklyExpired = Progress.IsWeeklyExpired();
+            if (dailyExpired || weeklyExpired)
             {
-                App.Logger?.Information("Quest day/week rollover detected, refreshing quests");
+                App.Logger?.Information("Quest rollover detected (daily={Daily}, weekly={Weekly})", dailyExpired, weeklyExpired);
                 CheckAndGenerateQuests();
                 QuestsRefreshed?.Invoke(this, EventArgs.Empty);
             }
@@ -128,17 +130,41 @@ public class QuestService : IDisposable
 
     private QuestProgress LoadProgress()
     {
-        try
+        var tmpPath = _progressPath + ".tmp";
+
+        // Try loading from main file first
+        if (File.Exists(_progressPath))
         {
-            if (File.Exists(_progressPath))
+            try
             {
                 var json = File.ReadAllText(_progressPath);
                 return JsonSerializer.Deserialize<QuestProgress>(json) ?? new QuestProgress();
             }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Quest progress file corrupted, attempting recovery from .tmp");
+            }
         }
-        catch (Exception ex)
+
+        // Main file missing or corrupt — try recovering from .tmp
+        if (File.Exists(tmpPath))
         {
-            App.Logger?.Error(ex, "Failed to load quest progress");
+            try
+            {
+                var json = File.ReadAllText(tmpPath);
+                var progress = JsonSerializer.Deserialize<QuestProgress>(json);
+                if (progress != null)
+                {
+                    App.Logger?.Warning("Recovered quest progress from .tmp file");
+                    // Promote .tmp to main file so future loads succeed normally
+                    try { File.Move(tmpPath, _progressPath, overwrite: true); } catch { }
+                    return progress;
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "Failed to recover quest progress from .tmp file");
+            }
         }
 
         return new QuestProgress();
@@ -155,7 +181,11 @@ public class QuestService : IDisposable
             }
 
             var json = JsonSerializer.Serialize(Progress, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_progressPath, json);
+
+            // Atomic write: write to .tmp first, then rename to prevent corruption on crash
+            var tmpPath = _progressPath + ".tmp";
+            File.WriteAllText(tmpPath, json);
+            File.Move(tmpPath, _progressPath, overwrite: true);
         }
         catch (Exception ex)
         {
@@ -316,20 +346,11 @@ public class QuestService : IDisposable
     }
 
     /// <summary>
-    /// Check if a quest category's feature is unlocked at the player's current level.
+    /// Feature level gating has been removed — every quest category is available from level 1.
     /// </summary>
     private static bool IsQuestAvailableForLevel(QuestCategory category)
     {
-        var settings = App.Settings?.Current;
-        if (settings == null) return true;
-
-        return category switch
-        {
-            QuestCategory.Bubbles => settings.IsLevelUnlocked(20),
-            QuestCategory.LockCard => settings.IsLevelUnlocked(35),
-            QuestCategory.BubbleCount => settings.IsLevelUnlocked(50),
-            _ => true
-        };
+        return true;
     }
 
     /// <summary>
@@ -337,6 +358,13 @@ public class QuestService : IDisposable
     /// </summary>
     public void ForceRegenerateWeeklyQuest()
     {
+        // Don't regenerate if current quest is still within this week
+        if (Progress.WeeklyQuest != null && !Progress.IsWeeklyExpired())
+        {
+            App.Logger?.Information("Skipping weekly quest force-regeneration - quest still within current week");
+            return;
+        }
+
         var oldId = Progress.WeeklyQuest?.DefinitionId;
         GenerateNewWeeklyQuest(excludeId: oldId);
         _isDirty = true;
@@ -360,7 +388,7 @@ public class QuestService : IDisposable
 
     private static DateTime GetStartOfWeek(DateTime date)
     {
-        int diff = (7 + (date.DayOfWeek - DayOfWeek.Sunday)) % 7;
+        int diff = (7 + (date.DayOfWeek - DayOfWeek.Monday)) % 7;
         return date.AddDays(-diff).Date;
     }
 
@@ -542,6 +570,28 @@ public class QuestService : IDisposable
     }
 
     /// <summary>
+    /// Track BrainDrain overlay time (called periodically with elapsed minutes)
+    /// </summary>
+    public void TrackBrainDrainMinutes(double minutes)
+    {
+        // BrainDrain feeds into Combined category only (no dedicated BrainDrain quest category)
+        _brainDrainMinutesAccumulator += minutes;
+        _combinedMinutesAccumulator += minutes;
+
+        if (_brainDrainMinutesAccumulator >= 1.0)
+        {
+            _brainDrainMinutesAccumulator -= (int)Math.Floor(_brainDrainMinutesAccumulator);
+        }
+
+        if (_combinedMinutesAccumulator >= 1.0)
+        {
+            int wholeMinutes = (int)Math.Floor(_combinedMinutesAccumulator);
+            UpdateQuestProgress(QuestCategory.Combined, wholeMinutes);
+            _combinedMinutesAccumulator -= wholeMinutes;
+        }
+    }
+
+    /// <summary>
     /// Track bubble popped
     /// </summary>
     public void TrackBubblePopped()
@@ -587,6 +637,11 @@ public class QuestService : IDisposable
     public void TrackBubbleCountCompleted()
     {
         UpdateQuestProgress(QuestCategory.BubbleCount, 1);
+    }
+
+    public void TrackMantraCompleted()
+    {
+        UpdateQuestProgress(QuestCategory.Mantra, 1);
     }
 
     /// <summary>
@@ -723,37 +778,41 @@ public class QuestService : IDisposable
                 Progress.DailyQuestCompletionDates.Add(today);
             }
 
-            // Trim entries older than 30 days
-            var cutoff = today.AddDays(-30);
+            // Trim entries older than 90 days (matches cloud sync window)
+            var cutoff = today.AddDays(-90);
             Progress.DailyQuestCompletionDates.RemoveAll(d => d.Date < cutoff);
+            App.Settings?.Current?.StreakShieldUsedDates?.RemoveAll(d => d.Date < cutoff);
 
-            // Update streak in settings
-            var settings = App.Settings?.Current;
-            if (settings != null)
+            // Apply streak shield if yesterday is missing (would break streak)
+            var yesterday = today.AddDays(-1);
+            if (!Progress.DailyQuestCompletionDates.Any(d => d.Date == yesterday)
+                && App.Settings?.Current?.LastDailyQuestDate?.Date < yesterday)
             {
-                if (settings.LastDailyQuestDate?.Date == today.AddDays(-1))
+                if (App.SkillTree?.UseStreakShield() == true)
                 {
-                    settings.DailyQuestStreak++;
+                    Progress.DailyQuestCompletionDates.Add(yesterday);
+                    var settings = App.Settings?.Current;
+                    if (settings != null && !settings.StreakShieldUsedDates.Contains(yesterday))
+                        settings.StreakShieldUsedDates.Add(yesterday);
+                    App.Logger?.Information("Quest streak shield used! Filled gap at {Date}", yesterday);
                 }
-                else if (settings.LastDailyQuestDate?.Date != today)
-                {
-                    settings.DailyQuestStreak = 1;
-                }
-                settings.LastDailyQuestDate = today;
             }
+
+            // Recalculate streak from the calendar (single source of truth)
+            RecalculateStreak();
         }
         else
         {
             Progress.TotalWeeklyQuestsCompleted++;
         }
 
-        // Scale XP reward based on player level (+2% per level)
+        // Scale XP reward based on player level (+4% per level)
         var playerLevel = App.Settings?.Current?.PlayerLevel ?? 1;
         var betterQuestsMultiplier = App.SkillTree?.GetRerollBonusMultiplier() ?? 1.0;
         // Quest streak bonus: +3% per consecutive day
         var questStreak = App.Settings?.Current?.DailyQuestStreak ?? 0;
         var streakMultiplier = 1.0 + (questStreak * 0.03);
-        var scaledXP = (int)Math.Round(def.XPReward * (1 + playerLevel * 0.02) * betterQuestsMultiplier * streakMultiplier);
+        var scaledXP = (int)Math.Round(def.XPReward * (1 + playerLevel * 0.04) * betterQuestsMultiplier * streakMultiplier);
 
         Progress.TotalXPFromQuests += scaledXP;
 
@@ -817,18 +876,71 @@ public class QuestService : IDisposable
     #endregion
 
     /// <summary>
+    /// Recalculate daily quest streak from the completion calendar (single source of truth).
+    /// Replaces fragile LastDailyQuestDate-based comparison.
+    /// </summary>
+    public void RecalculateStreak()
+    {
+        var settings = App.Settings?.Current;
+        if (settings == null) return;
+
+        var completedDates = new HashSet<DateTime>(
+            Progress.DailyQuestCompletionDates.Select(d => d.Date));
+
+        // Also include streak-shielded dates as "completed" for streak calculation
+        if (settings.StreakShieldUsedDates != null)
+        {
+            foreach (var shieldDate in settings.StreakShieldUsedDates)
+                completedDates.Add(shieldDate.Date);
+        }
+
+        int streak = 0;
+        var checkDate = DateTime.Today;
+
+        // If today isn't completed yet, start checking from yesterday
+        if (!completedDates.Contains(checkDate))
+            checkDate = checkDate.AddDays(-1);
+
+        while (completedDates.Contains(checkDate))
+        {
+            streak++;
+            checkDate = checkDate.AddDays(-1);
+        }
+
+        // Never decrease the streak from recalculation — dates may have been
+        // trimmed or lost during sync. The streak was earned, keep it.
+        if (streak < settings.DailyQuestStreak)
+        {
+            App.Logger?.Debug("RecalculateStreak: calendar shows {Calculated} but current streak is {Current} — keeping higher value",
+                streak, settings.DailyQuestStreak);
+        }
+        else
+        {
+            settings.DailyQuestStreak = streak;
+        }
+
+        // Keep LastDailyQuestDate in sync with actual quest completions (not shield fills)
+        if (Progress.DailyQuestCompletionDates.Count > 0)
+            settings.LastDailyQuestDate = Progress.DailyQuestCompletionDates.Max();
+    }
+
+    /// <summary>
     /// Reset all quest progress (used on logout to clear account-specific data)
     /// </summary>
-    public void ResetProgress()
+    /// <param name="generateQuests">If false, skip quest generation (caller will generate after cloud sync)</param>
+    public void ResetProgress(bool generateQuests = true)
     {
         Progress = new QuestProgress();
         _isDirty = false;
         Save();
 
-        // Generate fresh quests so the UI doesn't show "Loading..."
-        CheckAndGenerateQuests();
+        if (generateQuests)
+        {
+            // Generate fresh quests so the UI doesn't show "Loading..."
+            CheckAndGenerateQuests();
+        }
 
-        App.Logger?.Information("QuestService progress reset");
+        App.Logger?.Information("QuestService progress reset (generateQuests={Generate})", generateQuests);
     }
 
     #region IDisposable

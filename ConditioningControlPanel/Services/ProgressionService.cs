@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel.Services
 {
@@ -92,7 +93,6 @@ namespace ConditioningControlPanel.Services
                 xpNeeded = GetXPForLevel(settings.PlayerLevel);
                 LevelUp?.Invoke(this, settings.PlayerLevel);
                 _ = App.Haptics?.LevelUpPatternAsync();
-                _ = App.Haptics?.LevelUpPatternAsync();
                 App.Logger.Information("Level up! Now level {Level}", settings.PlayerLevel);
 
                 // Check level-based achievements immediately on level up
@@ -181,10 +181,11 @@ namespace ConditioningControlPanel.Services
         /// </summary>
         public double GetSessionXPMultiplier(int level)
         {
-            if (level < 100) return 1.0;
-            if (level < 125) return 1.0 + ((level - 100) * 0.02); // 1.0x to 1.5x
-            if (level < 150) return 1.5 + ((level - 125) * 0.02); // 1.5x to 2.0x
-            return 2.0 + ((level - 150) * 0.02); // 2.0x+ for 150+
+            if (level < 30) return 1.0;
+            if (level < 80) return 1.0 + ((level - 30) * 0.01);   // 1.0x → 1.5x
+            if (level < 125) return 1.5 + ((level - 80) * 0.02);  // 1.5x → 2.4x
+            if (level < 150) return 2.4 + ((level - 125) * 0.03); // 2.4x → 3.15x
+            return Math.Min(5.0, 3.15 + ((level - 150) * 0.03));   // 3.15x → 5.0x cap
         }
 
         /// <summary>
@@ -231,12 +232,12 @@ namespace ConditioningControlPanel.Services
         {
             return level switch
             {
-                < 5 => "Beginner Bimbo",
-                < 10 => "Training Bimbo",
-                < 20 => "Eager Bimbo",
-                < 30 => "Devoted Bimbo",
-                < 50 => "Advanced Bimbo",
-                _ => "Perfect Bimbo"
+                < 5 => Loc.Get("rank_beginner_bimbo"),
+                < 10 => Loc.Get("rank_training_bimbo"),
+                < 20 => Loc.Get("rank_eager_bimbo"),
+                < 30 => Loc.Get("rank_devoted_bimbo"),
+                < 50 => Loc.Get("rank_advanced_bimbo"),
+                _ => Loc.Get("rank_perfect_bimbo")
             };
         }
 

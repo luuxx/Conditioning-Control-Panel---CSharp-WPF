@@ -1,11 +1,20 @@
-using System;
-using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Newtonsoft.Json;
 
 namespace ConditioningControlPanel.Models
 {
+    /// <summary>
+    /// Legacy content mode enum. Kept for settings deserialization backward compatibility.
+    /// Use App.Mods (ModService) instead.
+    /// </summary>
+    [Obsolete("Use App.Mods (ModService) and ActiveModId instead")]
+    public enum ContentMode
+    {
+        BambiSleep,
+        SissyHypno
+    }
+
     /// <summary>
     /// Application settings model - matches Python DEFAULT_SETTINGS
     /// </summary>
@@ -17,6 +26,17 @@ namespace ConditioningControlPanel.Models
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
         }
+
+        #region Language
+
+        private string _language = "en";
+        public string Language
+        {
+            get => _language;
+            set { _language = value ?? "en"; OnPropertyChanged(); }
+        }
+
+        #endregion
 
         #region Presets
 
@@ -362,6 +382,19 @@ namespace ConditioningControlPanel.Models
             set { _corruptionMode = value; OnPropertyChanged(); }
         }
 
+        private bool _hydraLinkedTiming = true;
+        /// <summary>
+        /// Controls hydra spawn timing~ 🐙✨
+        /// true  = "Linked" — hydra children expire when the original flash event expires.
+        /// false = "Independent" — each hydra spawn gets its own full-duration lifetime.
+        /// CopilotNotes: Default true preserves legacy behavior where all windows died together.
+        /// </summary>
+        public bool HydraLinkedTiming
+        {
+            get => _hydraLinkedTiming;
+            set { _hydraLinkedTiming = value; OnPropertyChanged(); }
+        }
+
         private int _hydraLimit = 20; // Max images on screen (hard cap: 20)
         public int HydraLimit
         {
@@ -406,6 +439,13 @@ namespace ConditioningControlPanel.Models
         {
             get => _flashAudioEnabled;
             set { _flashAudioEnabled = value; OnPropertyChanged(); }
+        }
+
+        private bool _flashGlowEnabled = true;
+        public bool FlashGlowEnabled
+        {
+            get => _flashGlowEnabled;
+            set { _flashGlowEnabled = value; OnPropertyChanged(); }
         }
 
         private int _flashDuration = 5; // Duration in seconds when audio is disabled (1-30)
@@ -650,6 +690,18 @@ namespace ConditioningControlPanel.Models
             set { _subliminalPool = value ?? new(); OnPropertyChanged(); }
         }
 
+        /// <summary>
+        /// Tracks default subliminal triggers the user explicitly removed,
+        /// so they don't get re-added on startup by MergeNewDefaultSubliminalTriggers.
+        /// </summary>
+        private HashSet<string> _removedDefaultSubliminals = new();
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public HashSet<string> RemovedDefaultSubliminals
+        {
+            get => _removedDefaultSubliminals;
+            set => _removedDefaultSubliminals = value ?? new();
+        }
+
         private string _subBackgroundColor = "#000000";
         public string SubBackgroundColor
         {
@@ -712,7 +764,8 @@ namespace ConditioningControlPanel.Models
 
         private ContentMode _contentMode = ContentMode.BambiSleep;
         /// <summary>
-        /// Content mode determines theming: Bambi Sleep specific or generic Sissy Hypno.
+        /// [LEGACY] Content mode determines theming. Kept for migration only.
+        /// New code should use ActiveModId instead.
         /// </summary>
         public ContentMode ContentMode
         {
@@ -732,20 +785,43 @@ namespace ConditioningControlPanel.Models
         }
 
         /// <summary>
-        /// Convenience property for XAML binding - true when in Bambi Sleep mode.
+        /// Convenience property - true when active mod is BambiSleep.
         /// </summary>
         [JsonIgnore]
-        public bool IsBambiMode => _contentMode == ContentMode.BambiSleep;
+        public bool IsBambiMode => ActiveModId == BuiltInMods.BambiSleepId;
 
         /// <summary>
-        /// Convenience property for XAML binding - true when in Sissy Hypno mode.
+        /// Convenience property - true when active mod is SissyHypno.
         /// </summary>
         [JsonIgnore]
-        public bool IsSissyMode => _contentMode == ContentMode.SissyHypno;
+        public bool IsSissyMode => ActiveModId == BuiltInMods.SissyHypnoId;
+
+        private string _activeModId = BuiltInMods.BambiSleepId;
+        /// <summary>
+        /// The ID of the currently active mod. Replaces ContentMode enum.
+        /// </summary>
+        public string ActiveModId
+        {
+            get => _activeModId;
+            set
+            {
+                if (_activeModId != value)
+                {
+                    _activeModId = value;
+                    // Keep legacy field in sync for backward compat
+                    _contentMode = value == BuiltInMods.SissyHypnoId ? ContentMode.SissyHypno : ContentMode.BambiSleep;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(IsBambiMode));
+                    OnPropertyChanged(nameof(IsSissyMode));
+                    OnPropertyChanged(nameof(ActiveHypnotubeLinks));
+                    OnPropertyChanged(nameof(ContentModeDisplay));
+                }
+            }
+        }
 
         private bool _contentModeChosen = false;
         /// <summary>
-        /// Whether the user has chosen a content mode (shown on first run).
+        /// Whether the user has chosen a content mode / mod (shown on first run).
         /// </summary>
         public bool ContentModeChosen
         {
@@ -754,8 +830,17 @@ namespace ConditioningControlPanel.Models
         }
 
         /// <summary>
-        /// Per-mode pool backups so custom edits survive mode switching.
-        /// Keyed by ContentMode enum value. Null entries mean "use defaults".
+        /// Alias for ContentModeChosen — used by new mod system code.
+        /// </summary>
+        [JsonIgnore]
+        public bool ModChosen
+        {
+            get => _contentModeChosen;
+            set => ContentModeChosen = value;
+        }
+
+        /// <summary>
+        /// [LEGACY] Per-mode pool backups. Kept for migration to *ByMod dictionaries.
         /// </summary>
         [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
         public Dictionary<ContentMode, Dictionary<string, bool>>? SubliminalPoolByMode { get; set; }
@@ -765,6 +850,73 @@ namespace ConditioningControlPanel.Models
         public Dictionary<ContentMode, Dictionary<string, bool>>? LockCardPhrasesByMode { get; set; }
         [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
         public Dictionary<ContentMode, List<string>>? CustomTriggersByMode { get; set; }
+
+        /// <summary>
+        /// Per-mod pool backups so custom edits survive mod switching.
+        /// Keyed by mod ID string.
+        /// </summary>
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public Dictionary<string, Dictionary<string, bool>>? SubliminalPoolByMod { get; set; }
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public Dictionary<string, Dictionary<string, bool>>? AttentionPoolByMod { get; set; }
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public Dictionary<string, Dictionary<string, bool>>? LockCardPhrasesByMod { get; set; }
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public Dictionary<string, List<string>>? CustomTriggersByMod { get; set; }
+
+        /// <summary>
+        /// Migrate legacy ContentMode-based settings to mod-based settings.
+        /// Called once after deserialization when ActiveModId hasn't been set yet.
+        /// </summary>
+        internal void MigrateFromContentModeToMod()
+        {
+            // If ActiveModId is already set to a non-default value, migration already happened
+            if (_activeModId != BuiltInMods.BambiSleepId) return;
+
+            // Check if old ContentMode was SissyHypno — if so, migrate
+            if (_contentMode == ContentMode.SissyHypno)
+            {
+                _activeModId = BuiltInMods.SissyHypnoId;
+            }
+
+            // Migrate *ByMode dictionaries to *ByMod
+            if (SubliminalPoolByMode != null && SubliminalPoolByMod == null)
+            {
+                SubliminalPoolByMod = new Dictionary<string, Dictionary<string, bool>>();
+                foreach (var kvp in SubliminalPoolByMode)
+                {
+                    var modId = kvp.Key == ContentMode.SissyHypno ? BuiltInMods.SissyHypnoId : BuiltInMods.BambiSleepId;
+                    SubliminalPoolByMod[modId] = kvp.Value;
+                }
+            }
+            if (AttentionPoolByMode != null && AttentionPoolByMod == null)
+            {
+                AttentionPoolByMod = new Dictionary<string, Dictionary<string, bool>>();
+                foreach (var kvp in AttentionPoolByMode)
+                {
+                    var modId = kvp.Key == ContentMode.SissyHypno ? BuiltInMods.SissyHypnoId : BuiltInMods.BambiSleepId;
+                    AttentionPoolByMod[modId] = kvp.Value;
+                }
+            }
+            if (LockCardPhrasesByMode != null && LockCardPhrasesByMod == null)
+            {
+                LockCardPhrasesByMod = new Dictionary<string, Dictionary<string, bool>>();
+                foreach (var kvp in LockCardPhrasesByMode)
+                {
+                    var modId = kvp.Key == ContentMode.SissyHypno ? BuiltInMods.SissyHypnoId : BuiltInMods.BambiSleepId;
+                    LockCardPhrasesByMod[modId] = kvp.Value;
+                }
+            }
+            if (CustomTriggersByMode != null && CustomTriggersByMod == null)
+            {
+                CustomTriggersByMod = new Dictionary<string, List<string>>();
+                foreach (var kvp in CustomTriggersByMode)
+                {
+                    var modId = kvp.Key == ContentMode.SissyHypno ? BuiltInMods.SissyHypnoId : BuiltInMods.BambiSleepId;
+                    CustomTriggersByMod[modId] = kvp.Value;
+                }
+            }
+        }
 
         private string _bambiCloudUrl = "https://bambicloud.com/";
         public string BambiCloudUrl
@@ -1160,11 +1312,11 @@ namespace ConditioningControlPanel.Models
         }
 
         // Scheduler time window
-        private string _schedulerStartTime = "16:00";
+        private string _schedulerStartTime = "00:00";
         public string SchedulerStartTime
         {
             get => _schedulerStartTime;
-            set { _schedulerStartTime = value ?? "16:00"; OnPropertyChanged(); }
+            set { _schedulerStartTime = value ?? "00:00"; OnPropertyChanged(); }
         }
 
         private string _schedulerEndTime = "22:00";
@@ -1285,7 +1437,7 @@ namespace ConditioningControlPanel.Models
 
         #region Spiral Overlay (Unlocks Lv.10)
 
-        private bool _spiralEnabled = false;
+        private bool _spiralEnabled = true;
         public bool SpiralEnabled
         {
             get => _spiralEnabled;
@@ -1428,6 +1580,63 @@ namespace ConditioningControlPanel.Models
         }
         #endregion
 
+        #region Latest Quiz Result (for companion integration)
+
+        private string _latestQuizArchetype = "";
+        public string LatestQuizArchetype
+        {
+            get => _latestQuizArchetype;
+            set { _latestQuizArchetype = value ?? ""; OnPropertyChanged(); }
+        }
+
+        private int _latestQuizScorePercentage = -1; // -1 = no quiz taken
+        public int LatestQuizScorePercentage
+        {
+            get => _latestQuizScorePercentage;
+            set { _latestQuizScorePercentage = value; OnPropertyChanged(); }
+        }
+
+        private string _latestQuizCategoryId = "";
+        public string LatestQuizCategoryId
+        {
+            get => _latestQuizCategoryId;
+            set { _latestQuizCategoryId = value ?? ""; OnPropertyChanged(); }
+        }
+
+        private string _latestQuizProfileText = "";
+        public string LatestQuizProfileText
+        {
+            get => _latestQuizProfileText;
+            set
+            {
+                // Truncate to 200 chars
+                var truncated = value ?? "";
+                if (truncated.Length > 200) truncated = truncated.Substring(0, 200);
+                _latestQuizProfileText = truncated;
+                OnPropertyChanged();
+            }
+        }
+
+        #endregion
+
+        #region Pop Quiz (Session reinforcement questions)
+
+        private bool _popQuizEnabled = false;
+        public bool PopQuizEnabled
+        {
+            get => _popQuizEnabled;
+            set { _popQuizEnabled = value; OnPropertyChanged(); }
+        }
+
+        private int _popQuizFrequency = 2; // Per hour (1-10)
+        public int PopQuizFrequency
+        {
+            get => _popQuizFrequency;
+            set { _popQuizFrequency = Math.Clamp(value, 1, 100); OnPropertyChanged(); }
+        }
+
+        #endregion
+
         #region Bubble Count Game (Unlocks Lv.50)
 
         private bool _bubbleCountEnabled = false;
@@ -1507,6 +1716,13 @@ namespace ConditioningControlPanel.Models
         {
             get => _bouncingTextPool;
             set { _bouncingTextPool = value ?? new(); OnPropertyChanged(); }
+        }
+
+        private bool _bouncingTextAlwaysOnTop = false;
+        public bool BouncingTextAlwaysOnTop
+        {
+            get => _bouncingTextAlwaysOnTop;
+            set { _bouncingTextAlwaysOnTop = value; OnPropertyChanged(); }
         }
 
         #endregion
@@ -1805,14 +2021,33 @@ namespace ConditioningControlPanel.Models
 
         #region AI Configuration
 
-        private string _openRouterApiKey = "";
         /// <summary>
-        /// OpenRouter API key for AI chat features
+        /// OpenRouter API key for AI chat features.
+        /// Stored in DPAPI-encrypted file, NOT in settings.json.
         /// </summary>
+        [JsonIgnore]
         public string OpenRouterApiKey
         {
-            get => _openRouterApiKey;
-            set { _openRouterApiKey = value ?? ""; OnPropertyChanged(); }
+            get => Services.SecureApiKeyStore.Retrieve() ?? "";
+            set { Services.SecureApiKeyStore.Store(string.IsNullOrEmpty(value) ? null : value); OnPropertyChanged(); }
+        }
+
+        /// <summary>
+        /// Legacy plaintext key — only used for one-time migration to DPAPI.
+        /// After migration this will be null in settings.json.
+        /// </summary>
+        [JsonProperty("OpenRouterApiKey")]
+        public string? OpenRouterApiKeyLegacy
+        {
+            get => null; // Never write back to JSON
+            set
+            {
+                // Migrate: if there's a plaintext key in settings.json, move it to DPAPI
+                if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(Services.SecureApiKeyStore.Retrieve()))
+                {
+                    Services.SecureApiKeyStore.Store(value);
+                }
+            }
         }
 
         private bool _slutModeEnabled = false;
@@ -1902,7 +2137,7 @@ namespace ConditioningControlPanel.Models
         /// Display name for current content mode.
         /// </summary>
         [JsonIgnore]
-        public string ContentModeDisplay => IsBambiMode ? "Bambi Sleep" : "Sissy Hypno";
+        public string ContentModeDisplay => App.Mods?.GetModeDisplayName() ?? (IsBambiMode ? "Bambi Sleep" : "Sissy Hypno");
 
         /// <summary>
         /// Gets/sets the hypnotube links for the currently active content mode.
@@ -2278,6 +2513,14 @@ namespace ConditioningControlPanel.Models
             set { _autonomyCanTriggerWebVideo = value; OnPropertyChanged(); }
         }
 
+        private bool _autonomyCanTriggerWallpaper = false;
+        [JsonProperty]
+        public bool AutonomyCanTriggerWallpaper
+        {
+            get => _autonomyCanTriggerWallpaper;
+            set { _autonomyCanTriggerWallpaper = value; OnPropertyChanged(); }
+        }
+
         private int _autonomyAnnouncementChance = 50;
         /// <summary>
         /// Chance (0-100%) that she announces before triggering an action
@@ -2286,6 +2529,18 @@ namespace ConditioningControlPanel.Models
         {
             get => _autonomyAnnouncementChance;
             set { _autonomyAnnouncementChance = Math.Clamp(value, 0, 100); OnPropertyChanged(); }
+        }
+
+        #endregion
+
+        #region Lab — Wallpaper Override
+
+        private bool _wallpaperEnabled = false;
+        [JsonProperty]
+        public bool WallpaperEnabled
+        {
+            get => _wallpaperEnabled;
+            set { _wallpaperEnabled = value; OnPropertyChanged(); }
         }
 
         #endregion
@@ -2379,22 +2634,13 @@ namespace ConditioningControlPanel.Models
         }
 
         /// <summary>
-        /// Check if a feature at the specified level is unlocked for this user.
-        /// Features are unlocked if:
-        /// 1. OG user (Season 0) — all features always unlocked, OR
-        /// 2. User has reached this level in any previous season (HighestLevelEver), OR
-        /// 3. User's current level meets the requirement
+        /// Feature level gating has been removed — every feature is available from level 1.
+        /// XP, levels, quests, achievements, and the skill tree still exist; they just no longer
+        /// gate any features. Method stub preserved so existing call sites keep compiling.
         /// </summary>
         public bool IsLevelUnlocked(int requiredLevel)
         {
-            // OG users always bypass all level requirements
-            if (IsSeason0Og) return true;
-
-            // Check against highest level ever reached (permanent unlocks across seasons)
-            if (HighestLevelEver >= requiredLevel) return true;
-
-            // Check current level
-            return PlayerLevel >= requiredLevel;
+            return true;
         }
 
         private string? _currentSeason = null;
@@ -2417,6 +2663,16 @@ namespace ConditioningControlPanel.Models
         {
             get => _highestLevelEver;
             set { _highestLevelEver = Math.Max(0, value); OnPropertyChanged(); }
+        }
+
+        private bool _hasAcceptedAgeVerification = false;
+        /// <summary>
+        /// Whether the user has accepted the 18+ age verification prompt.
+        /// </summary>
+        public bool HasAcceptedAgeVerification
+        {
+            get => _hasAcceptedAgeVerification;
+            set { _hasAcceptedAgeVerification = value; OnPropertyChanged(); }
         }
 
         private bool _hasShownOgWelcome = false;
@@ -2489,14 +2745,36 @@ namespace ConditioningControlPanel.Models
             set { _keywordBufferTimeoutMs = Math.Clamp(value, 1000, 10000); OnPropertyChanged(); }
         }
 
-        private int _keywordGlobalCooldownSeconds = 5;
+        private int _keywordGlobalCooldownSeconds = 10;
         /// <summary>
-        /// Global cooldown between any trigger firing (1-300)
+        /// Global cooldown between any trigger firing, in seconds (clamped 1-300).
+        /// Enforced on all three match sources (OCR, keyboard, external text) —
+        /// this is a hard ceiling on trigger frequency regardless of how many
+        /// matches are on screen. Primarily prevents the OCR feedback loop
+        /// (avatar speech bubble getting re-read on next scan) from spamming.
+        /// Default raised to 10 per user preference — 10s minimum between any
+        /// two reactions, paired with KeywordPerKeywordCooldownSeconds for the
+        /// stricter 15s same-keyword hard cooldown.
         /// </summary>
         public int KeywordGlobalCooldownSeconds
         {
             get => _keywordGlobalCooldownSeconds;
             set { _keywordGlobalCooldownSeconds = Math.Clamp(value, 1, 300); OnPropertyChanged(); }
+        }
+
+        private int _keywordPerKeywordCooldownSeconds = 15;
+        /// <summary>
+        /// Hard minimum cooldown between two fires of the SAME keyword, in seconds
+        /// (clamped 1-600). Enforced at RecordFire time via the _mutedKeywords
+        /// dictionary independent of AwarenessLoopProtectionEnabled. Floor for
+        /// the per-trigger <see cref="KeywordTrigger.CooldownSeconds"/> — presets
+        /// that declare a lower cooldown will still be gated at this minimum.
+        /// </summary>
+        [JsonProperty]
+        public int KeywordPerKeywordCooldownSeconds
+        {
+            get => _keywordPerKeywordCooldownSeconds;
+            set { _keywordPerKeywordCooldownSeconds = Math.Clamp(value, 1, 600); OnPropertyChanged(); }
         }
 
         private double _keywordSessionMultiplier = 1.5;
@@ -2531,12 +2809,26 @@ namespace ConditioningControlPanel.Models
             set { _keywordHighlightEnabled = value; OnPropertyChanged(); }
         }
 
-        private int _keywordHighlightDurationMs = 600;
+        private int _keywordHighlightDurationMs = 1500;
         [JsonProperty]
         public int KeywordHighlightDurationMs
         {
             get => _keywordHighlightDurationMs;
             set { _keywordHighlightDurationMs = Math.Clamp(value, 300, 5000); OnPropertyChanged(); }
+        }
+
+        private string _keywordHighlightColor = "#FF69B4";
+        /// <summary>
+        /// Hex color (<c>#RRGGBB</c>) used for the OCR keyword highlight overlay box,
+        /// border, glow, and fill. Defaults to neon pink. Parsed at render time by
+        /// <see cref="Services.KeywordHighlightService"/>; invalid values fall back
+        /// to the default.
+        /// </summary>
+        [JsonProperty]
+        public string KeywordHighlightColor
+        {
+            get => _keywordHighlightColor;
+            set { _keywordHighlightColor = string.IsNullOrWhiteSpace(value) ? "#FF69B4" : value; OnPropertyChanged(); }
         }
 
         private bool _ocrHighlightAll = true;
@@ -2555,6 +2847,7 @@ namespace ConditioningControlPanel.Models
             set { _ocrHighlightVisibleInCapture = value; OnPropertyChanged(); }
         }
 
+
         private List<KeywordTrigger> _keywordTriggers = new();
         /// <summary>
         /// Configured keyword triggers
@@ -2565,6 +2858,66 @@ namespace ConditioningControlPanel.Models
             get => _keywordTriggers;
             set { _keywordTriggers = value ?? new List<KeywordTrigger>(); OnPropertyChanged(); }
         }
+
+        // --- Awareness Engine safety ---
+
+        private bool _awarenessIgnoreOwnUi = true;
+        /// <summary>
+        /// When true, OCR word hits that fall inside any CCP window (MainWindow, avatar,
+        /// subliminal flashes, highlight overlays, dialogs) are discarded before matching.
+        /// Prevents the app from reacting to its own output.
+        /// </summary>
+        [JsonProperty("awarenessIgnoreOwnUi")]
+        public bool AwarenessIgnoreOwnUi
+        {
+            get => _awarenessIgnoreOwnUi;
+            set { _awarenessIgnoreOwnUi = value; OnPropertyChanged(); }
+        }
+
+        private bool _awarenessLoopProtectionEnabled = true;
+        /// <summary>
+        /// When true, a keyword that has just fired a trigger is temporarily muted
+        /// across all sources so the trigger's own output cannot re-arm it.
+        /// </summary>
+        [JsonProperty("awarenessLoopProtectionEnabled")]
+        public bool AwarenessLoopProtectionEnabled
+        {
+            get => _awarenessLoopProtectionEnabled;
+            set { _awarenessLoopProtectionEnabled = value; OnPropertyChanged(); }
+        }
+
+        private int _awarenessLoopProtectionMs = 5000;
+        /// <summary>
+        /// Duration (ms) a keyword stays muted after firing, when loop protection is on.
+        /// </summary>
+        [JsonProperty("awarenessLoopProtectionMs")]
+        public int AwarenessLoopProtectionMs
+        {
+            get => _awarenessLoopProtectionMs;
+            set { _awarenessLoopProtectionMs = Math.Clamp(value, 500, 30000); OnPropertyChanged(); }
+        }
+
+        // --- Awareness preset packs ---
+
+        private List<KeywordTriggerPreset> _keywordTriggerPresets = new();
+        /// <summary>
+        /// Known keyword trigger presets (built-in + user-created). Built-in presets
+        /// are merged from Resources/AwarenessPresets/*.json on each load; their
+        /// MasterEnabled state and Triggers are then stored here per-user.
+        /// </summary>
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public List<KeywordTriggerPreset> KeywordTriggerPresets
+        {
+            get => _keywordTriggerPresets;
+            set { _keywordTriggerPresets = value ?? new List<KeywordTriggerPreset>(); OnPropertyChanged(); }
+        }
+
+        /// <summary>
+        /// Ids of built-in presets the user has explicitly removed. Removed presets
+        /// are skipped by the merge step so they don't reappear after uninstall.
+        /// </summary>
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public HashSet<string> RemovedBuiltInPresetIds { get; set; } = new();
 
         #endregion
 
@@ -2587,6 +2940,56 @@ namespace ConditioningControlPanel.Models
 
         [JsonProperty]
         public string? CurrentPhrasePresetId { get; set; }
+
+        #endregion
+
+        #region Mantra Lab
+
+        private List<string> _mantraPool = new()
+        {
+            "I am deeply relaxed",
+            "My mind is open and receptive",
+            "I feel calm and peaceful",
+            "I surrender to the process",
+            "Every breath takes me deeper"
+        };
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public List<string> MantraPool
+        {
+            get => _mantraPool;
+            set { _mantraPool = value ?? new(); OnPropertyChanged(); }
+        }
+
+        private int _mantraDefaultCount = 10;
+        public int MantraDefaultCount
+        {
+            get => _mantraDefaultCount;
+            set { _mantraDefaultCount = Math.Clamp(value, 1, 100); OnPropertyChanged(); }
+        }
+
+        private double _mantraDroneVolume = 30;
+        public double MantraDroneVolume
+        {
+            get => _mantraDroneVolume;
+            set { _mantraDroneVolume = Math.Clamp(value, 0, 100); OnPropertyChanged(); }
+        }
+
+        #endregion
+
+        #region Remote Control
+
+        private bool _stopEffectsOnRemoteDisconnect;
+        /// <summary>
+        /// When true, all effects started by a remote controller stop immediately
+        /// when the controller disconnects. When false (default), effects continue
+        /// running so a new controller can see the current state and the session
+        /// doesn't snap to a halt. The sub can always hit stop/panic manually.
+        /// </summary>
+        public bool StopEffectsOnRemoteDisconnect
+        {
+            get => _stopEffectsOnRemoteDisconnect;
+            set { _stopEffectsOnRemoteDisconnect = value; OnPropertyChanged(); }
+        }
 
         #endregion
 

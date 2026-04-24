@@ -1,10 +1,5 @@
-using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -25,11 +20,15 @@ namespace ConditioningControlPanel.Services
         private readonly string _audioPath;
         private string[]? _audioFilesCache;
         private DateTime _audioFilesCacheTime;
+        private string[]? _modAudioFilesCache;
+        private DateTime _modAudioFilesCacheTime;
+        private string? _modAudioCacheModId;
 
         private WaveOutEvent? _audioPlayer;
         private AudioFileReader? _audioFile;
 
         private bool _isRunning;
+        private bool _oneShotActive; // Allow one-shot display when service not running (remote control)
         private bool _disposed;
         private int _subliminalCount;
 
@@ -120,6 +119,7 @@ namespace ConditioningControlPanel.Services
         /// </summary>
         public void FlashSubliminal()
         {
+            if (!_isRunning) _oneShotActive = true; // Allow display from remote control
             var pool = App.Settings.Current.SubliminalPool;
             var activeTexts = pool.Where(kvp => kvp.Value).Select(kvp => kvp.Key).ToList();
             
@@ -169,18 +169,19 @@ namespace ConditioningControlPanel.Services
         /// Flash a custom subliminal text (from remote control).
         /// Sanitizes input and caps length.
         /// </summary>
-        public void FlashSubliminalCustom(string text)
+        public void FlashSubliminalCustom(string text, int? opacity = null)
         {
             if (string.IsNullOrWhiteSpace(text)) return;
             text = text.Trim();
             if (text.Length > 200) text = text.Substring(0, 200);
             text = System.Text.RegularExpressions.Regex.Replace(text, "<[^>]*>", "");
-            TriggerSubliminalWithHapticPattern(text);
+            _oneShotActive = true; // Allow display even when service not running (remote control)
+            TriggerSubliminalWithHapticPattern(text, opacity);
             App.Progression?.AddXP(10, XPSource.Subliminal);
         }
 
-        // Track if a deferred reset is pending (for when video ends)
-        private bool _deferredResetPending;
+        // Track if a deferred reset is pending (for when video ends) — accessed from timer/event callbacks
+        private int _deferredResetPending; // 0 = false, 1 = true (for Interlocked)
 
         /// <summary>
         /// Trigger a Bambi Freeze subliminal with audio - used before videos and bubble count games
@@ -194,8 +195,7 @@ namespace ConditioningControlPanel.Services
                 App.Logger?.Debug("Triggering Bambi Freeze (subliminals disabled but special trigger allowed)");
             }
 
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var text = Models.ContentModeConfig.GetFreezeTriggerText(mode);
+            var text = App.Mods?.GetFreezeTriggerText() ?? "Bambi Freeze";
             string? audioPath = FindLinkedAudio(text);
 
             if (audioPath != null)
@@ -219,7 +219,7 @@ namespace ConditioningControlPanel.Services
                 if (deferReset)
                 {
                     // Mark that we should trigger reset when video ends
-                    _deferredResetPending = true;
+                    Interlocked.Exchange(ref _deferredResetPending, 1);
                     App.Logger?.Information("Bambi Freeze triggered with audio (reset deferred until video ends)");
                 }
                 else
@@ -242,12 +242,10 @@ namespace ConditioningControlPanel.Services
         /// </summary>
         public void TriggerDeferredBambiReset()
         {
-            if (!_deferredResetPending)
+            if (Interlocked.CompareExchange(ref _deferredResetPending, 0, 1) != 1)
             {
                 return;
             }
-
-            _deferredResetPending = false;
 
             // 90% chance to trigger reset
             if (_random.NextDouble() > 0.90)
@@ -289,8 +287,7 @@ namespace ConditioningControlPanel.Services
         /// </summary>
         private void PlayBambiReset()
         {
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var resetText = Models.ContentModeConfig.GetResetTriggerText(mode);
+            var resetText = App.Mods?.GetResetTriggerText() ?? "Bambi Reset";
             string? resetAudio = FindLinkedAudio(resetText);
 
             if (resetAudio != null && App.Settings.Current.SubAudioEnabled)
@@ -350,16 +347,40 @@ namespace ConditioningControlPanel.Services
                 cleanText,                          // As-is
                 cleanText.ToUpper(),                // UPPERCASE
                 cleanText.ToLower(),                // lowercase
-                cleanText.Replace("'", "'"),        // Normalize curly apostrophe to straight
-                cleanText.Replace("'", "'"),        // Normalize straight apostrophe to curly
-                cleanText.ToUpper().Replace("'", "'"),
+                cleanText.Replace("\u2019", "'"),    // Normalize curly apostrophe to straight
+                cleanText.Replace("'", "\u2019"),    // Normalize straight apostrophe to curly
+                cleanText.ToUpper().Replace("\u2019", "'"),
             };
 
+            // Check active mod's audio directory first
+            var modAudioPath = GetModAudioPath();
+            if (modAudioPath != null)
+            {
+                var result = SearchAudioDirectory(modAudioPath, cleanText, textVariants, extensions, isModCache: true);
+                if (result != null) return result;
+            }
+
+            // Fall back to default sub_audio directory
+            return SearchAudioDirectory(_audioPath, cleanText, textVariants, extensions, isModCache: false);
+        }
+
+        private string? GetModAudioPath()
+        {
+            var modPath = App.Mods?.ActiveMod?.InstalledPath;
+            if (modPath == null) return null;
+
+            var modAudioDir = Path.Combine(modPath, "resources", "sounds", "flashes_audio");
+            return Directory.Exists(modAudioDir) ? modAudioDir : null;
+        }
+
+        private string? SearchAudioDirectory(string directory, string cleanText, string[] textVariants, string[] extensions, bool isModCache)
+        {
+            // Try exact filename match with case variants
             foreach (var textVar in textVariants)
             {
                 foreach (var ext in extensions)
                 {
-                    var path = Path.Combine(_audioPath, textVar + ext);
+                    var path = Path.Combine(directory, textVar + ext);
                     if (File.Exists(path)) return path;
                 }
             }
@@ -367,20 +388,35 @@ namespace ConditioningControlPanel.Services
             // Fallback: case-insensitive directory search (cached to avoid per-subliminal disk scan)
             try
             {
-                if (Directory.Exists(_audioPath))
+                if (Directory.Exists(directory))
                 {
-                    // Cache directory listing for 60 seconds
-                    if (_audioFilesCache == null || (DateTime.UtcNow - _audioFilesCacheTime).TotalSeconds > 60)
+                    string[]? files;
+                    if (isModCache)
                     {
-                        _audioFilesCache = Directory.GetFiles(_audioPath);
-                        _audioFilesCacheTime = DateTime.UtcNow;
+                        var currentModId = App.Mods?.ActiveMod?.Id;
+                        if (_modAudioFilesCache == null || _modAudioCacheModId != currentModId ||
+                            (DateTime.UtcNow - _modAudioFilesCacheTime).TotalSeconds > 60)
+                        {
+                            _modAudioFilesCache = Directory.GetFiles(directory);
+                            _modAudioFilesCacheTime = DateTime.UtcNow;
+                            _modAudioCacheModId = currentModId;
+                        }
+                        files = _modAudioFilesCache;
                     }
-                    var files = _audioFilesCache;
-                    var normalizedText = cleanText.ToUpperInvariant().Replace("'", "'");
+                    else
+                    {
+                        if (_audioFilesCache == null || (DateTime.UtcNow - _audioFilesCacheTime).TotalSeconds > 60)
+                        {
+                            _audioFilesCache = Directory.GetFiles(directory);
+                            _audioFilesCacheTime = DateTime.UtcNow;
+                        }
+                        files = _audioFilesCache;
+                    }
 
+                    var normalizedText = cleanText.ToUpperInvariant().Replace("\u2019", "'");
                     foreach (var file in files)
                     {
-                        var fileName = Path.GetFileNameWithoutExtension(file).ToUpperInvariant().Replace("'", "'");
+                        var fileName = Path.GetFileNameWithoutExtension(file).ToUpperInvariant().Replace("\u2019", "'");
                         if (fileName == normalizedText)
                         {
                             return file;
@@ -390,7 +426,7 @@ namespace ConditioningControlPanel.Services
             }
             catch (Exception ex)
             {
-                App.Logger?.Debug("Error searching audio directory: {Error}", ex.Message);
+                App.Logger?.Debug("Error searching audio directory {Dir}: {Error}", directory, ex.Message);
             }
 
             return null;
@@ -412,10 +448,16 @@ namespace ConditioningControlPanel.Services
                 _audioFile.Volume = curvedVol;
                 
                 _audioPlayer.Init(_audioFile);
+                // Capture duck generation so stale callbacks after ForceUnduck are ignored
+                var duckGen = App.Audio?.DuckGeneration ?? -1;
                 _audioPlayer.PlaybackStopped += (s, e) =>
                 {
                     // Unduck after playback + small delay
-                    Task.Delay(500).ContinueWith(_ => App.Audio.Unduck());
+                    Task.Delay(500).ContinueWith(_ =>
+                    {
+                        try { App.Audio?.Unduck(duckGen); }
+                        catch (Exception ex) { App.Logger?.Debug("Unduck failed in PlaybackStopped: {Error}", ex.Message); }
+                    });
                 };
                 _audioPlayer.Play();
                 
@@ -423,7 +465,7 @@ namespace ConditioningControlPanel.Services
             }
             catch (Exception ex)
             {
-                App.Logger?.Debug("Could not play subliminal audio: {Error}", ex.Message);
+                App.Logger?.Warning("Could not play subliminal audio: {Error}", ex.Message);
                 App.Audio.Unduck();
             }
         }
@@ -447,23 +489,38 @@ namespace ConditioningControlPanel.Services
         /// Pattern depends on the trigger text (Cum/Collapse = long, Freeze = short sharp, Sleep = decay, etc.)
         /// Buttplug.io has ~1.3s latency so we trigger haptics earlier for that provider
         /// </summary>
-        private async void TriggerSubliminalWithHapticPattern(string text)
+        private async void TriggerSubliminalWithHapticPattern(string text, int? opacity = null)
         {
-            // Get anticipation delay from haptic service (Buttplug needs ~1.3s, Lovense ~250ms)
-            var anticipationMs = App.Haptics?.SubliminalAnticipationMs ?? 250;
+            try
+            {
+                // Get anticipation delay from haptic service (Buttplug needs ~1.3s, Lovense ~250ms)
+                var anticipationMs = App.Haptics?.SubliminalAnticipationMs ?? 250;
 
-            // Trigger haptic pattern first (pattern depends on text)
-            _ = App.Haptics?.TriggerSubliminalPatternAsync(text);
+                // Trigger haptic pattern first (pattern depends on text)
+                _ = App.Haptics?.TriggerSubliminalPatternAsync(text);
 
-            // Wait for anticipation delay before showing visual
-            await Task.Delay(anticipationMs);
+                // Wait for anticipation delay before showing visual
+                await Task.Delay(anticipationMs);
 
-            // Now show on UI thread
-            Application.Current?.Dispatcher?.Invoke(() => ShowSubliminalVisuals(text));
+                // Now show on UI thread
+                Application.Current?.Dispatcher?.Invoke(() => ShowSubliminalVisuals(text));
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Debug("SubliminalService: TriggerSubliminalWithHapticPattern failed: {Error}", ex.Message);
+            }
         }
 
-        private void ShowSubliminalVisuals(string text)
+        private void ShowSubliminalVisuals(string text, int? opacity = null)
         {
+            // Guard against delayed callbacks firing after Stop() — prevents orphaned windows
+            // Allow one-shot from remote control even when service not running
+            if (!_isRunning && !_oneShotActive) return;
+            _oneShotActive = false;
+
+            // Prevent memory explosion from too many concurrent subliminal windows
+            if (_activeWindows.Count >= 15) return;
+
             // Increment counter and fire event
             _subliminalCount++;
             SubliminalDisplayed?.Invoke(this, EventArgs.Empty);
@@ -471,6 +528,8 @@ namespace ConditioningControlPanel.Services
             // Duration in frames * ~16.6ms per frame, minimum 100ms
             var durationMs = Math.Max(100, App.Settings.Current.SubliminalDuration * 17);
             var targetOpacity = App.Settings.Current.SubliminalOpacity / 100.0;
+            if (opacity.HasValue)
+                targetOpacity = opacity.Value / 100.0;
 
             // Colors from settings
             var bgColor = ParseColor(App.Settings.Current.SubBackgroundColor, Colors.Black);

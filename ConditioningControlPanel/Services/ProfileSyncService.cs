@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 using ConditioningControlPanel.Models;
@@ -28,6 +30,9 @@ namespace ConditioningControlPanel.Services
         private bool _disposed;
         private bool _syncEnabled = true;
         private bool _pendingQuestResetClear;
+        private DateTime _lastAuthRecoveryAttempt = DateTime.MinValue;
+        private bool _hasLoadedProfile; // true after first successful LoadProfileAsync/SyncProfileAsync round-trip
+        private readonly SemaphoreSlim _syncGate = new(1, 1);
 
         /// <summary>
         /// Whether using Patreon auth (vs Discord)
@@ -60,6 +65,17 @@ namespace ConditioningControlPanel.Services
         public string? LastSyncError { get; private set; }
 
         /// <summary>
+        /// Number of consecutive sync failures. Reset to 0 on success.
+        /// </summary>
+        public int ConsecutiveSyncFailures { get; private set; }
+
+        /// <summary>
+        /// Raised when sync health changes (failure count goes up or resets to 0).
+        /// Parameter is the current failure count.
+        /// </summary>
+        public event EventHandler<int>? SyncHealthChanged;
+
+        /// <summary>
         /// Event raised when cloud profile is loaded and merged with local data.
         /// MainWindow should subscribe to this to refresh UI.
         /// </summary>
@@ -71,6 +87,8 @@ namespace ConditioningControlPanel.Services
             {
                 Timeout = TimeSpan.FromSeconds(30)
             };
+            _httpClient.DefaultRequestHeaders.Add("X-Client-Version", UpdateService.AppVersion);
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"ConditioningControlPanel/{UpdateService.AppVersion}");
         }
 
         #region Heartbeat
@@ -113,6 +131,8 @@ namespace ConditioningControlPanel.Services
         /// </summary>
         private async Task SendHeartbeatAsync()
         {
+            if (_disposed) return;
+
             // Skip if offline mode is enabled
             if (App.Settings?.Current?.OfflineMode == true) return;
 
@@ -120,18 +140,14 @@ namespace ConditioningControlPanel.Services
 
             try
             {
-                var accessToken = GetAccessToken();
-                if (string.IsNullOrEmpty(accessToken)) return;
-
-                // Use V2 heartbeat if user has unified_id (new v5.5 system)
+                // V2 heartbeat — uses auth token, NOT OAuth
                 var unifiedId = App.Settings?.Current?.UnifiedId;
                 if (!string.IsNullOrEmpty(unifiedId))
                 {
-                    // V2 heartbeat - uses unified_id with enriched activity data
                     var v2Request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/user/heartbeat");
                     AddAuthHeader(v2Request);
                     v2Request.Content = new StringContent(
-                        Newtonsoft.Json.JsonConvert.SerializeObject(new
+                        JsonConvert.SerializeObject(new
                         {
                             unified_id = unifiedId,
                             is_active = App.ActivityTracker?.IsIdle != true,
@@ -141,12 +157,23 @@ namespace ConditioningControlPanel.Services
                         Encoding.UTF8, "application/json");
 
                     var v2Response = await _httpClient.SendAsync(v2Request);
-                    HandleUnauthorized(v2Response);
+                    if (await HandleUnauthorizedAsync(v2Response))
+                    {
+                        // Recovery failed — stop heartbeat to avoid spamming 401s
+                        if (string.IsNullOrEmpty(App.Settings?.Current?.AuthToken))
+                        {
+                            App.Logger?.Warning("[Auth] Heartbeat: auth recovery failed, stopping heartbeat");
+                            StopHeartbeat();
+                        }
+                    }
                     App.Logger?.Debug("V2 Heartbeat: {Status}", v2Response.StatusCode);
                     return;
                 }
 
-                // Legacy heartbeat - use appropriate endpoint based on auth type
+                // Legacy heartbeat — requires OAuth
+                var accessToken = GetAccessToken();
+                if (string.IsNullOrEmpty(accessToken)) return;
+
                 var endpoint = IsPatreonAuth ? "/user/heartbeat" : "/user/heartbeat-discord";
                 var request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}{endpoint}");
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -193,14 +220,33 @@ namespace ConditioningControlPanel.Services
 
             try
             {
+                // V2-first: if user has a V2 identity, try V2 sync regardless of OAuth state
+                var unifiedId = App.Settings?.Current?.UnifiedId;
+                if (!string.IsNullOrEmpty(unifiedId))
+                {
+                    App.Logger?.Information("V2 user — loading profile via V2 sync path");
+                    var v2Success = await SyncProfileAsync();
+                    if (v2Success)
+                    {
+                        _hasLoadedProfile = true;
+                        ProfileLoaded?.Invoke(this, EventArgs.Empty);
+                        return true;
+                    }
+                    // V2 failed — fall through to V1 if OAuth is available
+                    App.Logger?.Warning("V2 sync failed, attempting V1 fallback");
+                }
+
                 var accessToken = GetAccessToken();
                 if (string.IsNullOrEmpty(accessToken))
                 {
-                    App.Logger?.Warning("No access token available for profile sync");
+                    if (!string.IsNullOrEmpty(unifiedId))
+                        App.Logger?.Warning("V2 sync failed and no OAuth token available — sync unavailable");
+                    else
+                        App.Logger?.Warning("No access token available for profile sync");
                     return false;
                 }
 
-                // Use appropriate endpoint based on auth type
+                // V1 fallback — use appropriate endpoint based on auth type
                 var endpoint = IsPatreonAuth ? "/user/profile" : "/user/profile-discord";
                 var request = new HttpRequestMessage(HttpMethod.Get, $"{ProxyBaseUrl}{endpoint}");
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -241,8 +287,8 @@ namespace ConditioningControlPanel.Services
                         // Trigger sync UP to create the cloud profile with local data
                         _ = Task.Run(async () =>
                         {
-                            await Task.Delay(500); // Small delay
-                            await SyncProfileAsync();
+                            try { await Task.Delay(500); await SyncProfileAsync(); }
+                            catch (Exception ex) { App.Logger?.Error(ex, "Background sync-up failed"); }
                         });
                     }
                     else
@@ -262,6 +308,8 @@ namespace ConditioningControlPanel.Services
                 App.Logger?.Information("Loaded cloud profile: Level {Level}, {Xp} XP, {Achievements} achievements, {SkillPoints} skill points, {UnlockedSkills} skills",
                     result.Profile.Level, result.Profile.Xp, result.Profile.Achievements?.Count ?? 0,
                     result.Profile.SkillPoints ?? 0, result.Profile.UnlockedSkills?.Count ?? 0);
+
+                _hasLoadedProfile = true;
 
                 // Notify listeners (MainWindow) to refresh UI
                 ProfileLoaded?.Invoke(this, EventArgs.Empty);
@@ -297,6 +345,16 @@ namespace ConditioningControlPanel.Services
                 return false;
             }
 
+            // Prevent concurrent sync calls from racing past the cooldown check
+            if (!await _syncGate.WaitAsync(0))
+            {
+                App.Logger?.Debug("Profile sync skipped - another sync in progress");
+                return false;
+            }
+
+            var syncSucceeded = false;
+            try
+            {
             // Client-side sync cooldown to match server-side enforcement
             if (LastSyncTime.HasValue && DateTime.Now - LastSyncTime.Value < SyncCooldown)
             {
@@ -310,8 +368,17 @@ namespace ConditioningControlPanel.Services
                 var accessToken = GetAccessToken();
                 if (string.IsNullOrEmpty(accessToken))
                 {
-                    App.Logger?.Warning("No access token available for profile sync");
-                    return false;
+                    // For V2 users (invite-code or expired OAuth): allow sync if we have unified_id + auth token
+                    var fallbackUnifiedId = App.Settings?.Current?.UnifiedId;
+                    if (!string.IsNullOrEmpty(fallbackUnifiedId) && !string.IsNullOrEmpty(App.Settings?.Current?.AuthToken))
+                    {
+                        App.Logger?.Debug("No OAuth token — proceeding with V2 sync for unified user {Id}", fallbackUnifiedId);
+                    }
+                    else
+                    {
+                        App.Logger?.Warning("No access token available for profile sync");
+                        return false;
+                    }
                 }
 
                 // Gather local progression data from Settings
@@ -329,6 +396,16 @@ namespace ConditioningControlPanel.Services
 
                 // Calculate total accumulated XP (sum of all levels + current progress)
                 var totalXp = App.Progression?.GetTotalXP(settings.PlayerLevel, settings.PlayerXP) ?? settings.PlayerXP;
+
+                // Guard: if local data looks like fresh defaults (Level 1, near-zero XP) and we
+                // haven't completed a round-trip load yet this session, skip sending XP/level.
+                // This prevents a settings reset (update crash, corruption) from zeroing the server.
+                if (!_hasLoadedProfile && settings.PlayerLevel <= 1 && totalXp < 100)
+                {
+                    App.Logger?.Warning("Sync blocked — local looks like defaults (Level {Level}, XP {Xp}) and profile not yet loaded. Waiting for LoadProfileAsync.",
+                        settings.PlayerLevel, (int)totalXp);
+                    return false;
+                }
 
                 App.Logger?.Information("Syncing profile - Level: {Level}, TotalXP: {Xp}, VideoMinutes: {VideoMin:F1}, LockCards: {LockCards}",
                     settings.PlayerLevel,
@@ -364,7 +441,9 @@ namespace ConditioningControlPanel.Services
                                 .Select(d => d.ToString("yyyy-MM-dd")).ToList() ?? new List<string>(),
                             ["total_daily_quests_completed"] = questProgress?.TotalDailyQuestsCompleted ?? 0,
                             ["total_weekly_quests_completed"] = questProgress?.TotalWeeklyQuestsCompleted ?? 0,
-                            ["total_xp_from_quests"] = questProgress?.TotalXPFromQuests ?? 0
+                            ["total_xp_from_quests"] = questProgress?.TotalXPFromQuests ?? 0,
+                            ["daily_quests_completed_today"] = questProgress?.GetDailyQuestsCompletedToday() ?? 0,
+                            ["daily_completion_reset_date"] = questProgress?.DailyCompletionResetDate?.ToString("yyyy-MM-dd") ?? ""
                         },
                         unlocked_skills = settings.UnlockedSkills?.ToList() ?? new List<string>(),
                         skill_points = settings.SkillPoints,
@@ -397,7 +476,7 @@ namespace ConditioningControlPanel.Services
                             App.Logger?.Debug("V2 Profile sync rate-limited by server, will retry later");
                             return false;
                         }
-                        HandleUnauthorized(v2Response);
+                        await HandleUnauthorizedAsync(v2Response);
                         var error = await v2Response.Content.ReadAsStringAsync();
                         App.Logger?.Warning("V2 Profile sync failed: {Status} - {Error}", v2Response.StatusCode, error);
                         LastSyncError = $"Sync failed: {v2Response.StatusCode}";
@@ -447,13 +526,18 @@ namespace ConditioningControlPanel.Services
                             settings.PendingSkillsResetAck = false;
                             App.Settings?.Save();
                         }
-                        else if (v2Result?.SkillPoints.HasValue == true && v2Result.SkillPoints.Value != settings.SkillPoints)
+                        else if (v2Result?.SkillPoints.HasValue == true)
                         {
-                            // Server is source of truth for skill points
-                            App.Logger?.Information("V2 Sync: Skill points server={Server} local={Local} — using server value",
-                                v2Result.SkillPoints.Value, settings.SkillPoints);
-                            settings.SkillPoints = v2Result.SkillPoints.Value;
-                            App.Settings?.Save();
+                            // Take max of server/local — skill points only increase (level-ups, bubble pops)
+                            // so the higher value is always correct; prevents stale server value overwriting local level-up awards
+                            var maxPoints = Math.Max(v2Result.SkillPoints.Value, settings.SkillPoints);
+                            if (maxPoints != settings.SkillPoints)
+                            {
+                                App.Logger?.Information("V2 Sync: Skill points server={Server}, local={Local} — taking max ({Max})",
+                                    v2Result.SkillPoints.Value, settings.SkillPoints, maxPoints);
+                                settings.SkillPoints = maxPoints;
+                                App.Settings?.Save();
+                            }
                         }
 
                         // Merge unlocked skills from server (union — never lose skills)
@@ -542,6 +626,29 @@ namespace ConditioningControlPanel.Services
                             }
                         }
 
+                        // Merge achievements from server (union — never lose achievements)
+                        if (v2Result?.User?.Achievements != null && v2Result.User.Achievements.Count > 0)
+                        {
+                            var achievementSvc = App.Achievements;
+                            if (achievementSvc?.Progress != null)
+                            {
+                                var restoredCount = 0;
+                                foreach (var achievementId in v2Result.User.Achievements)
+                                {
+                                    if (!achievementSvc.Progress.IsUnlocked(achievementId))
+                                    {
+                                        achievementSvc.Progress.Unlock(achievementId);
+                                        restoredCount++;
+                                    }
+                                }
+                                if (restoredCount > 0)
+                                {
+                                    App.Logger?.Information("V2 Sync: Restored {Count} achievements from server", restoredCount);
+                                    achievementSvc.Save();
+                                }
+                            }
+                        }
+
                         // Merge total conditioning minutes from server (take higher)
                         if (v2Result?.TotalConditioningMinutes.HasValue == true && v2Result.TotalConditioningMinutes.Value > settings.TotalConditioningMinutes)
                         {
@@ -598,18 +705,41 @@ namespace ConditioningControlPanel.Services
                             settings.HighestLevelEver = v2Result.User.HighestLevelEver ?? 0;
                             App.Settings?.Save();
                         }
-                        // Adopt server level/xp if higher than local (e.g. crash lost recent progress)
-                        else if (v2Result?.User != null && v2Result.User.Level > settings.PlayerLevel)
+                        // Adopt server XP after sync. Two cases:
+                        // 1. Server > local: server has more (admin boost, other device). Adopt.
+                        // 2. Server significantly < local: server clamped us (anti-cheat). Adopt to
+                        //    kill the file-edit exploit where inflated local persists across syncs.
+                        // Small local > server gaps (<5K) are normal race conditions during active
+                        // sessions (XP earned while sync was in-flight) — don't force those down.
+                        else if (v2Result?.User != null)
                         {
-                            var serverLevel = v2Result.User.Level;
-                            var serverXp = v2Result.User.Xp;
-                            var serverLevelXp = App.Progression?.GetCurrentLevelXP(serverLevel, serverXp) ?? 0;
+                            var serverTotalXp = (double)v2Result.User.Xp;
+                            var localTotalXp = App.Progression?.GetTotalXP(settings.PlayerLevel, settings.PlayerXP) ?? 0;
 
-                            App.Logger?.Information("V2 Sync: Server level higher than local — adopting Level {ServerLevel} (local was {LocalLevel})",
-                                serverLevel, settings.PlayerLevel);
-                            settings.PlayerLevel = serverLevel;
-                            settings.PlayerXP = serverLevelXp;
-                            App.Settings?.Save();
+                            if (serverTotalXp > localTotalXp + 5000)
+                            {
+                                // Server has substantially more — adopt server values (admin boost, other device)
+                                var serverLevel = v2Result.User.Level;
+                                var serverLevelXp = App.Progression?.GetCurrentLevelXP(serverLevel, serverTotalXp) ?? 0;
+
+                                App.Logger?.Information("V2 Sync: Server XP higher — adopting Level {ServerLevel} XP {ServerXp} (local was {LocalXp})",
+                                    serverLevel, serverTotalXp, localTotalXp);
+                                settings.PlayerLevel = serverLevel;
+                                settings.PlayerXP = serverLevelXp;
+                                App.Settings?.Save();
+                            }
+                            else if (localTotalXp > serverTotalXp + 75000)
+                            {
+                                // Server clamped our XP significantly — force adopt to prevent exploit
+                                var serverLevel = v2Result.User.Level;
+                                var serverLevelXp = App.Progression?.GetCurrentLevelXP(serverLevel, serverTotalXp) ?? 0;
+
+                                App.Logger?.Warning("[Anti-cheat] V2 Sync: Server clamped XP — forcing Level {ServerLevel} XP {ServerXp} (local was {LocalXp})",
+                                    serverLevel, serverTotalXp, localTotalXp);
+                                settings.PlayerLevel = serverLevel;
+                                settings.PlayerXP = serverLevelXp;
+                                App.Settings?.Save();
+                            }
                         }
                     }
                     catch (Exception parseEx)
@@ -617,6 +747,7 @@ namespace ConditioningControlPanel.Services
                         App.Logger?.Debug("V2 Sync: Could not parse server flags: {Error}", parseEx.Message);
                     }
 
+                    syncSucceeded = true;
                     return true;
                 }
 
@@ -711,6 +842,7 @@ namespace ConditioningControlPanel.Services
                     MergeCloudProfile(result.Profile);
                 }
 
+                syncSucceeded = true;
                 return true;
             }
             catch (Exception ex)
@@ -718,6 +850,25 @@ namespace ConditioningControlPanel.Services
                 App.Logger?.Error(ex, "Failed to sync profile to cloud");
                 LastSyncError = ex.Message;
                 return false;
+            }
+            }
+            finally
+            {
+                // Track sync health — only count actual failures, not skips (cooldown, gate, offline)
+                if (syncSucceeded)
+                {
+                    if (ConsecutiveSyncFailures > 0)
+                    {
+                        ConsecutiveSyncFailures = 0;
+                        SyncHealthChanged?.Invoke(this, 0);
+                    }
+                }
+                else if (LastSyncError != null)
+                {
+                    ConsecutiveSyncFailures++;
+                    SyncHealthChanged?.Invoke(this, ConsecutiveSyncFailures);
+                }
+                _syncGate.Release();
             }
         }
 
@@ -739,8 +890,10 @@ namespace ConditioningControlPanel.Services
             var localTotalXp = App.Progression?.GetTotalXP(settings.PlayerLevel, settings.PlayerXP) ?? settings.PlayerXP;
             var cloudTotalXp = (double)cloudProfile.Xp;
 
-            // TAKE HIGHER VALUES - prevents progress loss from cloud corruption/sync issues
-            // This is safer than "cloud is truth" which can wipe legitimate progress
+            // Cloud is authoritative on startup. Allow a small grace delta for unsynced
+            // progress from a crash, but reject suspiciously large local values (file edits).
+            const double MAX_STARTUP_DELTA = 50000; // Max XP above cloud we trust from local
+
             if (cloudTotalXp > localTotalXp)
             {
                 // Cloud has more progress - use cloud values
@@ -756,17 +909,30 @@ namespace ConditioningControlPanel.Services
                 // Check for level-based achievements with the new level
                 App.Achievements?.CheckLevelAchievements(cloudProfile.Level);
             }
+            else if (localTotalXp > cloudTotalXp + MAX_STARTUP_DELTA)
+            {
+                // Local is suspiciously higher than cloud — likely file edit, not legitimate play.
+                // Force adopt cloud values to prevent XP inflation exploit.
+                var cloudLevelXp = App.Progression?.GetCurrentLevelXP(cloudProfile.Level, cloudProfile.Xp) ?? 0;
+
+                App.Logger?.Warning("[Anti-cheat] Local XP suspiciously high on startup: local={LocalXP} vs cloud={CloudXP} (delta={Delta}) — forcing cloud values",
+                    (int)localTotalXp, (int)cloudTotalXp, (int)(localTotalXp - cloudTotalXp));
+
+                settings.PlayerLevel = cloudProfile.Level;
+                settings.PlayerXP = cloudLevelXp;
+                needsSave = true;
+            }
             else if (localTotalXp > cloudTotalXp)
             {
-                // Local has more progress - keep local, will sync UP on next SyncProfileAsync
+                // Small delta - likely unsynced progress from a crash. Sync UP.
                 App.Logger?.Information("Local has higher progress - keeping local: Local Level {LocalLevel} ({LocalXP} total XP) > Cloud Level {CloudLevel} ({CloudXP} total XP)",
                     settings.PlayerLevel, (int)localTotalXp, cloudProfile.Level, (int)cloudTotalXp);
 
                 // Trigger an immediate sync UP so cloud gets the correct data
                 _ = Task.Run(async () =>
                 {
-                    await Task.Delay(1000); // Small delay to let startup complete
-                    await SyncProfileAsync();
+                    try { await Task.Delay(1000); await SyncProfileAsync(); }
+                    catch (Exception ex) { App.Logger?.Error(ex, "Background sync-up failed"); }
                 });
             }
             else
@@ -834,6 +1000,160 @@ namespace ConditioningControlPanel.Services
                         needsSave = true;
                     }
                 }
+                if (cloudProfile.Stats.TryGetValue("total_video_minutes", out var videoMin))
+                {
+                    var v = Convert.ToDouble(videoMin);
+                    if (v > progress.TotalVideoMinutes)
+                    {
+                        progress.TotalVideoMinutes = v;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_lock_cards_completed", out var lockCards))
+                {
+                    var lc = Convert.ToInt32(lockCards);
+                    if (lc > progress.TotalLockCardsCompleted)
+                    {
+                        progress.TotalLockCardsCompleted = lc;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("highest_streak", out var hStreak))
+                {
+                    var hs = Convert.ToInt32(hStreak);
+                    var settings2 = App.Settings?.Current;
+                    if (settings2 != null && hs > settings2.HighestStreak)
+                    {
+                        settings2.HighestStreak = hs;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_attention_checks_passed", out var attPassed))
+                {
+                    var ap = Convert.ToInt32(attPassed);
+                    if (ap > progress.TotalAttentionChecksPassed)
+                    {
+                        progress.TotalAttentionChecksPassed = ap;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("video_attention_checks_passed", out var vidAttPassed))
+                {
+                    var vap = Convert.ToInt32(vidAttPassed);
+                    if (vap > progress.VideoAttentionChecksPassed)
+                    {
+                        progress.VideoAttentionChecksPassed = vap;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("video_attention_checks_failed", out var vidAttFailed))
+                {
+                    var vaf = Convert.ToInt32(vidAttFailed);
+                    if (vaf > progress.VideoAttentionChecksFailed)
+                    {
+                        progress.VideoAttentionChecksFailed = vaf;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_attention_check_failures", out var attFail))
+                {
+                    var af = Convert.ToInt32(attFail);
+                    if (af > progress.AttentionCheckFailures)
+                    {
+                        progress.AttentionCheckFailures = af;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_bubble_count_games", out var bcGames))
+                {
+                    var bg = Convert.ToInt32(bcGames);
+                    if (bg > progress.TotalBubbleCountGames)
+                    {
+                        progress.TotalBubbleCountGames = bg;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_bubble_count_correct", out var bcCorrect))
+                {
+                    var bc = Convert.ToInt32(bcCorrect);
+                    if (bc > progress.TotalBubbleCountCorrect)
+                    {
+                        progress.TotalBubbleCountCorrect = bc;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_bubble_count_failed", out var bcFailed))
+                {
+                    var bf = Convert.ToInt32(bcFailed);
+                    if (bf > progress.TotalBubbleCountFailed)
+                    {
+                        progress.TotalBubbleCountFailed = bf;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("bubble_count_best_streak", out var bcStreak))
+                {
+                    var bs = Convert.ToInt32(bcStreak);
+                    if (bs > progress.BubbleCountBestStreak)
+                    {
+                        progress.BubbleCountBestStreak = bs;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_sessions_started", out var sessStarted))
+                {
+                    var ss = Convert.ToInt32(sessStarted);
+                    if (ss > progress.TotalSessionsStarted)
+                    {
+                        progress.TotalSessionsStarted = ss;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_sessions_abandoned", out var sessAbandoned))
+                {
+                    var sa = Convert.ToInt32(sessAbandoned);
+                    if (sa > progress.TotalSessionsAbandoned)
+                    {
+                        progress.TotalSessionsAbandoned = sa;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_xp_earned", out var xpEarned))
+                {
+                    var xe = Convert.ToDouble(xpEarned);
+                    if (xe > progress.TotalXPEarned)
+                    {
+                        progress.TotalXPEarned = xe;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_skill_points_earned", out var spEarned))
+                {
+                    var sp = Convert.ToInt32(spEarned);
+                    if (sp > progress.TotalSkillPointsEarned)
+                    {
+                        progress.TotalSkillPointsEarned = sp;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_pink_filter_minutes", out var pinkMin))
+                {
+                    var pm = Convert.ToDouble(pinkMin);
+                    if (pm > progress.TotalPinkFilterMinutes)
+                    {
+                        progress.TotalPinkFilterMinutes = pm;
+                        needsSave = true;
+                    }
+                }
+                if (cloudProfile.Stats.TryGetValue("total_spiral_minutes", out var spiralMin))
+                {
+                    var sm = Convert.ToDouble(spiralMin);
+                    if (sm > progress.TotalSpiralMinutes)
+                    {
+                        progress.TotalSpiralMinutes = sm;
+                        needsSave = true;
+                    }
+                }
             }
 
             // Merge quest streak data (skip if force_streak_override is active - handled separately)
@@ -887,11 +1207,28 @@ namespace ConditioningControlPanel.Services
                             }
                             if (datesChanged)
                             {
-                                // Trim to last 30 days
-                                var cutoff = DateTime.Today.AddDays(-30);
+                                // Trim to last 90 days (supports long streaks)
+                                var cutoff = DateTime.Today.AddDays(-90);
                                 questProgress.DailyQuestCompletionDates.RemoveAll(d => d.Date < cutoff);
-                                App.Logger?.Debug("Quest sync: Merged completion dates from cloud");
+                                App.Logger?.Debug("Quest sync: Merged completion dates from cloud ({Count} total dates)",
+                                    questProgress.DailyQuestCompletionDates.Count);
                                 needsSave = true;
+
+                                // Recompute streak from the merged calendar
+                                // RecalculateStreak now never decreases the streak, so this is safe
+                                App.Quests?.RecalculateStreak();
+
+                                // Also take cloud streak if it's higher (server may know about
+                                // dates we don't have locally, e.g. from another device)
+                                if (cloudProfile.Stats.TryGetValue("daily_quest_streak", out var cloudStreakAfter))
+                                {
+                                    var csAfter = Convert.ToInt32(cloudStreakAfter);
+                                    if (csAfter > settings.DailyQuestStreak)
+                                    {
+                                        App.Logger?.Debug("Quest sync: Adopting cloud streak {Cloud} (local was {Local})", csAfter, settings.DailyQuestStreak);
+                                        settings.DailyQuestStreak = csAfter;
+                                    }
+                                }
                             }
                         }
                     }
@@ -931,17 +1268,58 @@ namespace ConditioningControlPanel.Services
                             needsSave = true;
                         }
                     }
+
+                    // Restore daily_quests_completed_today from cloud (prevents quest reset exploit)
+                    if (cloudProfile.Stats.TryGetValue("daily_quests_completed_today", out var cloudDailyCompToday))
+                    {
+                        var cloudCount = Convert.ToInt32(cloudDailyCompToday);
+                        bool cloudDateIsToday = false;
+                        if (cloudProfile.Stats.TryGetValue("daily_completion_reset_date", out var cloudResetDate))
+                        {
+                            if (DateTime.TryParse(cloudResetDate?.ToString(), out var resetDate))
+                                cloudDateIsToday = resetDate.Date == DateTime.Today;
+                        }
+                        if (cloudDateIsToday && cloudCount > questProgress.GetDailyQuestsCompletedToday())
+                        {
+                            // Cross-reference: only accept cloud counter if completion dates actually
+                            // show evidence of today's quests. This prevents stale max-merged server
+                            // values from marking quests as completed when they weren't done today.
+                            bool hasCompletionEvidence = questProgress.DailyQuestCompletionDates
+                                .Any(d => d.Date == DateTime.Today);
+                            if (hasCompletionEvidence)
+                            {
+                                questProgress.DailyQuestsCompletedToday = cloudCount;
+                                questProgress.DailyCompletionResetDate = DateTime.Today;
+                                needsSave = true;
+                                App.Logger?.Debug("Quest sync: Restored daily counter to {Count} (verified by completion dates)", cloudCount);
+                            }
+                            else
+                            {
+                                App.Logger?.Debug("Quest sync: Rejected cloud daily counter {Count} — no completion evidence for today", cloudCount);
+                            }
+                        }
+                    }
+
+                    // Defensive fallback: if today is in completion dates but counter is 0
+                    if (questProgress.DailyQuestCompletionDates.Any(d => d.Date == DateTime.Today)
+                        && questProgress.GetDailyQuestsCompletedToday() == 0)
+                    {
+                        questProgress.DailyQuestsCompletedToday = 1;
+                        questProgress.DailyCompletionResetDate = DateTime.Today;
+                        needsSave = true;
+                    }
                 }
             }
 
-            // Merge skill tree data - server is source of truth for skill points
+            // Merge skill tree data - take max of server/local (skill points only increase)
             if (cloudProfile.SkillPoints.HasValue)
             {
-                if (cloudProfile.SkillPoints.Value != settings.SkillPoints)
+                var maxPoints = Math.Max(cloudProfile.SkillPoints.Value, settings.SkillPoints);
+                if (maxPoints != settings.SkillPoints)
                 {
-                    App.Logger?.Information("Skill tree sync: Server has {Cloud} skill points, local has {Local} — using server value",
-                        cloudProfile.SkillPoints.Value, settings.SkillPoints);
-                    settings.SkillPoints = cloudProfile.SkillPoints.Value;
+                    App.Logger?.Information("Skill tree sync: Skill points server={Server}, local={Local} — taking max ({Max})",
+                        cloudProfile.SkillPoints.Value, settings.SkillPoints, maxPoints);
+                    settings.SkillPoints = maxPoints;
                     needsSave = true;
                 }
             }
@@ -1028,6 +1406,9 @@ namespace ConditioningControlPanel.Services
                 _pendingQuestResetClear = true;
             }
 
+            // Sync CurrentStreak (used by streak power skill) with ConsecutiveDays from cloud
+            achievements?.Progress?.SyncCurrentStreak();
+
             // Save merged data
             if (needsSave)
             {
@@ -1068,8 +1449,8 @@ namespace ConditioningControlPanel.Services
                 _pendingQuestResetClear = false;
                 _ = Task.Run(async () =>
                 {
-                    await Task.Delay(500);
-                    await SyncProfileAsync();
+                    try { await Task.Delay(500); await SyncProfileAsync(); }
+                    catch (Exception ex) { App.Logger?.Error(ex, "Background quest-reset sync failed"); }
                 });
             }
         }
@@ -1168,7 +1549,7 @@ namespace ConditioningControlPanel.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    HandleUnauthorized(response);
+                    await HandleUnauthorizedAsync(response);
                     var errorResult = JsonConvert.DeserializeObject<OopsieErrorResponse>(json);
                     var errorMsg = errorResult?.Error ?? $"Server error: {response.StatusCode}";
                     App.Logger?.Warning("Oopsie insurance failed: {Error}", errorMsg);
@@ -1183,6 +1564,113 @@ namespace ConditioningControlPanel.Services
             {
                 App.Logger?.Error(ex, "Oopsie insurance request failed");
                 return (false, $"Connection failed: {ex.Message}", null);
+            }
+        }
+
+        /// <summary>
+        /// Purchase a skill via server-authoritative endpoint.
+        /// Server validates cost, prerequisites, and deducts points.
+        /// Returns (success, error) — on success, updates local SkillPoints and UnlockedSkills from server response.
+        /// </summary>
+        public async Task<(bool success, string? error)> PurchaseSkillAsync(string skillId)
+        {
+            var settings = App.Settings?.Current;
+            var unifiedId = settings?.UnifiedId;
+            if (string.IsNullOrEmpty(unifiedId))
+            {
+                return (false, "Purchasing enhancements requires a cloud account. Please log in first.");
+            }
+
+            try
+            {
+                var requestBody = JsonConvert.SerializeObject(new
+                {
+                    unified_id = unifiedId,
+                    skill_id = skillId,
+                    // Send local points so server can reconcile (bubble pop points may not be synced yet)
+                    skill_points = settings.SkillPoints
+                });
+                var request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/user/purchase-skill");
+                AddAuthHeader(request);
+                request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+
+                var response = await _httpClient.SendAsync(request);
+                var json = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    // On 401, attempt auth recovery and retry once if token was restored
+                    if (await HandleUnauthorizedAsync(response) && !string.IsNullOrEmpty(App.Settings?.Current?.AuthToken))
+                    {
+                        App.Logger?.Information("Skill purchase: retrying after auth token recovery");
+                        var retryRequest = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/user/purchase-skill");
+                        AddAuthHeader(retryRequest);
+                        retryRequest.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+                        response = await _httpClient.SendAsync(retryRequest);
+                        json = await response.Content.ReadAsStringAsync();
+                    }
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    // Show user-friendly message for auth failures instead of raw server error
+                    if (response.StatusCode == HttpStatusCode.Unauthorized)
+                    {
+                        App.Logger?.Warning("Skill purchase failed: auth token invalid/missing after recovery attempt");
+                        return (false, "Your session has expired. Please log in again from Settings to purchase enhancements.");
+                    }
+
+                    string errorMsg;
+                    try
+                    {
+                        var errorResult = JsonConvert.DeserializeObject<PurchaseSkillResponse>(json);
+                        errorMsg = errorResult?.Error ?? $"Server error: {response.StatusCode}";
+                        // Don't overwrite local points from error responses — server may return 0
+                        // for users whose points weren't properly backfilled. Let sync handle reconciliation.
+                    }
+                    catch
+                    {
+                        errorMsg = $"Server error: {response.StatusCode}";
+                    }
+                    App.Logger?.Warning("Skill purchase failed: {Error}", errorMsg);
+                    return (false, errorMsg);
+                }
+
+                var result = JsonConvert.DeserializeObject<PurchaseSkillResponse>(json);
+                if (result == null)
+                    return (false, "Invalid server response");
+
+                if (!result.Success)
+                {
+                    // Don't overwrite local points on failed purchase — server may have stale/missing
+                    // point data for users who leveled before server-authoritative system was deployed.
+                    // Sync endpoint handles proper reconciliation with backfill.
+                    App.Logger?.Warning("Skill purchase rejected: {Error}, server says {Points} points",
+                        result.Error, result.SkillPoints);
+                    return (false, result.Error ?? "Purchase failed");
+                }
+
+                // Apply server's authoritative values
+                if (result.SkillPoints.HasValue)
+                    settings.SkillPoints = result.SkillPoints.Value;
+                if (result.UnlockedSkills != null)
+                {
+                    // Merge: take union to never lose skills
+                    var merged = new HashSet<string>(settings.UnlockedSkills ?? new List<string>());
+                    foreach (var skill in result.UnlockedSkills)
+                        merged.Add(skill);
+                    settings.UnlockedSkills = merged.ToList();
+                }
+                App.Settings?.Save();
+
+                App.Logger?.Information("Skill purchased via server: {SkillId}, {Points} points remaining",
+                    skillId, settings.SkillPoints);
+                return (true, null);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "Skill purchase request failed");
+                return (false, "Connection failed. Please check your internet connection.");
             }
         }
 
@@ -1214,7 +1702,7 @@ namespace ConditioningControlPanel.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    HandleUnauthorized(response);
+                    await HandleUnauthorizedAsync(response);
                     var errorResult = JsonConvert.DeserializeObject<ChangeDisplayNameErrorResponse>(json);
                     var errorMsg = errorResult?.Error ?? $"Server error: {response.StatusCode}";
                     App.Logger?.Warning("Change display name failed: {Error}", errorMsg);
@@ -1260,7 +1748,7 @@ namespace ConditioningControlPanel.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    HandleUnauthorized(response);
+                    await HandleUnauthorizedAsync(response);
                     var errorResult = JsonConvert.DeserializeObject<DeleteAccountErrorResponse>(json);
                     var errorMsg = errorResult?.Error ?? $"Server error: {response.StatusCode}";
                     App.Logger?.Warning("Delete account failed: {Error}", errorMsg);
@@ -1306,7 +1794,7 @@ namespace ConditioningControlPanel.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    HandleUnauthorized(response);
+                    await HandleUnauthorizedAsync(response);
                     var errorResult = JsonConvert.DeserializeObject<DeleteAccountErrorResponse>(json);
                     var errorMsg = errorResult?.Error ?? $"Server error: {response.StatusCode}";
                     App.Logger?.Warning("Export data failed: {Error}", errorMsg);
@@ -1338,22 +1826,91 @@ namespace ConditioningControlPanel.Services
         }
 
         /// <summary>
-        /// Handles a 401 Unauthorized response by clearing the stored auth token.
+        /// Handles a 401 Unauthorized response. Attempts token recovery via restore-session
+        /// with a 5-minute cooldown between attempts. Token is preserved on failure.
         /// Returns true if the response was a 401.
         /// </summary>
-        private static bool HandleUnauthorized(HttpResponseMessage response)
+        private async Task<bool> HandleUnauthorizedAsync(HttpResponseMessage response)
         {
-            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            if (response.StatusCode != HttpStatusCode.Unauthorized)
+                return false;
+
+            // Attempt recovery with a 5-minute cooldown to prevent concurrent 401s from spam-recovering
+            // while still allowing retry if a transient server issue resolves later.
+            if (DateTime.Now - _lastAuthRecoveryAttempt > TimeSpan.FromMinutes(5))
             {
-                App.Logger?.Warning("[Auth] Received 401 — clearing stored auth token. User will get a new token on next auth.");
-                if (App.Settings?.Current != null)
+                _lastAuthRecoveryAttempt = DateTime.Now;
+                App.Logger?.Information("[Auth] 401 received — attempting token recovery via restore-session");
+                var recovered = await TryRecoverAuthTokenAsync();
+                if (recovered)
                 {
-                    App.Settings.Current.AuthToken = null;
-                    App.Settings.Save();
+                    App.Logger?.Information("[Auth] Token recovered successfully");
+                    StartHeartbeat();
+                    return true;
+                }
+            }
+
+            // Don't clear the auth token — it may still be valid for other endpoints or after
+            // a transient server issue. The 5-minute cooldown prevents recovery spam.
+            App.Logger?.Warning("[Auth] 401 — recovery failed or on cooldown, token kept for retry");
+            return true;
+        }
+
+        /// <summary>
+        /// Attempts to recover the auth token by calling /v2/auth/restore-session.
+        /// Returns true if the token was successfully recovered.
+        /// Must NOT call HandleUnauthorizedAsync on the response (would recurse).
+        /// </summary>
+        private async Task<bool> TryRecoverAuthTokenAsync()
+        {
+            try
+            {
+                var unifiedId = App.Settings?.Current?.UnifiedId;
+                var storedToken = App.Settings?.Current?.AuthToken;
+                if (string.IsNullOrEmpty(unifiedId) || string.IsNullOrEmpty(storedToken))
+                    return false;
+
+                var body = JsonConvert.SerializeObject(new
+                {
+                    unified_id = unifiedId,
+                    client_version = UpdateService.AppVersion
+                });
+                var request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/auth/restore-session");
+                request.Headers.Add("X-Auth-Token", storedToken);
+                request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+                var response = await _httpClient.SendAsync(request);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    App.Logger?.Warning("[Auth] restore-session failed: {Status}", response.StatusCode);
+                    return false;
+                }
+
+                // restore-session succeeded — the token is still valid on the server.
+                // The original 401 was transient. Server does NOT return a new auth_token
+                // (rotation during restore-session causes race conditions), so we keep
+                // the existing token. If the response does include a new token, adopt it.
+                var json = await response.Content.ReadAsStringAsync();
+                var obj = Newtonsoft.Json.Linq.JObject.Parse(json);
+                var newToken = obj["auth_token"]?.ToString();
+                if (!string.IsNullOrEmpty(newToken) && App.Settings?.Current != null)
+                {
+                    App.Settings.Current.AuthToken = newToken;
+                    App.Settings.Save(suppressCloudBackup: true);
+                    App.Logger?.Information("[Auth] Auth token refreshed from restore-session");
+                }
+                else
+                {
+                    App.Logger?.Information("[Auth] restore-session confirmed token is still valid (transient 401)");
                 }
                 return true;
             }
-            return false;
+            catch (Exception ex)
+            {
+                App.Logger?.Warning("[Auth] restore-session recovery failed: {Error}", ex.Message);
+                return false;
+            }
         }
 
         /// <summary>
@@ -1383,8 +1940,8 @@ namespace ConditioningControlPanel.Services
 
         #region Settings Backup/Restore
 
-        private DateTime _lastSettingsBackupTime = DateTime.MinValue;
-        private static readonly TimeSpan SettingsBackupDebounce = TimeSpan.FromMinutes(5);
+        private long _lastSettingsBackupTicks = 0;
+        private static readonly long SettingsBackupDebounceTicks = TimeSpan.FromMinutes(5).Ticks;
 
         /// <summary>
         /// Properties to exclude from settings backup (server-authoritative or identity fields).
@@ -1421,17 +1978,44 @@ namespace ConditioningControlPanel.Services
             if (string.IsNullOrEmpty(unifiedId)) return false;
 
             // Debounce: skip if backed up recently (unless forced)
-            if (!force && (DateTime.Now - _lastSettingsBackupTime) < SettingsBackupDebounce)
+            // Uses Interlocked for thread safety — multiple async paths can call this concurrently
+            var nowTicks = DateTime.UtcNow.Ticks;
+            if (force)
             {
-                App.Logger?.Debug("Settings backup skipped (debounce, last backup {Ago}s ago)",
-                    (int)(DateTime.Now - _lastSettingsBackupTime).TotalSeconds);
-                return false;
+                // Forced backup (user-initiated): skip debounce, just stamp the time
+                Interlocked.Exchange(ref _lastSettingsBackupTicks, nowTicks);
+            }
+            else
+            {
+                var lastTicks = Interlocked.Read(ref _lastSettingsBackupTicks);
+                if ((nowTicks - lastTicks) < SettingsBackupDebounceTicks)
+                {
+                    App.Logger?.Debug("Settings backup skipped (debounce, last backup {Ago}s ago)",
+                        (nowTicks - lastTicks) / TimeSpan.TicksPerSecond);
+                    return false;
+                }
+
+                // Atomically claim this backup slot — if another thread won the race, bail out.
+                // Set timestamp BEFORE the HTTP call to prevent concurrent/retry storms.
+                if (Interlocked.CompareExchange(ref _lastSettingsBackupTicks, nowTicks, lastTicks) != lastTicks)
+                {
+                    App.Logger?.Debug("Settings backup skipped (another thread claimed the slot)");
+                    return false;
+                }
             }
 
             try
             {
                 var settings = App.Settings?.Current;
                 if (settings == null) return false;
+
+                // Bail early if no auth token — request would just 401
+                var authToken = settings.AuthToken;
+                if (string.IsNullOrEmpty(authToken))
+                {
+                    App.Logger?.Debug("Settings backup skipped (no auth token)");
+                    return false;
+                }
 
                 // Serialize settings, then strip excluded properties
                 var fullJson = JsonConvert.SerializeObject(settings, Formatting.None);
@@ -1481,13 +2065,12 @@ namespace ConditioningControlPanel.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    HandleUnauthorized(response);
+                    await HandleUnauthorizedAsync(response);
                     var error = await response.Content.ReadAsStringAsync();
                     App.Logger?.Warning("Settings backup failed: {Status} - {Error}", response.StatusCode, error);
                     return false;
                 }
 
-                _lastSettingsBackupTime = DateTime.Now;
                 App.Logger?.Information("Settings backed up to cloud ({Size} bytes compressed)", compressedBytes.Length);
                 return true;
             }
@@ -1520,7 +2103,7 @@ namespace ConditioningControlPanel.Services
                 var response = await _httpClient.SendAsync(request);
                 if (!response.IsSuccessStatusCode)
                 {
-                    HandleUnauthorized(response);
+                    await HandleUnauthorizedAsync(response);
                     return null;
                 }
 
@@ -1566,7 +2149,7 @@ namespace ConditioningControlPanel.Services
                 var response = await _httpClient.SendAsync(request);
                 if (!response.IsSuccessStatusCode)
                 {
-                    HandleUnauthorized(response);
+                    await HandleUnauthorizedAsync(response);
                     return null;
                 }
 
@@ -1603,6 +2186,53 @@ namespace ConditioningControlPanel.Services
             }
         }
 
+        /// <summary>
+        /// Records that the current user found the easter egg and returns the total reader count.
+        /// If logged in: adds user to the unique readers set and returns count.
+        /// If not logged in: returns count only (read-only).
+        /// Returns -1 on failure.
+        /// </summary>
+        public async Task<int> RecordEasterEggReadAsync()
+        {
+            try
+            {
+                var unifiedId = App.Settings?.Current?.UnifiedId;
+
+                var request = new HttpRequestMessage(HttpMethod.Post, $"{ProxyBaseUrl}/v2/easter-egg");
+
+                if (!string.IsNullOrEmpty(unifiedId))
+                {
+                    AddAuthHeader(request);
+                    request.Content = new StringContent(
+                        JsonConvert.SerializeObject(new { unified_id = unifiedId }),
+                        Encoding.UTF8,
+                        "application/json"
+                    );
+                }
+                else
+                {
+                    request.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+                }
+
+                var response = await _httpClient.SendAsync(request);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    App.Logger?.Warning("Easter egg endpoint returned {Status}", response.StatusCode);
+                    return -1;
+                }
+
+                var json = await response.Content.ReadAsStringAsync();
+                var result = JsonConvert.DeserializeObject<EasterEggResponse>(json);
+                return result?.Count ?? -1;
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Easter egg request failed");
+                return -1;
+            }
+        }
+
         #endregion
 
         public void Dispose()
@@ -1614,6 +2244,12 @@ namespace ConditioningControlPanel.Services
         }
 
         #region DTOs
+
+        private class EasterEggResponse
+        {
+            [JsonProperty("count")]
+            public int Count { get; set; }
+        }
 
         private class ProfileResponse
         {
@@ -1779,6 +2415,9 @@ namespace ConditioningControlPanel.Services
             [JsonProperty("level_reset")]
             public bool? LevelReset { get; set; }
 
+            [JsonProperty("total_xp_earned")]
+            public double? TotalXpEarned { get; set; }
+
             [JsonProperty("total_conditioning_minutes")]
             public double? TotalConditioningMinutes { get; set; }
 
@@ -1802,6 +2441,12 @@ namespace ConditioningControlPanel.Services
 
             [JsonProperty("highest_level_ever")]
             public int? HighestLevelEver { get; set; }
+
+            [JsonProperty("achievements")]
+            public List<string>? Achievements { get; set; }
+
+            [JsonProperty("stats")]
+            public Dictionary<string, object>? Stats { get; set; }
         }
 
         private class OopsieSuccessResponse
@@ -1820,6 +2465,21 @@ namespace ConditioningControlPanel.Services
         {
             [JsonProperty("error")]
             public string? Error { get; set; }
+        }
+
+        private class PurchaseSkillResponse
+        {
+            [JsonProperty("success")]
+            public bool Success { get; set; }
+
+            [JsonProperty("error")]
+            public string? Error { get; set; }
+
+            [JsonProperty("skill_points")]
+            public int? SkillPoints { get; set; }
+
+            [JsonProperty("unlocked_skills")]
+            public List<string>? UnlockedSkills { get; set; }
         }
 
         private class ChangeDisplayNameResponse

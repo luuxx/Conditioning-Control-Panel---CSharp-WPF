@@ -1,8 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using System.Windows;
-
 namespace ConditioningControlPanel.Services.Haptics
 {
     /// <summary>
@@ -16,7 +11,9 @@ namespace ConditioningControlPanel.Services.Haptics
 
         public event EventHandler<bool>? ConnectionChanged;
         public event EventHandler<string>? DeviceDiscovered;
+#pragma warning disable CS0067 // Required by IHapticProvider interface
         public event EventHandler<string>? Error;
+#pragma warning restore CS0067
 
         public Task<bool> ConnectAsync()
         {

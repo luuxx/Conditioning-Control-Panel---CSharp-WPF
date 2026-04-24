@@ -1,5 +1,5 @@
-using System.Windows;
 using System.Windows.Input;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel
 {

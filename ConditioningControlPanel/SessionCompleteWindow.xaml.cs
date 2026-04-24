@@ -1,9 +1,8 @@
-using System;
-using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using NAudio.Wave;
 using ConditioningControlPanel.Models;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel
 {
@@ -29,11 +28,11 @@ namespace ConditioningControlPanel
             // Set custom message based on session
             if (session.Id == "gamer_girl")
             {
-                TxtMainMessage.Text = "GG, Good Girl!";
+                TxtMainMessage.Text = Loc.Get("label_gg_good_girl");
             }
             else
             {
-                TxtMainMessage.Text = "Good Girl!";
+                TxtMainMessage.Text = Loc.Get("label_good_girl_3");
             }
 
             TxtSubMessage.Text = $"{session.Icon} {session.Name} Complete";
@@ -93,7 +92,7 @@ namespace ConditioningControlPanel
                             using var outputDevice = new WaveOutEvent();
 
                             var masterVolume = App.Settings.Current.MasterVolume / 100f;
-                            var curvedVolume = (float)Math.Pow(masterVolume, 1.5) * 0.5f;
+                            var curvedVolume = (float)Math.Pow(masterVolume, 1.5) * 0.35f;
                             audioFile.Volume = Math.Max(0.01f, curvedVolume);
 
                             outputDevice.Init(audioFile);

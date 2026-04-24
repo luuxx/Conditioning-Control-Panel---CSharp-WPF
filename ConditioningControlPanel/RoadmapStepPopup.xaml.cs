@@ -1,6 +1,4 @@
-using System;
 using System.IO;
-using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
@@ -142,12 +140,7 @@ public partial class RoadmapStepPopup : Window
 
     private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        // Allow dragging the window
-        try
-        {
-            DragMove();
-        }
-        catch { /* Ignore drag errors */ }
+        FadeOutAndClose();
     }
 
     protected override void OnClosed(EventArgs e)

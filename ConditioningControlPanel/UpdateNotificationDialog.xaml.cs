@@ -1,7 +1,7 @@
-using System.Windows;
 using System.Text.RegularExpressions;
 using ConditioningControlPanel.Models;
 using ConditioningControlPanel.Services;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel
 {

@@ -1,4 +1,3 @@
-using System;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
@@ -7,7 +6,6 @@ using System.Net.Http.Json;
 using System.Security;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using ConditioningControlPanel.Models;
 
 namespace ConditioningControlPanel.Services
@@ -113,6 +111,8 @@ namespace ConditioningControlPanel.Services
                 BaseAddress = new Uri(ProxyBaseUrl),
                 Timeout = TimeSpan.FromSeconds(30)
             };
+            _httpClient.DefaultRequestHeaders.Add("X-Client-Version", UpdateService.AppVersion);
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"ConditioningControlPanel/{UpdateService.AppVersion}");
 
             // Load cached state on startup
             LoadCachedState();
@@ -189,6 +189,9 @@ namespace ConditioningControlPanel.Services
 
                 if (completedTask == timeoutTask)
                 {
+                    // Observe the dangling GetContextAsync to prevent unobserved task exception
+                    // when StopCallbackListener disposes the listener
+                    _ = getContextTask.ContinueWith(t => { _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
                     throw new TimeoutException("Discord login timed out. Please try again.");
                 }
 

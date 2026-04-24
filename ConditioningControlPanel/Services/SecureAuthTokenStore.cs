@@ -1,4 +1,3 @@
-using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -81,6 +80,16 @@ namespace ConditioningControlPanel.Services
                 _loaded = true;
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Clear the in-memory cached token (call on app exit to reduce memory exposure).
+        /// Does NOT delete the on-disk encrypted file.
+        /// </summary>
+        public static void ClearMemoryCache()
+        {
+            _cached = null;
+            _loaded = false;
         }
 
         /// <summary>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using ConditioningControlPanel.Localization;
 using Newtonsoft.Json;
 
 namespace ConditioningControlPanel.Models;
@@ -21,6 +22,7 @@ public enum QuestCategory
     Session,        // Complete sessions
     Streak,         // Daily streak
     BubbleCount,    // Bubble count minigame
+    Mantra,         // Complete mantras
     Combined        // Multiple activities (overlay time, XP earned)
 }
 
@@ -49,6 +51,13 @@ public class QuestDefinition
 
     [JsonProperty("icon")]
     public string Icon { get; set; } = "";
+
+    /// <summary>Localized quest name (falls back to hardcoded Name)</summary>
+    [JsonIgnore]
+    public string LocalizedName => Loc.Get($"quest_{Id}_name");
+    /// <summary>Localized quest description (falls back to hardcoded Description)</summary>
+    [JsonIgnore]
+    public string LocalizedDescription => Loc.Get($"quest_{Id}_desc");
 
     /// <summary>
     /// Local embedded image path (pack://application:,,,/Resources/...)

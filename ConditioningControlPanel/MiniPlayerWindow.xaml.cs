@@ -1,12 +1,11 @@
-using System;
 using System.IO;
-using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using LibVLCSharp.Shared;
 using LibVLCSharp.WPF;
 using XamlAnimatedGif;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel
 {
@@ -70,7 +69,7 @@ namespace ConditioningControlPanel
                 var libVLC = Services.VideoService.SharedLibVLC;
                 if (libVLC == null)
                 {
-                    MessageBox.Show("Video playback not available. LibVLC not initialized.", "Error",
+                    MessageBox.Show(Loc.Get("msg_video_playback_not_available_libvlc_not_initi"), "Error",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     Close();
                     return;

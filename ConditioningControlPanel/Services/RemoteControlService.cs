@@ -1,12 +1,9 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Net.Http;
 using System.Text;
-using System.Threading.Tasks;
 using System.Windows.Threading;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using ConditioningControlPanel.Helpers;
 
 namespace ConditioningControlPanel.Services
 {
@@ -29,14 +26,24 @@ namespace ConditioningControlPanel.Services
     public class RemoteControlService : IDisposable
     {
         private const string ProxyBaseUrl = "https://codebambi-proxy.vercel.app";
-        private const double PollIntervalSeconds = 3.0;
+        // 5s gives comfortable headroom under the server's 40/min per-user poll cap
+        // (12/min steady-state) while keeping perceived latency negligible.
+        private const double PollIntervalSeconds = 5.0;
+        // Status pushes are throttled — the controller UI doesn't need 3s-fresh status.
+        // Push immediately on command execution or controller-connected state change.
+        private const double StatusPushIntervalSeconds = 15.0;
+        // When a status push hits 429, skip subsequent pushes for this long.
+        private const double StatusBackoffSeconds = 60.0;
 
         private readonly HttpClient _httpClient;
         private DispatcherTimer? _pollTimer;
         private bool _disposed;
 
+        private static readonly Random _pinRng = new();
+
         public bool IsActive { get; private set; }
         public string? SessionCode { get; private set; }
+        public string? ConnectPin { get; private set; }
         public string? Tier { get; private set; }
         public bool ControllerConnected { get; private set; }
         public bool ControllerIdle { get; private set; }
@@ -60,6 +67,8 @@ namespace ConditioningControlPanel.Services
             {
                 Timeout = TimeSpan.FromSeconds(15)
             };
+            _httpClient.DefaultRequestHeaders.Add("X-Client-Version", UpdateService.AppVersion);
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"ConditioningControlPanel/{UpdateService.AppVersion}");
         }
 
         /// <summary>
@@ -68,7 +77,7 @@ namespace ConditioningControlPanel.Services
         /// </summary>
         private async Task<HttpResponseMessage> AuthPostAsync(string url, string jsonBody)
         {
-            var request = new HttpRequestMessage(HttpMethod.Post, url)
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
             {
                 Content = new StringContent(jsonBody, Encoding.UTF8, "application/json")
             };
@@ -92,8 +101,11 @@ namespace ConditioningControlPanel.Services
 
             try
             {
-                var body = JsonConvert.SerializeObject(new { unified_id = unifiedId, tier });
-                var response = await AuthPostAsync($"{ProxyBaseUrl}/v2/remote/start", body);
+                // Generate a random 4-digit PIN for controller authentication
+                var pin = _pinRng.Next(0, 10000).ToString("D4");
+
+                var body = JsonConvert.SerializeObject(new { unified_id = unifiedId, tier, connect_pin = pin });
+                using var response = await AuthPostAsync($"{ProxyBaseUrl}/v2/remote/start", body);
 
                 var json = await response.Content.ReadAsStringAsync();
                 if (!response.IsSuccessStatusCode)
@@ -104,8 +116,17 @@ namespace ConditioningControlPanel.Services
 
                 var result = JObject.Parse(json);
                 SessionCode = result["code"]?.ToString();
+                ConnectPin = pin;
                 Tier = tier;
                 IsActive = true;
+                _consecutivePollFailures = 0;
+                _consecutivePollSuccesses = 0;
+                _totalCommandsReceived = 0;
+                _lastHealthLog = DateTime.MinValue;
+                _sessionStartTime = DateTime.UtcNow;
+                _currentPollInterval = PollIntervalSeconds;
+                _lastStatusPushUtc = DateTime.MinValue;
+                _statusBackoffUntil = DateTime.MinValue;
 
                 // Start polling
                 _pollTimer = new DispatcherTimer
@@ -140,7 +161,7 @@ namespace ConditioningControlPanel.Services
                 try
                 {
                     var body = JsonConvert.SerializeObject(new { unified_id = unifiedId });
-                    await AuthPostAsync($"{ProxyBaseUrl}/v2/remote/stop", body);
+                    using var response = await AuthPostAsync($"{ProxyBaseUrl}/v2/remote/stop", body);
                 }
                 catch (Exception ex)
                 {
@@ -156,16 +177,21 @@ namespace ConditioningControlPanel.Services
         {
             _pollTimer?.Stop();
             _pollTimer = null;
+            _consecutivePollFailures = 0;
+            _consecutivePollSuccesses = 0;
+            _currentPollInterval = PollIntervalSeconds;
+            _controllerIdleSince = null;
+            _controllerAutoDisconnected = false;
+            _lastStatusPushUtc = DateTime.MinValue;
+            _statusBackoffUntil = DateTime.MinValue;
             IsActive = false;
             SessionCode = null;
+            ConnectPin = null;
             Tier = null;
             ControllerIdle = false;
 
             // Stop all effects that were triggered by the remote controller
-            if (System.Windows.Application.Current?.Dispatcher != null)
-            {
-                System.Windows.Application.Current.Dispatcher.Invoke(() => StopAllRemoteEffects());
-            }
+            DispatcherHelper.RunOnUISync(() => StopAllRemoteEffects());
 
             // Reset overlay level bypass when remote session ends
             if (App.Overlay != null)
@@ -180,25 +206,70 @@ namespace ConditioningControlPanel.Services
             SessionEnded?.Invoke(this, EventArgs.Empty);
         }
 
+        private bool _pollInProgress;
+        private int _consecutivePollFailures;
+        private int _consecutivePollSuccesses;
+        private int _totalCommandsReceived;
+        private DateTime _lastHealthLog = DateTime.MinValue;
+        private DateTime _sessionStartTime = DateTime.MinValue;
+        private double _currentPollInterval = PollIntervalSeconds;
+        private const double MaxBackoffSeconds = 60.0;
+        private const int HealthLogIntervalSeconds = 30;
+        private DateTime? _controllerIdleSince;
+        private bool _controllerAutoDisconnected;
+        private const double IdleAutoDisconnectSeconds = 120.0; // 2 minutes
+        private DateTime _lastStatusPushUtc = DateTime.MinValue;
+        private DateTime _statusBackoffUntil = DateTime.MinValue;
+
         private async Task PollForCommandsAsync()
         {
             if (!IsActive) return;
-
-            var unifiedId = App.UnifiedUserId;
-            if (string.IsNullOrEmpty(unifiedId)) return;
-
+            if (_pollInProgress) return; // Skip if previous poll still running (timer re-entrance)
+            _pollInProgress = true;
             try
             {
+                var unifiedId = App.UnifiedUserId;
+                if (string.IsNullOrEmpty(unifiedId)) return;
+
+                try
+                {
                 var body = JsonConvert.SerializeObject(new { unified_id = unifiedId });
-                var response = await AuthPostAsync($"{ProxyBaseUrl}/v2/remote/poll", body);
+                using var response = await AuthPostAsync($"{ProxyBaseUrl}/v2/remote/poll", body);
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    // Session may have expired
+                    _consecutivePollFailures++;
+                    _consecutivePollSuccesses = 0;
+
                     if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
                         App.Logger?.Warning("[RemoteControl] Session expired during poll");
                         CleanupSession();
+                    }
+                    else if (response.StatusCode == (System.Net.HttpStatusCode)429)
+                    {
+                        // Rate limited — exponential backoff
+                        _currentPollInterval = Math.Min(_currentPollInterval * 2, MaxBackoffSeconds);
+                        if (_pollTimer != null)
+                            _pollTimer.Interval = TimeSpan.FromSeconds(_currentPollInterval);
+                        App.Logger?.Warning("[RemoteControl] Rate limited (429) [code={Code}], backing off to {Interval}s", SessionCode ?? "?", _currentPollInterval);
+                    }
+                    else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                    {
+                        App.Logger?.Warning("[RemoteControl] Auth failure (401), consecutive: {Count}", _consecutivePollFailures);
+                        if (_consecutivePollFailures >= 3)
+                        {
+                            App.Logger?.Error("[RemoteControl] 3 consecutive auth failures — terminating session");
+                            CleanupSession();
+                        }
+                    }
+                    else if (_consecutivePollFailures >= 5)
+                    {
+                        App.Logger?.Error("[RemoteControl] Poll failed: {Status} (consecutive failures: {Count})", response.StatusCode, _consecutivePollFailures);
+                    }
+                    else
+                    {
+                        App.Logger?.Warning("[RemoteControl] Poll failed: {Status}", response.StatusCode);
                     }
                     return;
                 }
@@ -206,13 +277,70 @@ namespace ConditioningControlPanel.Services
                 var json = await response.Content.ReadAsStringAsync();
                 var result = JObject.Parse(json);
 
+                // Track success — recover from backoff if needed
+                var wasBackedOff = _currentPollInterval > PollIntervalSeconds;
+                var wasFailingConsecutively = _consecutivePollFailures > 0;
+                _consecutivePollSuccesses++;
+                _consecutivePollFailures = 0;
+
+                if (wasBackedOff)
+                {
+                    _currentPollInterval = PollIntervalSeconds;
+                    if (_pollTimer != null)
+                        _pollTimer.Interval = TimeSpan.FromSeconds(PollIntervalSeconds);
+                    App.Logger?.Information("[RemoteControl] Recovered from backoff, restoring {Interval}s poll interval", PollIntervalSeconds);
+                }
+                else if (wasFailingConsecutively && _consecutivePollSuccesses == 1)
+                {
+                    App.Logger?.Information("[RemoteControl] Poll recovered after failures");
+                }
+
+                // Periodic health log
+                var now = DateTime.UtcNow;
+                if ((now - _lastHealthLog).TotalSeconds >= HealthLogIntervalSeconds)
+                {
+                    _lastHealthLog = now;
+                    var uptime = now - _sessionStartTime;
+                    App.Logger?.Information(
+                        "[RemoteControl] Health: code={Code} uptime={Uptime} polls_ok={Successes} cmds_total={Cmds} controller={Status}",
+                        SessionCode,
+                        $"{(int)uptime.TotalMinutes}m{uptime.Seconds}s",
+                        _consecutivePollSuccesses,
+                        _totalCommandsReceived,
+                        ControllerConnected ? (ControllerIdle ? "idle" : "active") : "disconnected");
+                }
+
                 // Update controller connection status.
                 // The server only sets controller_connected=false on explicit disconnect
-                // (POST /remote/disconnect), NOT on ping staleness. This means the controller
-                // stays "connected" even if idle for long periods — which is correct for
-                // sessions that last hours with 10-20+ min idle stretches.
-                var connected = result["controller_connected"]?.Value<bool>() ?? false;
-                if (connected != ControllerConnected)
+                // (POST /remote/disconnect), NOT on ping staleness.
+                var serverConnected = result["controller_connected"]?.Value<bool>() ?? false;
+                var connected = serverConnected;
+                var idle = result["controller_idle"]?.Value<bool>() ?? false;
+
+                if (connected && _controllerAutoDisconnected)
+                {
+                    if (!idle)
+                    {
+                        // Controller is actively pinging again — treat as reconnect
+                        _controllerAutoDisconnected = false;
+                        _controllerIdleSince = null;
+                        // Fall through to normal connect flow below
+                    }
+                    else
+                    {
+                        // Still idle after auto-disconnect — suppress reconnect
+                        connected = false;
+                    }
+                }
+
+                // Only clear auto-disconnect flag when the SERVER itself reports
+                // the controller as disconnected — NOT when our local override
+                // suppressed reconnect above (which also sets connected=false).
+                if (!serverConnected)
+                    _controllerAutoDisconnected = false;
+
+                var controllerConnectedChanged = connected != ControllerConnected;
+                if (controllerConnectedChanged)
                 {
                     ControllerConnected = connected;
                     if (connected)
@@ -226,24 +354,49 @@ namespace ConditioningControlPanel.Services
                     }
                     else
                     {
-                        // Controller explicitly disconnected — stop all effects
-                        StopAllRemoteEffects();
+                        // Controller disconnected. By default we leave effects running
+                        // so a new controller can see the current state and the sub
+                        // isn't snapped to a halt mid-session. Opt-in setting stops them.
+                        if (App.Settings?.Current?.StopEffectsOnRemoteDisconnect == true)
+                            StopRemoteTriggeredEffects();
                     }
                     ControllerConnectedChanged?.Invoke(this, EventArgs.Empty);
                 }
 
-                // Track idle status for UI purposes (controller still connected but not actively pinging)
-                var idle = result["controller_idle"]?.Value<bool>() ?? false;
+                // Track idle status for UI + auto-disconnect timeout
                 if (idle != ControllerIdle)
                 {
                     ControllerIdle = idle;
+                    _controllerIdleSince = idle ? DateTime.UtcNow : null;
                     ControllerIdleChanged?.Invoke(this, EventArgs.Empty);
+                }
+
+                // Auto-disconnect controller after prolonged idle
+                if (ControllerConnected && idle && _controllerIdleSince != null)
+                {
+                    var idleDuration = (DateTime.UtcNow - _controllerIdleSince.Value).TotalSeconds;
+                    if (idleDuration >= IdleAutoDisconnectSeconds)
+                    {
+                        App.Logger?.Information("[RemoteControl] Controller idle for {Seconds:F0}s — auto-disconnecting", idleDuration);
+                        _controllerAutoDisconnected = true;
+                        ControllerConnected = false;
+                        if (App.Settings?.Current?.StopEffectsOnRemoteDisconnect == true)
+                            StopRemoteTriggeredEffects();
+                        ControllerConnectedChanged?.Invoke(this, EventArgs.Empty);
+                        ControllerIdle = false;
+                        ControllerIdleChanged?.Invoke(this, EventArgs.Empty);
+                    }
                 }
 
                 // Execute commands
                 string? lastCmdId = null;
                 string? lastAction = null;
                 var commands = result["commands"] as JArray;
+                if (commands != null && commands.Count > 0)
+                {
+                    _totalCommandsReceived += commands.Count;
+                    App.Logger?.Information("[RemoteControl] Poll returned {Count} command(s), session total: {Total}", commands.Count, _totalCommandsReceived);
+                }
                 if (commands != null)
                 {
                     foreach (var cmd in commands)
@@ -261,21 +414,39 @@ namespace ConditioningControlPanel.Services
                     }
                 }
 
-                // Always send status so the remote controller sees current CCP state
-                await SendStatusAsync(lastCmdId, lastAction);
+                // Throttle status pushes. Push immediately on command execution or
+                // controller-connected state change; otherwise only every ~15s.
+                // This roughly halves client→server traffic and keeps us well under
+                // the server's per-user 40/min cap on both /poll and /status.
+                var statusDue = (DateTime.UtcNow - _lastStatusPushUtc).TotalSeconds >= StatusPushIntervalSeconds;
+                if (lastCmdId != null || controllerConnectedChanged || statusDue)
+                {
+                    await SendStatusAsync(lastCmdId, lastAction);
+                }
             }
             catch (TaskCanceledException)
             {
-                // Timeout, ignore
+                _consecutivePollFailures++;
+                if (_consecutivePollFailures >= 3)
+                    App.Logger?.Warning("[RemoteControl] Poll timeout (consecutive: {Count})", _consecutivePollFailures);
             }
             catch (Exception ex)
             {
-                App.Logger?.Warning(ex, "[RemoteControl] Poll error");
+                _consecutivePollFailures++;
+                App.Logger?.Warning(ex, "[RemoteControl] Poll error (consecutive: {Count})", _consecutivePollFailures);
+            }
+            }
+            finally
+            {
+                _pollInProgress = false;
             }
         }
 
         private async Task SendStatusAsync(string? lastCmdId = null, string? lastAction = null)
         {
+            // Skip while we're in backoff from a previous 429 on /status.
+            if (DateTime.UtcNow < _statusBackoffUntil) return;
+
             var unifiedId = App.UnifiedUserId;
             if (string.IsNullOrEmpty(unifiedId)) return;
 
@@ -310,7 +481,28 @@ namespace ConditioningControlPanel.Services
                     session_info = sessionInfo
                 });
 
-                await AuthPostAsync($"{ProxyBaseUrl}/v2/remote/status", body);
+                using var response = await AuthPostAsync($"{ProxyBaseUrl}/v2/remote/status", body);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    if (response.StatusCode == (System.Net.HttpStatusCode)429)
+                    {
+                        _statusBackoffUntil = DateTime.UtcNow.AddSeconds(StatusBackoffSeconds);
+                        App.Logger?.Warning(
+                            "[RemoteControl] Status push rate limited (429) [code={Code}] — suppressing status pushes for {Seconds}s",
+                            SessionCode ?? "?", StatusBackoffSeconds);
+                    }
+                    else
+                    {
+                        App.Logger?.Warning(
+                            "[RemoteControl] Status push failed: {Status} [code={Code}]",
+                            response.StatusCode, SessionCode ?? "?");
+                    }
+                }
+                else
+                {
+                    _lastStatusPushUtc = DateTime.UtcNow;
+                }
             }
             catch (Exception ex)
             {
@@ -335,6 +527,7 @@ namespace ConditioningControlPanel.Services
                 if (App.LockCard?.IsRunning == true) services.Add("lock_card");
                 if (App.MindWipe?.IsRunning == true) services.Add("mind_wipe");
                 if (App.BouncingText?.IsRunning == true) services.Add("bounce_text");
+                if (App.Wallpaper?.IsActive == true) services.Add("wallpaper");
             }
             catch { }
             return services;
@@ -359,6 +552,7 @@ namespace ConditioningControlPanel.Services
                 App.MindWipe?.Stop();
                 App.BrainDrain?.Stop();
                 App.LockCard?.Stop();
+                App.Wallpaper?.Deactivate();
 
                 // Force close any open game/lock windows
                 LockCardWindow.ForceCloseAll();
@@ -394,6 +588,59 @@ namespace ConditioningControlPanel.Services
             }
         }
 
+        /// <summary>
+        /// Lighter cleanup for controller disconnect — stops remote-triggered effects
+        /// but preserves the user's engine and autonomy state.
+        /// </summary>
+        private void StopRemoteTriggeredEffects()
+        {
+            try
+            {
+                App.Logger?.Information("[RemoteControl] Controller disconnected — cleaning up remote effects only");
+
+                App.Autonomy?.CancelActivePulses();
+
+                App.Video?.Stop();
+                App.Flash?.Stop();
+                App.Subliminal?.Stop();
+                App.Bubbles?.Stop();
+                App.BouncingText?.Stop();
+                App.BubbleCount?.Stop();
+                App.MindWipe?.Stop();
+                App.BrainDrain?.Stop();
+                App.LockCard?.Stop();
+                App.Wallpaper?.Deactivate();
+
+                LockCardWindow.ForceCloseAll();
+                BubbleCountWindow.ForceCloseAll();
+
+                // Reset overlays that were enabled by remote
+                if (App.Settings?.Current != null)
+                {
+                    App.Settings.Current.PinkFilterEnabled = false;
+                    App.Settings.Current.SpiralEnabled = false;
+                    App.Settings.Current.StrictLockEnabled = false;
+                    App.Settings.Current.PanicKeyEnabled = true;
+                }
+                App.Overlay?.RefreshOverlays();
+
+                App.InteractionQueue?.ForceReset();
+
+                // Restore window visibility but don't stop engine/autonomy
+                if (MainWindowRef != null)
+                {
+                    MainWindowRef.EnablePinkFilter(false);
+                    MainWindowRef.EnableSpiral(false);
+                    MainWindowRef.RestoreFromTrayForRemote();
+                    MainWindowRef.ShowAvatarTube();
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "[RemoteControl] Failed to clean up remote effects on disconnect");
+            }
+        }
+
         private void EnsureOverlayRunning()
         {
             if (App.Overlay == null) return;
@@ -410,9 +657,7 @@ namespace ConditioningControlPanel.Services
 
         private void ExecuteCommand(string action, JObject? parameters)
         {
-            if (System.Windows.Application.Current?.Dispatcher == null) return;
-
-            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            DispatcherHelper.RunOnUISync(() =>
             {
                 try
                 {
@@ -698,6 +943,17 @@ namespace ConditioningControlPanel.Services
                                 App.Settings.Current.PanicKeyEnabled = true;
                                 App.Settings.Save();
                             }
+                            break;
+
+                        case "trigger_wallpaper":
+                            if (App.Wallpaper?.IsActive == true)
+                                App.Wallpaper.Shuffle();
+                            else
+                                App.Wallpaper?.Activate();
+                            break;
+
+                        case "stop_wallpaper":
+                            App.Wallpaper?.Deactivate();
                             break;
 
                         case "trigger_panic":

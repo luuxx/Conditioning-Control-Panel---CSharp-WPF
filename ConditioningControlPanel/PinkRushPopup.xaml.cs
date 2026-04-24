@@ -1,5 +1,3 @@
-using System;
-using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
@@ -16,6 +14,13 @@ public partial class PinkRushPopup : Window
     public PinkRushPopup()
     {
         InitializeComponent();
+
+        // Apply mod overrides to text
+        if (App.Mods != null)
+        {
+            TxtPinkRushTitle.Text = "⚡ " + App.Mods.GetPinkRushName();
+            TxtPinkRushSubtitle.Text = App.Mods.GetPinkRushDescription();
+        }
 
         PositionWindow();
 
@@ -103,8 +108,7 @@ public partial class PinkRushPopup : Window
 
     private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        try { DragMove(); }
-        catch { }
+        FadeOutAndClose();
     }
 
     protected override void OnClosed(EventArgs e)

@@ -1,15 +1,13 @@
-using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using NAudio.Wave;
+using ConditioningControlPanel.Helpers;
 
 namespace ConditioningControlPanel.Services;
 
@@ -37,18 +35,11 @@ public class BubbleService : IDisposable
     public event Action? OnBubblePopped;
     public event Action? OnBubbleMissed;
 
-    public void Start(bool bypassLevelCheck = false)
+    public void Start(bool bypassLevelCheck = false, int? frequency = null)
     {
         if (_isRunning) return;
 
         var settings = App.Settings.Current;
-
-        // Check level requirement unless bypassed (e.g., during sessions)
-        if (!bypassLevelCheck && !settings.IsLevelUnlocked(20))
-        {
-            App.Logger?.Information("BubbleService: Level {Level} is below 20, bubbles not available", settings.PlayerLevel);
-            return;
-        }
 
         _isRunning = true;
 
@@ -59,6 +50,8 @@ public class BubbleService : IDisposable
 
         // Start spawning bubbles based on frequency setting
         var intervalMs = 60000.0 / Math.Max(1, settings.BubblesFrequency); // frequency per minute
+        if (frequency.HasValue)
+            intervalMs = 60000.0 / Math.Max(1, frequency.Value);
         
         _spawnTimer = new DispatcherTimer
         {
@@ -107,9 +100,8 @@ public class BubbleService : IDisposable
         _animationTimer?.Stop();
         _animationTimer = null;
 
-        // Small delay to allow any pending animation ticks to complete
-        // This prevents race conditions when cleaning up during video playback
-        Thread.Sleep(50);
+        // DispatcherTimer ticks are synchronous on the UI thread and won't
+        // fire after Stop(), so no delay is needed here.
 
         // Pop all remaining bubbles
         PopAllBubbles();
@@ -165,14 +157,23 @@ public class BubbleService : IDisposable
             {
                 try
                 {
-                    var resourceUri = new Uri("pack://application:,,,/Resources/bubble.png", UriKind.Absolute);
-                    _bubbleImage = new BitmapImage();
-                    _bubbleImage.BeginInit();
-                    _bubbleImage.UriSource = resourceUri;
-                    _bubbleImage.CacheOption = BitmapCacheOption.OnLoad;
-                    _bubbleImage.EndInit();
-                    _bubbleImage.Freeze();
-                    App.Logger?.Debug("Bubble image loaded from embedded resource");
+                    var resolved = ModResourceResolver.ResolveImage("bubble.png");
+                    if (resolved is BitmapImage bmp)
+                    {
+                        _bubbleImage = bmp.IsFrozen ? bmp : bmp.Clone();
+                        if (!_bubbleImage.IsFrozen) _bubbleImage.Freeze();
+                    }
+                    else
+                    {
+                        var resourceUri = new Uri("pack://application:,,,/Resources/bubble.png", UriKind.Absolute);
+                        _bubbleImage = new BitmapImage();
+                        _bubbleImage.BeginInit();
+                        _bubbleImage.UriSource = resourceUri;
+                        _bubbleImage.CacheOption = BitmapCacheOption.OnLoad;
+                        _bubbleImage.EndInit();
+                        _bubbleImage.Freeze();
+                    }
+                    App.Logger?.Debug("Bubble image loaded");
                 }
                 catch (Exception ex)
                 {
@@ -188,13 +189,13 @@ public class BubbleService : IDisposable
             return;
         }
 
-        Application.Current.Dispatcher.BeginInvoke(() =>
+        DispatcherHelper.RunOnUI(() =>
         {
             try
             {
                 var settings = App.Settings.Current;
-                var screens = settings.DualMonitorEnabled 
-                    ? App.GetAllScreensCached() 
+                var screens = settings.DualMonitorEnabled
+                    ? App.GetAllScreensCached()
                     : new[] { System.Windows.Forms.Screen.PrimaryScreen! };
                 
                 var screen = screens[_random.Next(screens.Length)];
@@ -218,7 +219,7 @@ public class BubbleService : IDisposable
     /// </summary>
     public void SpawnOnce()
     {
-        Application.Current.Dispatcher.BeginInvoke(() =>
+        DispatcherHelper.RunOnUI(() =>
         {
             try
             {
@@ -261,13 +262,17 @@ public class BubbleService : IDisposable
         var multiplier = App.SkillTree?.RollLuckyBubble() ?? 1;
         var isLucky = multiplier > 1;
 
+        // Tell bubble whether it's lucky so it can show the right visual effects
+        var hasSparkleBoost = (App.SkillTree?.GetSparkleBoostTier() ?? 0) > 0 && (App.Settings?.Current?.FlashGlowEnabled ?? true);
+        bubble.SetLucky(isLucky, hasSparkleBoost);
+
         // Play appropriate sound
         PlayPopSound(isLucky);
 
         // Don't remove here - let the pop animation play, removal happens in OnDestroy
         OnBubblePopped?.Invoke();
 
-        App.Progression?.AddXP(2 * multiplier, XPSource.Bubble);
+        App.Progression?.AddXP(5 * multiplier, XPSource.Bubble);
 
         // Track for achievement
         App.Achievements?.TrackBubblePopped();
@@ -308,19 +313,18 @@ public class BubbleService : IDisposable
     {
         try
         {
-            var soundsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "bubbles");
-
-            // If lucky bubble, play special Burst easter egg sound
+            // If lucky bubble, play a random chime sound
             if (isLucky)
             {
-                var burstPath = Path.Combine(soundsPath, "Burst.mp3");
-                if (File.Exists(burstPath))
+                var chimeFiles = new[] { "chime1.mp3", "chime2.mp3", "chime3.mp3" };
+                var chimePath = ModResourceResolver.ResolveAudioPath(chimeFiles[_random.Next(chimeFiles.Length)]);
+                if (File.Exists(chimePath))
                 {
                     var masterVolume = App.Settings.Current.MasterVolume / 100f;
                     var bubblesVolume = App.Settings.Current.BubblesVolume / 100f;
-                    var volume = (float)Math.Pow(masterVolume * bubblesVolume, 1.5);
-                    PlaySoundAsync(burstPath, volume);
-                    App.Logger?.Information("🎉 Lucky Bubble! 10x XP!");
+                    var volume = (float)Math.Pow(masterVolume * bubblesVolume, 1.5) * 0.35f;
+                    PlaySoundAsync(chimePath, volume);
+                    App.Logger?.Information("🎉 Lucky Bubble! 20x XP!");
                     return;
                 }
             }
@@ -328,7 +332,7 @@ public class BubbleService : IDisposable
             // Normal pop sound
             var popFiles = new[] { "Pop.mp3", "Pop2.mp3", "Pop3.mp3" };
             var chosenPop = popFiles[_random.Next(popFiles.Length)];
-            var popPath = Path.Combine(soundsPath, chosenPop);
+            var popPath = ModResourceResolver.ResolveAudioPath("bubbles/" + chosenPop);
 
             if (File.Exists(popPath))
             {
@@ -399,7 +403,7 @@ public class BubbleService : IDisposable
             }
             catch (Exception ex)
             {
-                App.Logger?.Debug("Audio playback failed: {Error}", ex.Message);
+                App.Logger?.Warning("Audio playback failed: {Error}", ex.Message);
             }
             finally
             {
@@ -462,6 +466,15 @@ public class BubbleService : IDisposable
     public void Dispose()
     {
         Stop();
+
+        // Drain and dispose pooled audio devices (static pool persists across service restarts)
+        lock (_audioPoolLock)
+        {
+            while (_audioDevicePool.Count > 0)
+            {
+                try { _audioDevicePool.Dequeue().Dispose(); } catch { }
+            }
+        }
     }
 }
 
@@ -489,10 +502,20 @@ internal class Bubble
     private bool _isPopping;
     private bool _isAlive = true;
     private bool _isDestroyed = false;
+    private bool _isLucky;
 
     private readonly Image _bubbleImage;
     private readonly int _size;
     private readonly double _screenTop;
+    private readonly Canvas _sparkleCanvas;
+    private readonly Grid _grid;
+    private List<SparkleParticle>? _sparkles;
+
+    private struct SparkleParticle
+    {
+        public double X, Y, VelX, VelY, Alpha, Size;
+        public System.Windows.Shapes.Ellipse Shape;
+    }
 
     public bool IsAlive => _isAlive && !_isDestroyed;
 
@@ -564,7 +587,7 @@ internal class Bubble
         {
             Width = _size,
             Height = _size,
-            Fill = Brushes.Transparent, // Invisible but captures hits
+            Fill = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)), // Nearly invisible but captures hits on transparent windows
             IsHitTestVisible = _isClickable,
             Cursor = _isClickable ? Cursors.Hand : Cursors.Arrow
         };
@@ -578,21 +601,30 @@ internal class Bubble
             };
         }
 
+        // Sparkle particle canvas (overlays the bubble, non-interactive)
+        _sparkleCanvas = new Canvas
+        {
+            Width = _size,
+            Height = _size,
+            IsHitTestVisible = false
+        };
+
         // Create container grid with hit area behind the bubble image
-        var grid = new Grid
+        _grid = new Grid
         {
             Width = _size,
             Height = _size,
             Background = Brushes.Transparent,
             IsHitTestVisible = _isClickable
         };
-        grid.Children.Add(hitArea);      // Hit area first (behind)
-        grid.Children.Add(_bubbleImage); // Image on top
+        _grid.Children.Add(hitArea);         // Hit area first (behind)
+        _grid.Children.Add(_bubbleImage);    // Image on top
+        _grid.Children.Add(_sparkleCanvas);  // Sparkles on top of everything
 
         // Grid click as backup (only if clickable)
         if (_isClickable)
         {
-            grid.MouseLeftButtonDown += (s, e) =>
+            _grid.MouseLeftButtonDown += (s, e) =>
             {
                 Pop();
                 e.Handled = true;
@@ -613,7 +645,7 @@ internal class Bubble
             Height = _size + 40,
             Left = _posX - 20,
             Top = _posY - 20,
-            Content = grid,
+            Content = _grid,
             Cursor = _isClickable ? Cursors.Hand : Cursors.Arrow,
             IsHitTestVisible = _isClickable
         };
@@ -645,8 +677,34 @@ internal class Bubble
         {
             // Pop animation - expand and fade (scaled for 30fps)
             _scale += 0.04;
-            _fadeAlpha -= 0.066;
+            _fadeAlpha -= _isLucky ? 0.044 : 0.066; // Lucky pops linger ~50% longer
             _angle += 2;
+
+            // Animate sparkle particles outward
+            if (_sparkles != null)
+            {
+                for (int i = 0; i < _sparkles.Count; i++)
+                {
+                    var sp = _sparkles[i];
+                    sp.X += sp.VelX;
+                    sp.Y += sp.VelY;
+                    sp.VelY += 0.15; // Slight gravity
+                    sp.Alpha -= _isLucky ? 0.04 : 0.06;
+
+                    if (sp.Alpha > 0)
+                    {
+                        try
+                        {
+                            Canvas.SetLeft(sp.Shape, sp.X - sp.Size / 2);
+                            Canvas.SetTop(sp.Shape, sp.Y - sp.Size / 2);
+                            sp.Shape.Opacity = Math.Max(0, sp.Alpha);
+                        }
+                        catch { }
+                    }
+
+                    _sparkles[i] = sp;
+                }
+            }
 
             if (_fadeAlpha <= 0)
             {
@@ -726,6 +784,77 @@ internal class Bubble
         }
     }
 
+    public void SetLucky(bool isLucky, bool hasSparkleBoost)
+    {
+        _isLucky = isLucky;
+
+        // Apply golden glow for lucky pops
+        if (isLucky)
+        {
+            try
+            {
+                _window.Effect = new DropShadowEffect
+                {
+                    Color = System.Windows.Media.Color.FromRgb(0xFF, 0xD7, 0x00),
+                    BlurRadius = 50,
+                    ShadowDepth = 0,
+                    Opacity = 0.8
+                };
+            }
+            catch { }
+        }
+
+        // Spawn sparkle particles if sparkle boost is unlocked
+        if (hasSparkleBoost || isLucky)
+        {
+            SpawnSparkles(isLucky);
+        }
+    }
+
+    private void SpawnSparkles(bool isGold)
+    {
+        var count = isGold ? 16 : 8;
+        var color = isGold
+            ? System.Windows.Media.Color.FromRgb(0xFF, 0xD7, 0x00)
+            : System.Windows.Media.Color.FromRgb(0xFF, 0x69, 0xB4);
+        var minSize = isGold ? 4.0 : 3.0;
+        var maxSize = isGold ? 8.0 : 6.0;
+
+        _sparkles = new List<SparkleParticle>(count);
+        var centerX = _size / 2.0;
+        var centerY = _size / 2.0;
+
+        for (int i = 0; i < count; i++)
+        {
+            var angle = _random.NextDouble() * Math.PI * 2;
+            var speed = 2.0 + _random.NextDouble() * 4.0;
+            var size = minSize + _random.NextDouble() * (maxSize - minSize);
+
+            var ellipse = new System.Windows.Shapes.Ellipse
+            {
+                Width = size,
+                Height = size,
+                Fill = new SolidColorBrush(color),
+                IsHitTestVisible = false
+            };
+
+            Canvas.SetLeft(ellipse, centerX - size / 2);
+            Canvas.SetTop(ellipse, centerY - size / 2);
+            _sparkleCanvas.Children.Add(ellipse);
+
+            _sparkles.Add(new SparkleParticle
+            {
+                X = centerX,
+                Y = centerY,
+                VelX = Math.Cos(angle) * speed,
+                VelY = Math.Sin(angle) * speed,
+                Alpha = 1.0,
+                Size = size,
+                Shape = ellipse
+            });
+        }
+    }
+
     public void Pop()
     {
         if (!_isAlive || _isPopping) return;
@@ -798,7 +927,12 @@ internal class Bubble
         {
             var hwnd = new System.Windows.Interop.WindowInteropHelper(_window).Handle;
             var exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
-            SetWindowLong(hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+            var flags = exStyle | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+            // Non-clickable bubbles must be truly click-through at the Win32 level;
+            // WPF's IsHitTestVisible alone doesn't prevent the window from eating clicks.
+            if (!_isClickable)
+                flags |= WS_EX_TRANSPARENT;
+            SetWindowLong(hwnd, GWL_EXSTYLE, flags);
         }
         catch { }
     }
@@ -806,6 +940,7 @@ internal class Bubble
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WS_EX_NOACTIVATE = 0x08000000;
+    private const int WS_EX_TRANSPARENT = 0x00000020;
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern int GetWindowLong(IntPtr hwnd, int index);

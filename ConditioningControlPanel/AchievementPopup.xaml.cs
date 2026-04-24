@@ -1,6 +1,4 @@
-using System;
 using System.IO;
-using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
@@ -100,14 +98,14 @@ public partial class AchievementPopup : Window
             }
             else
             {
-                // Try pack URI (embedded resource)
+                // Try mod override, then pack URI (embedded resource)
                 try
                 {
-                    App.Logger?.Debug("Trying pack URI for: {Name}", imageName);
-                    var packUri = new Uri($"pack://application:,,,/Resources/achievements/{imageName}", UriKind.Absolute);
-                    var bitmap = new BitmapImage(packUri);
-                    AchievementImage.Source = bitmap;
-                    App.Logger?.Debug("Loaded image from pack URI");
+                    App.Logger?.Debug("Trying mod/pack URI for: {Name}", imageName);
+                    var image = Services.ModResourceResolver.ResolveImage($"achievements/{imageName}");
+                    if (image != null)
+                        AchievementImage.Source = image;
+                    App.Logger?.Debug("Loaded achievement image");
                 }
                 catch (Exception packEx)
                 {
@@ -151,12 +149,7 @@ public partial class AchievementPopup : Window
     
     private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        // Allow dragging the window
-        try
-        {
-            DragMove();
-        }
-        catch { /* Ignore drag errors */ }
+        FadeOutAndClose();
     }
     
     protected override void OnClosed(EventArgs e)

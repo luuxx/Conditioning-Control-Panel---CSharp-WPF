@@ -1,7 +1,6 @@
-using System;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel
 {
@@ -221,7 +220,7 @@ namespace ConditioningControlPanel
 
         private void PresetPurple_Click(object sender, RoutedEventArgs e)
         {
-            _color1 = "#9B59B6";
+            _color1 = App.Mods?.GetSecondaryColorHex() ?? "#9B59B6";
             _color2 = "#8E44AD";
             _textColor = "#FFFFFF";
             _showBorder = false;

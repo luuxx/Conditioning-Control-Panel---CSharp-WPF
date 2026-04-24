@@ -1,10 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
@@ -17,6 +12,8 @@ using System.Windows.Threading;
 using ConditioningControlPanel.Models;
 using ConditioningControlPanel.Services;
 using XamlAnimatedGif;
+using ConditioningControlPanel.Helpers;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel
 {
@@ -34,16 +31,16 @@ namespace ConditioningControlPanel
         private int _maxUnlockedSet = 1; // Highest avatar set unlocked based on level
         private bool _useAnimatedAvatar = false; // Whether to use animated GIF
 
-        // Avatar set titles
-        private static readonly string[] AvatarTitles = new[]
+        // Avatar set titles (localization keys)
+        private static readonly string[] AvatarTitleKeys = new[]
         {
-            "BASIC BIMBO",          // Set 1: Level 1-19
-            "DUMB AIRHEAD",         // Set 2: Level 20-34
-            "SYNTHETIC BLOWDOLL",   // Set 3: Level 35-49
-            "PERFECT FUCKPUPPET",   // Set 4: Level 50-124
-            "BRAINWASHED SLAVEDOLL",// Set 5: Level 125-149
-            "PLATINUM PUPPET",      // Set 6: Level 150+
-            "BAMBI COW"             // Set 7: Level 75+ (companion-only)
+            "avatar_title_basic_bimbo",          // Set 1: Level 1-19
+            "avatar_title_dumb_airhead",         // Set 2: Level 20-34
+            "avatar_title_synthetic_blowdoll",   // Set 3: Level 35-49
+            "avatar_title_perfect_fuckpuppet",   // Set 4: Level 50-124
+            "avatar_title_brainwashed_slavedoll", // Set 5: Level 125-149
+            "avatar_title_platinum_puppet",      // Set 6: Level 150+
+            "avatar_title_bambi_cow"             // Set 7: Level 75+ (companion-only)
         };
 
         // Companion speech and chat
@@ -62,7 +59,6 @@ namespace ConditioningControlPanel
         private int _lastSpeechLength = 0; // Track last speech length for delay calc
         private bool _isInputVisible = false;
         private readonly Random _random = new();
-        private bool _mainWindowClosed = false;
 
         /// <summary>
         /// Regex to match markdown-style links: [Link Text](url)
@@ -97,7 +93,7 @@ namespace ConditioningControlPanel
 
         // Voice lines from flash audio folder (used for idle comments and 50% of triggers)
         private List<string> _voiceLineFiles = new();
-        private readonly string _voiceLinesPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "flashes_audio");
+        private string _voiceLinesPath = Services.CompanionPhraseService.VoiceLineFolder;
         private NAudio.Wave.WaveOutEvent? _voiceLinePlayer;
         private NAudio.Wave.AudioFileReader? _voiceLineAudio;
 
@@ -117,7 +113,7 @@ namespace ConditioningControlPanel
         private const double VerticalOffset = 20;
 
         // Floating animation settings
-        private const double FloatDistance = 8;
+        private const double FloatDistance = 4;
         private const double FloatDuration = 2.0;
 
         // Current scale factor
@@ -247,7 +243,9 @@ namespace ConditioningControlPanel
                 Interval = TimeSpan.FromSeconds(3)
             };
             _poseTimer.Tick += PoseTimer_Tick;
-            
+            if (!_useAnimatedAvatar && _avatarPoses.Length > 1)
+                _poseTimer.Start();
+
             // Subscribe to parent window events
             _parentWindow.LocationChanged += ParentWindow_PositionChanged;
             _parentWindow.SizeChanged += ParentWindow_PositionChanged;
@@ -259,6 +257,22 @@ namespace ConditioningControlPanel
             
             // Get handles when loaded
             Loaded += OnLoaded;
+
+            // Refresh tube image from mod on startup (XAML hardcodes pack:// URI)
+            SetTubeStyle(!_isAttached);
+
+            // Apply tube layout offsets for current mod
+            ApplyTubeLayoutOffsets();
+
+            // Subscribe to mod changes to refresh tube, avatars, and titles
+            if (App.Mods != null)
+            {
+                App.Mods.ModChanged += (s, mod) =>
+                {
+                    if (!Dispatcher.CheckAccess()) { Dispatcher.Invoke(() => OnModChanged()); return; }
+                    OnModChanged();
+                };
+            }
 
             // Initialize context menu state
             UpdateQuickMenuState();
@@ -383,48 +397,23 @@ namespace ConditioningControlPanel
         }
 
         /// <summary>
-        /// Determines the highest avatar set unlocked based on player level.
-        /// Note: Sets are not unlocked sequentially - set 7 (Bambi Cow) unlocks at level 75.
+        /// Feature level gating has been removed — every avatar set is available from level 1.
+        /// The "max set" now just returns the largest base set (7) so navigation lands in the
+        /// same place a level-200 user would.
         /// </summary>
         /// <param name="level">Player's current level (unused - kept for API compatibility)</param>
-        /// <returns>Avatar set number (1-7)</returns>
+        /// <returns>Avatar set number</returns>
         public static int GetAvatarSetForLevel(int level)
         {
-            // Find the highest unlocked set using IsLevelUnlocked which respects OG unlock and HighestLevelEver
-            var settings = App.Settings?.Current;
-            if (settings == null) return 1;
-
-            int maxSet = 1;
-            if (settings.IsLevelUnlocked(20)) maxSet = 2;
-            if (settings.IsLevelUnlocked(35)) maxSet = 3;
-            if (settings.IsLevelUnlocked(50)) maxSet = 4;
-            if (settings.IsLevelUnlocked(75)) maxSet = 7;  // Bambi Cow unlocks at 75 (set 7 > set 4)
-            if (settings.IsLevelUnlocked(100)) maxSet = 7; // Still 7 since 7 > 4
-            if (settings.IsLevelUnlocked(125)) maxSet = 7; // Still 7 since 7 > 5
-            if (settings.IsLevelUnlocked(150)) maxSet = 7; // Still 7 since 7 > 6
-            return maxSet;
+            return 7;
         }
 
         /// <summary>
-        /// Checks if a specific avatar set is unlocked for the given level.
-        /// Uses IsLevelUnlocked which respects OG unlock and HighestLevelEver.
+        /// Feature level gating has been removed — every avatar set is always unlocked.
         /// </summary>
         public static bool IsAvatarSetUnlocked(int setNumber, int level)
         {
-            var settings = App.Settings?.Current;
-            if (settings == null) return setNumber == 1;
-
-            return setNumber switch
-            {
-                1 => true,                              // Always unlocked
-                2 => settings.IsLevelUnlocked(20),      // Level 20
-                3 => settings.IsLevelUnlocked(35),      // Level 35
-                4 => settings.IsLevelUnlocked(50),      // Level 50 (CultBunny companion requirement is 100, but avatar unlocks at 50)
-                5 => settings.IsLevelUnlocked(125),     // Level 125
-                6 => settings.IsLevelUnlocked(150),     // Level 150
-                7 => settings.IsLevelUnlocked(75),      // Level 75 (Bambi Cow)
-                _ => false
-            };
+            return true;
         }
 
         /// <summary>
@@ -433,14 +422,26 @@ namespace ConditioningControlPanel
         /// </summary>
         public static int[] GetUnlockedAvatarSets(int level)
         {
-            // Sets in unlock-level order (not numerical order)
+            // Base sets in unlock-level order (not numerical order)
             int[] setsInOrder = { 1, 2, 3, 4, 7, 5, 6 };
             var unlocked = new System.Collections.Generic.List<int>();
             foreach (int set in setsInOrder)
             {
-                if (IsAvatarSetUnlocked(set, level))
+                if (IsAvatarSetUnlocked(set, level) && (App.Mods?.IsAvatarSetSupported(set) ?? true))
                     unlocked.Add(set);
             }
+
+            // Append custom avatar sets (8+) sorted by unlock level
+            var customSets = App.Mods?.GetCustomAvatarSets();
+            if (customSets != null)
+            {
+                foreach (var cs in customSets.OrderBy(c => c.UnlockLevel))
+                {
+                    if (IsAvatarSetUnlocked(cs.SetNumber, level) && (App.Mods?.IsAvatarSetSupported(cs.SetNumber) ?? true))
+                        unlocked.Add(cs.SetNumber);
+                }
+            }
+
             return unlocked.ToArray();
         }
 
@@ -482,8 +483,9 @@ namespace ConditioningControlPanel
         {
             try
             {
-                // Try to load the animated resource to verify it exists
-                // Naming pattern: animated1_1.gif, animated2_1.gif, etc.
+                // Check mod override first, then embedded resource
+                if (Services.ModResourceResolver.HasModOverride($"animated{setNumber}_1.gif"))
+                    return true;
                 var uri = new Uri($"pack://application:,,,/Resources/animated{setNumber}_1.gif", UriKind.Absolute);
                 var info = Application.GetResourceStream(uri);
                 return info != null;
@@ -503,7 +505,7 @@ namespace ConditioningControlPanel
             try
             {
                 // Naming pattern: animated1_1.gif, animated2_1.gif, etc.
-                var gifUri = new Uri($"pack://application:,,,/Resources/animated{setNumber}_1.gif", UriKind.Absolute);
+                var gifUri = new Uri(Services.ModResourceResolver.ResolveUri($"animated{setNumber}_1.gif"), UriKind.Absolute);
 
                 // Hide static avatar, show animated
                 ImgAvatar.Visibility = Visibility.Collapsed;
@@ -545,7 +547,7 @@ namespace ConditioningControlPanel
                 // Clear and reload the animation
                 AnimationBehavior.SetSourceUri(ImgAvatarAnimated, null);
 
-                var gifUri = new Uri($"pack://application:,,,/Resources/animated{_currentAvatarSet}_1.gif", UriKind.Absolute);
+                var gifUri = new Uri(Services.ModResourceResolver.ResolveUri($"animated{_currentAvatarSet}_1.gif"), UriKind.Absolute);
                 AnimationBehavior.SetSourceUri(ImgAvatarAnimated, gifUri);
                 AnimationBehavior.SetAutoStart(ImgAvatarAnimated, true);
                 AnimationBehavior.SetRepeatBehavior(ImgAvatarAnimated, RepeatBehavior.Forever);
@@ -556,6 +558,34 @@ namespace ConditioningControlPanel
             {
                 App.Logger?.Debug("Failed to refresh avatar animation: {Error}", ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Pause the animated GIF to reduce CPU usage when not visible
+        /// </summary>
+        private void PauseAvatarGif()
+        {
+            if (!_useAnimatedAvatar) return;
+            try
+            {
+                var animator = AnimationBehavior.GetAnimator(ImgAvatarAnimated);
+                animator?.Pause();
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Resume the animated GIF when becoming visible again
+        /// </summary>
+        private void ResumeAvatarGif()
+        {
+            if (!_useAnimatedAvatar) return;
+            try
+            {
+                var animator = AnimationBehavior.GetAnimator(ImgAvatarAnimated);
+                animator?.Play();
+            }
+            catch { }
         }
 
         /// <summary>
@@ -687,17 +717,21 @@ namespace ConditioningControlPanel
                 var companionProgress = App.Companion.GetProgress(companionId.Value);
                 bool isSlutMode = App.Settings?.Current?.SlutModeEnabled ?? false;
 
-                TxtAvatarTitle.Text = companionDef.GetDisplayName(isSlutMode).ToUpperInvariant();
+                var displayName = companionDef.GetDisplayName(isSlutMode);
+                displayName = App.Mods?.MakeModAware(displayName) ?? displayName;
+                TxtAvatarTitle.Text = displayName.ToUpperInvariant();
                 TxtAvatarLevel.Visibility = Visibility.Visible;
                 TxtAvatarLevel.Text = companionProgress.IsMaxLevel
-                    ? "MAX!"
-                    : $"Lv. {companionProgress.Level}";
+                    ? Loc.Get("avatar_level_max")
+                    : Loc.GetF("avatar_level_format", companionProgress.Level);
             }
             else
             {
                 // For sets 1-3 (pre-level 50), use legacy avatar titles
-                int titleIndex = Math.Clamp(_currentAvatarSet - 1, 0, AvatarTitles.Length - 1);
-                TxtAvatarTitle.Text = AvatarTitles[titleIndex];
+                int titleIndex = Math.Clamp(_currentAvatarSet - 1, 0, AvatarTitleKeys.Length - 1);
+                var title = Loc.Get(AvatarTitleKeys[titleIndex]);
+                title = App.Mods?.MakeModAware(title) ?? title;
+                TxtAvatarTitle.Text = title;
 
                 // Hide level for the first 2 generic sprites (sets 1-2) to avoid confusion with persona levels
                 if (_currentAvatarSet <= 2)
@@ -707,7 +741,7 @@ namespace ConditioningControlPanel
                 else
                 {
                     TxtAvatarLevel.Visibility = Visibility.Visible;
-                    TxtAvatarLevel.Text = $"Lv. {level}";
+                    TxtAvatarLevel.Text = Loc.GetF("avatar_level_format", level);
                 }
             }
         }
@@ -725,6 +759,121 @@ namespace ConditioningControlPanel
             }
 
             UpdateTitleDisplay(App.Settings?.Current?.PlayerLevel ?? 1);
+        }
+
+        /// <summary>
+        /// Called when the active mod changes. Refreshes tube image, avatar poses, and titles.
+        /// </summary>
+        private void OnModChanged()
+        {
+            try
+            {
+                // Refresh tube frame
+                SetTubeStyle(!_isAttached);
+
+                // Apply tube layout offsets for new mod's tube glass position
+                ApplyTubeLayoutOffsets();
+
+                // Reload video links for companion speech bubbles
+                ReloadVideoLinks();
+
+                // Validate current avatar set is supported by the new mod — if not, fall back
+                int playerLevel = App.Settings?.Current?.PlayerLevel ?? 1;
+                var supportedSets = GetUnlockedAvatarSets(playerLevel);
+                if (supportedSets.Length > 0 && !supportedSets.Contains(_currentAvatarSet))
+                {
+                    var oldSet = _currentAvatarSet;
+                    _currentAvatarSet = supportedSets[0];
+                    _selectedAvatarSet = _currentAvatarSet;
+                    if (App.Settings?.Current != null)
+                    {
+                        App.Settings.Current.SelectedAvatarSet = _selectedAvatarSet;
+                    }
+                    App.Logger?.Information("Avatar set {OldSet} not supported by new mod, switched to {NewSet}",
+                        oldSet, _currentAvatarSet);
+                }
+
+                // Check if the new mod has an animated version for this set
+                _useAnimatedAvatar = HasAnimatedAvatar(_currentAvatarSet);
+
+                // Reload avatar poses from new mod
+                if (_useAnimatedAvatar)
+                {
+                    LoadAnimatedAvatar(_currentAvatarSet);
+                }
+                else
+                {
+                    // Hide animated, show static
+                    ImgAvatarAnimated.Visibility = Visibility.Collapsed;
+                    AnimationBehavior.SetSourceUri(ImgAvatarAnimated, null);
+                    ImgAvatar.Visibility = Visibility.Visible;
+
+                    _avatarPoses = LoadAvatarPoses(_currentAvatarSet);
+                    _currentPoseIndex = 0;
+                    if (_avatarPoses.Length > 0)
+                    {
+                        ImgAvatar.Source = _avatarPoses[0];
+                    }
+                }
+                if (!_useAnimatedAvatar && _avatarPoses.Length > 1)
+                    _poseTimer.Start();
+
+                // Update navigation arrows for supported sets
+                ApplyAvatarTransform(_currentAvatarSet);
+                UpdateNavigationArrows();
+
+                // Refresh voice lines from new mod
+                _voiceLinesPath = Services.CompanionPhraseService.VoiceLineFolder;
+                RefreshVoiceLines();
+
+                // Refresh title (applies text replacements)
+                UpdateTitleDisplay(App.Settings?.Current?.PlayerLevel ?? 1);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Failed to refresh resources after mod change");
+            }
+        }
+
+        /// <summary>
+        /// Applies the active mod's tube layout offsets to avatar, title, input, and speech bubble positions.
+        /// Mod tube images may have the glass cylinder in a different position than the default,
+        /// so the offset shifts all UI elements horizontally to align with the glass.
+        /// </summary>
+        private void ApplyTubeLayoutOffsets()
+        {
+            // Apply avatar scale from mod
+            var scale = App.Mods?.GetAvatarScale() ?? 1.0;
+            if (Math.Abs(scale - 1.0) > 0.001)
+            {
+                var scaleTransform = new System.Windows.Media.ScaleTransform(scale, scale);
+                ImgAvatar.LayoutTransform = scaleTransform;
+                ImgAvatarAnimated.LayoutTransform = scaleTransform;
+            }
+            else
+            {
+                ImgAvatar.LayoutTransform = null;
+                ImgAvatarAnimated.LayoutTransform = null;
+            }
+
+            if (_isAttached)
+            {
+                var dx = App.Mods?.GetAvatarOffsetX() ?? 0;
+                var dy = App.Mods?.GetAvatarOffsetY() ?? 0;
+                AvatarBorder.Margin = new Thickness(5, 100, 126 - dx, 210 + dy);
+                TitleBox.Margin = new Thickness(0, 0, 121 - dx, 180);
+                InputPanel.Margin = new Thickness(0, 0, 126 - dx, 520);
+                SpeechBubble.Margin = new Thickness(0, 0, 125 - dx, 550);
+            }
+            else
+            {
+                var dx = App.Mods?.GetAvatarDetachedOffsetX() ?? 0;
+                var dy = App.Mods?.GetAvatarDetachedOffsetY() ?? 0;
+                AvatarBorder.Margin = new Thickness(5, 100, 426 - dx, 208 + dy);
+                TitleBox.Margin = new Thickness(0, 0, 416 - dx, 193);
+                InputPanel.Margin = new Thickness(0, 0, 426 - dx, 520);
+                SpeechBubble.Margin = new Thickness(0, 0, 425 - dx, 550);
+            }
         }
 
         /// <summary>
@@ -849,7 +998,11 @@ namespace ConditioningControlPanel
 
                             // Reset bubble position to ensure correct placement after layout
                             // Anchored at bottom, grows upward. Margin = left, top, right, bottom
-                            SpeechBubble.Margin = new Thickness(0, 0, 125, 550);
+                            var initDx = _isAttached
+                                ? (App.Mods?.GetAvatarOffsetX() ?? 0)
+                                : (App.Mods?.GetAvatarDetachedOffsetX() ?? 0);
+                            var initRight = _isAttached ? 125 - initDx : 425 - initDx;
+                            SpeechBubble.Margin = new Thickness(0, 0, initRight, 550);
                         }), System.Windows.Threading.DispatcherPriority.Loaded);
 
             // Start fullscreen detection timer
@@ -1153,14 +1306,23 @@ namespace ConditioningControlPanel
             {
                 try
                 {
-                    var uri = new Uri($"pack://application:,,,/Resources/{prefix}{i + 1}.png", UriKind.Absolute);
-                    var bitmap = new BitmapImage();
-                    bitmap.BeginInit();
-                    bitmap.UriSource = uri;
-                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                    bitmap.EndInit();
-                    bitmap.Freeze();
-                    poses[i] = bitmap;
+                    var resolved = Services.ModResourceResolver.ResolveImage($"{prefix}{i + 1}.png");
+                    if (resolved is BitmapImage bmp)
+                    {
+                        poses[i] = bmp.IsFrozen ? bmp : bmp.Clone();
+                        if (!poses[i].IsFrozen) poses[i].Freeze();
+                    }
+                    else
+                    {
+                        var uri = new Uri($"pack://application:,,,/Resources/{prefix}{i + 1}.png", UriKind.Absolute);
+                        var bitmap = new BitmapImage();
+                        bitmap.BeginInit();
+                        bitmap.UriSource = uri;
+                        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                        bitmap.EndInit();
+                        bitmap.Freeze();
+                        poses[i] = bitmap;
+                    }
                     
                     App.Logger?.Debug("Loaded avatar pose: {Prefix}{Index}.png", prefix, i + 1);
                 }
@@ -1173,14 +1335,23 @@ namespace ConditioningControlPanel
                     {
                         try
                         {
-                            var fallbackUri = new Uri($"pack://application:,,,/Resources/avatar_pose{i + 1}.png", UriKind.Absolute);
-                            var fallbackBitmap = new BitmapImage();
-                            fallbackBitmap.BeginInit();
-                            fallbackBitmap.UriSource = fallbackUri;
-                            fallbackBitmap.CacheOption = BitmapCacheOption.OnLoad;
-                            fallbackBitmap.EndInit();
-                            fallbackBitmap.Freeze();
-                            poses[i] = fallbackBitmap;
+                            var fallbackResolved = Services.ModResourceResolver.ResolveImage($"avatar_pose{i + 1}.png");
+                            if (fallbackResolved is BitmapImage fbmp)
+                            {
+                                poses[i] = fbmp.IsFrozen ? fbmp : fbmp.Clone();
+                                if (!poses[i].IsFrozen) poses[i].Freeze();
+                            }
+                            else
+                            {
+                                var fallbackUri = new Uri($"pack://application:,,,/Resources/avatar_pose{i + 1}.png", UriKind.Absolute);
+                                var fallbackBitmap = new BitmapImage();
+                                fallbackBitmap.BeginInit();
+                                fallbackBitmap.UriSource = fallbackUri;
+                                fallbackBitmap.CacheOption = BitmapCacheOption.OnLoad;
+                                fallbackBitmap.EndInit();
+                                fallbackBitmap.Freeze();
+                                poses[i] = fallbackBitmap;
+                            }
                             App.Logger?.Debug("Fell back to default avatar pose {Index}", i + 1);
                         }
                         catch
@@ -1269,6 +1440,7 @@ namespace ConditioningControlPanel
                 switch (_parentWindow.WindowState)
                 {
                     case WindowState.Minimized:
+                        PauseAvatarGif();
                         if (_isAttached)
                         {
                             Hide();
@@ -1281,6 +1453,7 @@ namespace ConditioningControlPanel
                         break;
                     case WindowState.Normal:
                     case WindowState.Maximized:
+                        ResumeAvatarGif();
                         if (_parentWindow.IsVisible && App.Settings?.Current?.AvatarEnabled == true)
                         {
                             Show();
@@ -1305,6 +1478,7 @@ namespace ConditioningControlPanel
                 if ((bool)e.NewValue && _parentWindow.WindowState != WindowState.Minimized
                     && App.Settings?.Current?.AvatarEnabled == true)
                 {
+                    ResumeAvatarGif();
                     Show();
                     if (_isAttached)
                     {
@@ -1315,6 +1489,7 @@ namespace ConditioningControlPanel
                 }
                 else
                 {
+                    PauseAvatarGif();
                     if (_isAttached)
                     {
                         Hide();
@@ -1332,6 +1507,10 @@ namespace ConditioningControlPanel
         private void ParentWindow_Activated(object? sender, EventArgs e)
         {
             if (_parentWindow == null) return;
+
+            // Don't do any z-order work when pop quiz is open
+            if ((PopQuizWindow.IsOpen || QuizWindow.IsOpen)) return;
+
             try
             {
                 if (_parentWindow.WindowState != WindowState.Minimized && _parentWindow.IsVisible
@@ -1346,6 +1525,7 @@ namespace ConditioningControlPanel
                         // Use Background priority so all window activation processing finishes first
                         Dispatcher.BeginInvoke(new Action(() =>
                         {
+                            if ((PopQuizWindow.IsOpen || QuizWindow.IsOpen)) return;
                             if (_isAttached && _tubeHandle != IntPtr.Zero)
                             {
                                 BringAttachedPairToFront();
@@ -1359,6 +1539,9 @@ namespace ConditioningControlPanel
 
         private void ParentWindow_PreviewMouseDown(object sender, MouseButtonEventArgs e)
         {
+            // Don't fight z-order when pop quiz is open
+            if ((PopQuizWindow.IsOpen || QuizWindow.IsOpen)) return;
+
             // When main window is clicked (even if already active), immediately bring tube to front
             // This handles the case where Activated event doesn't fire (window already active)
             if (_isAttached && _tubeHandle != IntPtr.Zero && SpeechBubble.Visibility == Visibility.Visible)
@@ -1366,6 +1549,7 @@ namespace ConditioningControlPanel
                 // Use Background priority to ensure this happens after the click processing
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
+                    if ((PopQuizWindow.IsOpen || QuizWindow.IsOpen)) return;
                     if (_isAttached && _tubeHandle != IntPtr.Zero && SpeechBubble.Visibility == Visibility.Visible)
                     {
                         BringAttachedPairToFront();
@@ -1384,8 +1568,6 @@ namespace ConditioningControlPanel
             else
             {
                 // Detached mode: keep floating independently
-                _mainWindowClosed = true;
-
                 App.Logger?.Information("Main window closed while detached - tube continues floating");
                 // Wrap in try-catch in case app is shutting down
                 try
@@ -1426,7 +1608,7 @@ namespace ConditioningControlPanel
                 if (_parentWindow != null && _parentWindow.IsVisible && _parentWindow.WindowState != WindowState.Minimized)
                 {
                     UpdatePosition();
-                    if (_isAttached) BringAttachedPairToFront();
+                    if (_isAttached && !(PopQuizWindow.IsOpen || QuizWindow.IsOpen)) BringAttachedPairToFront();
                 }
 
                 StartFloatingAnimation();
@@ -1479,12 +1661,16 @@ namespace ConditioningControlPanel
 
                 // Stop companion timers
                 _speechTimer?.Stop();
+                _speechDelayTimer?.Stop();
                 _idleTimer?.Stop();
                 _triggerTimer?.Stop();
                 _randomBubbleTimer?.Stop();
 
                 // Stop voice line audio
                 StopVoiceLineAudio();
+
+                // Release GIF animation frames to prevent memory leak
+                AnimationBehavior.SetSourceUri(ImgAvatarAnimated, null);
 
                 // Remove window message hook
                 _hwndSource?.RemoveHook(WndProc);
@@ -1620,7 +1806,12 @@ namespace ConditioningControlPanel
             // Double-click detection — open chat input if AI available, otherwise activity comment
             if ((now - _lastClickTime).TotalMilliseconds < 300)
             {
-                if (App.Settings?.Current?.AiChatEnabled == true && App.Ai?.IsAvailable == true)
+                if (_isMuted)
+                {
+                    // Show brief muted indicator so user knows she's not broken
+                    ShowMutedIndicator();
+                }
+                else if (App.Settings?.Current?.AiChatEnabled == true && App.Ai?.IsAvailable == true)
                 {
                     // Open the chat input panel (same as "Talk to" menu item)
                     ShowInputPanel();
@@ -1767,7 +1958,7 @@ namespace ConditioningControlPanel
                         if (!_isGiggling) Giggle("Hmm...");
 
                         // Ask AI for a random thought/bambi-ism
-                        var aiReaction = await App.Ai.GetBambiReplyAsync("Say something random and ditzy about what we're doing (or not doing) right now.");
+                        var aiReaction = await App.Ai.GetBambiReplyAsync("Say something random and ditzy about what we're doing (or not doing) right now.", isUserMessage: true);
                         if (!string.IsNullOrEmpty(aiReaction))
                         {
                             reaction = aiReaction;
@@ -1813,7 +2004,11 @@ namespace ConditioningControlPanel
             while (element != null)
             {
                 if (element == parent) return true;
-                element = System.Windows.Media.VisualTreeHelper.GetParent(element);
+                // ContentElements (e.g. Run, Hyperlink) are not part of the visual tree —
+                // VisualTreeHelper.GetParent crashes on them. Use LogicalTreeHelper instead.
+                element = element is System.Windows.Media.Visual
+                    ? System.Windows.Media.VisualTreeHelper.GetParent(element)
+                    : System.Windows.LogicalTreeHelper.GetParent(element);
             }
             return false;
         }
@@ -1964,7 +2159,7 @@ namespace ConditioningControlPanel
             }
 
             // Use BeginInvoke for non-blocking UI update
-            Application.Current.Dispatcher.BeginInvoke(() =>
+            DispatcherHelper.RunOnUI(() =>
             {
                 // Double-check AI bubble state on UI thread
                 if (_isShowingAiBubble)
@@ -2010,7 +2205,7 @@ namespace ConditioningControlPanel
         /// <param name="playSound">Whether to play giggle sound (default true for AI responses)</param>
         public void GigglePriority(string text, bool playSound = true)
         {
-            Application.Current.Dispatcher.BeginInvoke(() =>
+            DispatcherHelper.RunOnUI(() =>
             {
                 // Clear AI waiting flag
                 _isWaitingForAi = false;
@@ -2028,6 +2223,17 @@ namespace ConditioningControlPanel
 
                 App.Logger?.Debug("Priority speech (queue cleared): {Text}", text);
             });
+        }
+
+        /// <summary>
+        /// Shows a line from the avatar with priority.
+        /// Safe to call from any thread.
+        /// </summary>
+        /// <param name="line">The text to display</param>
+        /// <param name="playSound">Whether to play giggle sound</param>
+        public static void ShowAvatarLine(string line, bool playSound = true)
+        {
+            App.AvatarWindow?.GigglePriority(line, playSound: playSound);
         }
 
         /// <summary>
@@ -2064,9 +2270,9 @@ namespace ConditioningControlPanel
                 // Explicitly requested giggle sound (AI responses, etc.)
                 PlayGiggleSound();
             }
-            else
+            else if (source != SpeechSource.AI)
             {
-                // No audio connected - play fallback sound (um/giggle) so every bubble has audio
+                // Fallback sound for regular bubbles (skip for AI thinking — response will play its own)
                 PlayFallbackBubbleSound();
             }
 
@@ -2084,8 +2290,12 @@ namespace ConditioningControlPanel
             SpeechBubble.Visibility = Visibility.Visible;
 
             // Start z-order refresh to keep bubble on top of main window
-            StartZOrderRefreshTimer();
-            BringAttachedPairToFront();
+            // Skip all z-order work when pop quiz is open — must not cover the quiz
+            if (!(PopQuizWindow.IsOpen || QuizWindow.IsOpen))
+            {
+                StartZOrderRefreshTimer();
+                BringAttachedPairToFront();
+            }
 
             // Calculate display duration based on text length
             // Base: 5 seconds, plus ~0.05s per character, min 5s, max 14s
@@ -2134,6 +2344,38 @@ namespace ConditioningControlPanel
                 source, text.Length, displayDuration, text);
         }
 
+        private DispatcherTimer? _mutedIndicatorTimer;
+
+        /// <summary>
+        /// Shows a brief "MUTED" indicator in the speech bubble when the user
+        /// double-clicks the avatar while muted, so they know she's not broken.
+        /// </summary>
+        private void ShowMutedIndicator()
+        {
+            // Don't spam the indicator
+            if (SpeechBubble.Visibility == Visibility.Visible)
+                return;
+
+            TxtSpeech.Inlines.Clear();
+            TxtSpeech.Inlines.Add(new System.Windows.Documents.Run("MUTED \U0001F509")
+            {
+                Foreground = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(180, 180, 200))
+            });
+            TxtSpeech.FontSize = 20;
+
+            SpeechBubble.Visibility = Visibility.Visible;
+
+            _mutedIndicatorTimer?.Stop();
+            _mutedIndicatorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            _mutedIndicatorTimer.Tick += (s, e) =>
+            {
+                _mutedIndicatorTimer.Stop();
+                SpeechBubble.Visibility = Visibility.Collapsed;
+            };
+            _mutedIndicatorTimer.Start();
+        }
+
         /// <summary>
         /// Adjusts the speech bubble font size and position based on text length.
         /// The bubble has fixed width (380) and MaxHeight (420) - ScrollViewer handles overflow.
@@ -2167,18 +2409,12 @@ namespace ConditioningControlPanel
             // Reset scroll position to top when new text is shown
             SpeechScroller?.ScrollToTop();
 
-            // Position bubble next to avatar - anchored at bottom, grows upward
-            // Margin = left, top, right, bottom
-            if (_isAttached)
-            {
-                // Position to the right of the avatar
-                SpeechBubble.Margin = new Thickness(0, 0, 125, 550);
-            }
-            else
-            {
-                // Position to the left of the avatar (detached mode) - 175px more to the left
-                SpeechBubble.Margin = new Thickness(0, 0, 410, 550);
-            }
+            // Position bubble next to avatar — align with tube position based on attach state.
+            var bubbleDx = _isAttached
+                ? (App.Mods?.GetAvatarOffsetX() ?? 0)
+                : (App.Mods?.GetAvatarDetachedOffsetX() ?? 0);
+            var bubbleRight = _isAttached ? 125 - bubbleDx : 425 - bubbleDx;
+            SpeechBubble.Margin = new Thickness(0, 0, bubbleRight, 550);
         }
 
         /// <summary>
@@ -2188,8 +2424,9 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Exact HypnoTube video titles mapped to URLs.
         /// Names match exactly as shown on HypnoTube.
+        /// Reloaded when the active mod changes via ReloadVideoLinks().
         /// </summary>
-        internal static readonly Dictionary<string, string> KnownVideoLinks = new(StringComparer.OrdinalIgnoreCase)
+        internal static Dictionary<string, string> KnownVideoLinks = new(StringComparer.OrdinalIgnoreCase)
         {
             { "Naughty Bambi", "https://hypnotube.com/video/naughty-bambi-109749.html" },
             { "Bambi Bae", "https://hypnotube.com/video/bambi-bae-113979.html" },
@@ -2250,6 +2487,36 @@ namespace ConditioningControlPanel
             { "Eat Your Cum", "https://hypnotube.com/video/eat-your-cum-116026.html" },
             { "Trans Love Hypno - CrimsonPMV", "https://hypnotube.com/video/trans-love-hypno-crimsonpmv-121310.html" },
         };
+
+        // Cached copy of the built-in links for restoring when switching away from custom mods
+        private static Dictionary<string, string>? _builtInVideoLinks;
+
+        /// <summary>
+        /// Reloads KnownVideoLinks from the active mod's defaultVideoLinks, or restores built-in defaults.
+        /// Called on mod switch.
+        /// </summary>
+        internal static void ReloadVideoLinks()
+        {
+            // Cache built-in links on first call
+            _builtInVideoLinks ??= new Dictionary<string, string>(KnownVideoLinks, StringComparer.OrdinalIgnoreCase);
+
+            var modLinks = App.Mods?.GetVideoLinks();
+            if (modLinks != null && modLinks.Count > 0)
+            {
+                // Filter to HTTPS-only at runtime (defense-in-depth)
+                var filtered = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var kvp in modLinks)
+                {
+                    if (Uri.TryCreate(kvp.Value, UriKind.Absolute, out var uri) && uri.Scheme == "https")
+                        filtered[kvp.Key] = kvp.Value;
+                }
+                KnownVideoLinks = filtered;
+            }
+            else
+            {
+                KnownVideoLinks = new Dictionary<string, string>(_builtInVideoLinks, StringComparer.OrdinalIgnoreCase);
+            }
+        }
 
         private void PopulateSpeechBubble(string text)
         {
@@ -2383,9 +2650,12 @@ namespace ConditioningControlPanel
                 }
                 else
                 {
-                    // Fallback: open in external browser
-                    App.Logger?.Warning("Embedded browser unavailable, opening externally: {Url}", url);
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                    // Fallback: open in external browser (HTTPS only for safety)
+                    if (Uri.TryCreate(url, UriKind.Absolute, out var fallbackUri) && fallbackUri.Scheme == "https")
+                    {
+                        App.Logger?.Warning("Embedded browser unavailable, opening externally: {Url}", url);
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                    }
                 }
 
                 e.Handled = true;
@@ -2455,6 +2725,11 @@ namespace ConditioningControlPanel
             if (!_isAttached) return;
             if (_parentWindow == null || !_parentWindow.IsVisible || _parentWindow.WindowState == WindowState.Minimized)
                 return;
+
+            // Don't fight with pop quiz — it uses HWND_TOPMOST and must stay on top
+            if ((PopQuizWindow.IsOpen || QuizWindow.IsOpen))
+                return;
+
             if (_parentHandle == IntPtr.Zero)
                 _parentHandle = new WindowInteropHelper(_parentWindow).Handle;
             if (_parentHandle == IntPtr.Zero) return;
@@ -2488,6 +2763,9 @@ namespace ConditioningControlPanel
             // Don't redirect activation when user is typing in the chat input
             if (_isInputVisible) return;
 
+            // Don't activate parent when pop quiz is open — it would cover the quiz
+            if ((PopQuizWindow.IsOpen || QuizWindow.IsOpen)) return;
+
             try
             {
                 // Only redirect activation to parent if our process already owns the foreground —
@@ -2501,15 +2779,31 @@ namespace ConditioningControlPanel
                         return; // Another app is in front, don't steal focus
                 }
 
-                // Defer activation to parent so Windows finishes current activation first
+                // Don't redirect activation when speech bubble is showing —
+                // redirecting brings parent to front, hiding the bubble behind it
+                if (SpeechBubble.Visibility == Visibility.Visible)
+                {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (_isAttached && _tubeHandle != IntPtr.Zero)
+                            BringAttachedPairToFront();
+                    }), DispatcherPriority.Background);
+                    return;
+                }
+
+                // Defer activation to parent so Windows finishes current activation first.
+                // Include BringAttachedPairToFront in the same callback to avoid a double-deferral
+                // gap where the tube drops behind the parent between two Background dispatches.
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
                     try
                     {
+                        if ((PopQuizWindow.IsOpen || QuizWindow.IsOpen)) return;
                         if (_isAttached && _parentWindow != null && _parentWindow.IsVisible
                             && _parentWindow.WindowState != WindowState.Minimized)
                         {
                             _parentWindow.Activate();
+                            BringAttachedPairToFront();
                         }
                     }
                     catch { /* Window may be closing */ }
@@ -2524,6 +2818,9 @@ namespace ConditioningControlPanel
         private void ReassertTopmost()
         {
             if (_tubeHandle == IntPtr.Zero || _isAttached) return;
+
+            // Don't fight with pop quiz for topmost z-order
+            if ((PopQuizWindow.IsOpen || QuizWindow.IsOpen)) return;
 
             // Use Win32 SetWindowPos with HWND_TOPMOST to force topmost z-order
             // This is more reliable than WPF's Topmost property across monitor/focus changes
@@ -2543,12 +2840,26 @@ namespace ConditioningControlPanel
             _zOrderRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
             _zOrderRefreshTimer.Tick += (s, e) =>
             {
+                if ((PopQuizWindow.IsOpen || QuizWindow.IsOpen)) return;
                 if (_isAttached && _tubeHandle != IntPtr.Zero && SpeechBubble.Visibility == Visibility.Visible)
                 {
                     // Only refresh z-order when our app owns the foreground — don't steal focus
                     // from other apps. ParentWindow_Activated handles restoration when user returns.
+                    // Use process-ID check (not just parent/tube handle) so dialogs, flashes,
+                    // overlays, and other app windows also count as "our foreground".
                     var foreground = GetForegroundWindow();
+                    bool isOurProcess = false;
                     if (foreground == _parentHandle || foreground == _tubeHandle)
+                    {
+                        isOurProcess = true;
+                    }
+                    else if (foreground != IntPtr.Zero)
+                    {
+                        GetWindowThreadProcessId(foreground, out uint foregroundPid);
+                        uint ourPid = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+                        isOurProcess = (foregroundPid == ourPid);
+                    }
+                    if (isOurProcess)
                     {
                         BringAttachedPairToFront();
                     }
@@ -2624,6 +2935,7 @@ namespace ConditioningControlPanel
             {
                 System.Threading.Tasks.Task.Delay(2000).ContinueWith(_ =>
                 {
+                    if (Application.Current?.Dispatcher?.HasShutdownStarted == true) return;
                     Dispatcher.Invoke(() => OnTriggerTick(null, EventArgs.Empty));
                 });
             }));
@@ -2716,6 +3028,7 @@ namespace ConditioningControlPanel
             // Spawn a bubble near the avatar after 1 second (speech bubble appears first)
             Task.Delay(1000).ContinueWith(_ =>
             {
+                if (Application.Current?.Dispatcher?.HasShutdownStarted == true) return;
                 Dispatcher.Invoke(() =>
                 {
                     try
@@ -2891,7 +3204,7 @@ namespace ConditioningControlPanel
         /// </summary>
         private void ShowVoiceLineBubble(string filePath)
         {
-            Application.Current.Dispatcher.BeginInvoke(() =>
+            DispatcherHelper.RunOnUI(() =>
             {
                 if (_isMuted || !IsAvatarVisibleOnScreen) return;
 
@@ -2913,8 +3226,12 @@ namespace ConditioningControlPanel
                 SpeechBubble.Visibility = Visibility.Visible;
 
                 // Start z-order refresh to keep bubble on top of main window
-                StartZOrderRefreshTimer();
-                BringAttachedPairToFront();
+                // Skip all z-order work when pop quiz is open — must not cover the quiz
+                if (!(PopQuizWindow.IsOpen || QuizWindow.IsOpen))
+                {
+                    StartZOrderRefreshTimer();
+                    BringAttachedPairToFront();
+                }
 
                 // Play the voice line audio in sync with the bubble
                 PlayVoiceLineAudio(filePath);
@@ -2990,7 +3307,7 @@ namespace ConditioningControlPanel
         private void ShowTriggerBubble(string trigger)
         {
             // Use direct dispatcher invoke to ensure audio plays exactly when bubble shows
-            Application.Current.Dispatcher.BeginInvoke(() =>
+            DispatcherHelper.RunOnUI(() =>
             {
                 // When muted, still trigger haptic+audio but skip visual queue logic
                 if (_isMuted)
@@ -3055,8 +3372,12 @@ namespace ConditioningControlPanel
             SpeechBubble.Visibility = Visibility.Visible;
 
             // Start z-order refresh to keep bubble on top of main window
-            StartZOrderRefreshTimer();
-            BringAttachedPairToFront();
+            // Skip all z-order work when pop quiz is open — must not cover the quiz
+            if (!(PopQuizWindow.IsOpen || QuizWindow.IsOpen))
+            {
+                StartZOrderRefreshTimer();
+                BringAttachedPairToFront();
+            }
 
             App.Logger?.Information("TriggerMode: Displayed trigger '{Trigger}'", trigger);
 
@@ -3156,18 +3477,18 @@ namespace ConditioningControlPanel
         /// </summary>
         private string GetRandomBambiPhrase()
         {
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
             var svc = App.CompanionPhrases;
 
-            var genericEnabled = svc?.GetEnabledPhrases("Generic", mode) ?? Models.ContentModeConfig.GetGenericPhrases(mode);
-            var floatingEnabled = svc?.GetEnabledPhrases("RandomFloating", mode) ?? Models.ContentModeConfig.GetRandomFloatingPhrases(mode);
+            var genericEnabled = svc?.GetEnabledPhrases("Generic") ?? App.Mods?.GetPhrases("Generic") ?? System.Array.Empty<string>();
+            var floatingEnabled = svc?.GetEnabledPhrases("RandomFloating") ?? App.Mods?.GetPhrases("RandomFloating") ?? System.Array.Empty<string>();
             var allPhrases = genericEnabled.Concat(floatingEnabled).ToArray();
 
             if (allPhrases.Length == 0)
             {
                 // Fallback if all phrases disabled
-                var fallback = Models.ContentModeConfig.GetGenericPhrases(mode)
-                    .Concat(Models.ContentModeConfig.GetRandomFloatingPhrases(mode)).ToArray();
+                var fallback = (App.Mods?.GetPhrases("Generic") ?? System.Array.Empty<string>())
+                    .Concat(App.Mods?.GetPhrases("RandomFloating") ?? System.Array.Empty<string>()).ToArray();
+                if (fallback.Length == 0) return "*giggles*";
                 return fallback[_random.Next(fallback.Length)];
             }
 
@@ -3180,9 +3501,8 @@ namespace ConditioningControlPanel
         /// </summary>
         private void GiggleFromCategory(string category)
         {
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
             var svc = App.CompanionPhrases;
-            var enabled = svc?.GetEnabledPhrases(category, mode);
+            var enabled = svc?.GetEnabledPhrases(category);
 
             if (enabled == null || enabled.Length == 0)
                 return; // All phrases in this category disabled
@@ -3191,7 +3511,7 @@ namespace ConditioningControlPanel
 
             // Resolve phrase audio
             string? audioPath = null;
-            var phraseId = svc?.GetPhraseId(category, text, mode);
+            var phraseId = svc?.GetPhraseId(category, text);
             if (phraseId != null)
             {
                 var audioFile = GetPhraseAudioFile(phraseId);
@@ -3238,30 +3558,32 @@ namespace ConditioningControlPanel
         {
             // Check for special services first
             var lowerName = detectedName?.ToLowerInvariant() ?? "";
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
             var svc = App.CompanionPhrases;
 
             // Discord - special phrases
             if (lowerName.Contains("discord"))
             {
-                var discordPhrases = svc?.GetEnabledPhrases("Discord", mode) is { Length: > 0 } dp
-                    ? dp : Models.ContentModeConfig.GetDiscordPhrases(mode);
+                var discordPhrases = svc?.GetEnabledPhrases("Discord") is { Length: > 0 } dp
+                    ? dp : App.Mods?.GetPhrases("Discord") ?? System.Array.Empty<string>();
+                if (discordPhrases.Length == 0) return "*giggles*";
                 return discordPhrases[_random.Next(discordPhrases.Length)];
             }
 
             // BambiCloud/Hypnotube - positive reinforcement (training sites)
             if (lowerName.Contains("bambicloud") || lowerName.Contains("hypnotube"))
             {
-                var sitePhrases = svc?.GetEnabledPhrases("TrainingSite", mode) is { Length: > 0 } sp
-                    ? sp : Models.ContentModeConfig.GetTrainingSitePhrases(mode);
+                var sitePhrases = svc?.GetEnabledPhrases("TrainingSite") is { Length: > 0 } sp
+                    ? sp : App.Mods?.GetPhrases("TrainingSite") ?? System.Array.Empty<string>();
+                if (sitePhrases.Length == 0) return "*giggles*";
                 return sitePhrases[_random.Next(sitePhrases.Length)];
             }
 
             // Hypno content in tab name - congratulate for bimbofication
             if (lowerName.Contains("bambi") || lowerName.Contains("sissy") || lowerName.Contains("hypno"))
             {
-                var hypnoPhrases = svc?.GetEnabledPhrases("HypnoContent", mode) is { Length: > 0 } hp
-                    ? hp : Models.ContentModeConfig.GetHypnoContentPhrases(mode);
+                var hypnoPhrases = svc?.GetEnabledPhrases("HypnoContent") is { Length: > 0 } hp
+                    ? hp : App.Mods?.GetPhrases("HypnoContent") ?? System.Array.Empty<string>();
+                if (hypnoPhrases.Length == 0) return "*giggles*";
                 return hypnoPhrases[_random.Next(hypnoPhrases.Length)];
             }
 
@@ -3278,20 +3600,10 @@ namespace ConditioningControlPanel
                 _ => "RandomFloating"
             };
 
-            var phrases = svc?.GetEnabledPhrases(categoryName, mode) is { Length: > 0 } enabled
+            var phrases = svc?.GetEnabledPhrases(categoryName) is { Length: > 0 } enabled
                 ? enabled
-                : category switch
-                {
-                    ActivityCategory.Gaming => Models.ContentModeConfig.GetGamingPhrases(mode),
-                    ActivityCategory.Browsing => Models.ContentModeConfig.GetBrowsingPhrases(mode),
-                    ActivityCategory.Shopping => Models.ContentModeConfig.GetShoppingPhrases(mode),
-                    ActivityCategory.Social => Models.ContentModeConfig.GetSocialPhrases(mode),
-                    ActivityCategory.Working => Models.ContentModeConfig.GetWorkingPhrases(mode),
-                    ActivityCategory.Media => Models.ContentModeConfig.GetMediaPhrases(mode),
-                    ActivityCategory.Learning => Models.ContentModeConfig.GetLearningPhrases(mode),
-                    ActivityCategory.Idle => Models.ContentModeConfig.GetWindowAwarenessIdlePhrases(mode),
-                    _ => Models.ContentModeConfig.GetRandomFloatingPhrases(mode)
-                };
+                : App.Mods?.GetPhrases(categoryName) ?? System.Array.Empty<string>();
+            if (phrases.Length == 0) phrases = new[] { "*giggles*" };
 
             var phrase = phrases[_random.Next(phrases.Length)];
 
@@ -3459,14 +3771,12 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var soundsPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds");
-
                 // Use giggle sounds 1-4 for regular speech bubbles
                 var fallbackSounds = new[] {
                     "giggle1.MP3", "giggle2.MP3", "giggle3.MP3", "giggle4.MP3"
                 };
                 var chosenSound = fallbackSounds[_random.Next(fallbackSounds.Length)];
-                var soundPath = System.IO.Path.Combine(soundsPath, chosenSound);
+                var soundPath = Services.ModResourceResolver.ResolveAudioPath(chosenSound);
 
                 if (!System.IO.File.Exists(soundPath))
                 {
@@ -3546,13 +3856,12 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var soundsPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds");
                 // Use giggle sounds 5-8 for AI responses (reserved for special interactions)
                 var giggleFiles = new[] {
                     "giggle5.mp3", "giggle6.mp3", "giggle7.mp3", "giggle8.mp3"
                 };
                 var chosenGiggle = giggleFiles[_random.Next(giggleFiles.Length)];
-                var gigglePath = System.IO.Path.Combine(soundsPath, chosenGiggle);
+                var gigglePath = Services.ModResourceResolver.ResolveAudioPath(chosenGiggle);
 
                 if (System.IO.File.Exists(gigglePath))
                 {
@@ -3589,10 +3898,9 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var soundsPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "bubbles");
                 var popFiles = new[] { "Pop.mp3", "Pop2.mp3", "Pop3.mp3" };
                 var chosenPop = popFiles[_random.Next(popFiles.Length)];
-                var popPath = System.IO.Path.Combine(soundsPath, chosenPop);
+                var popPath = Services.ModResourceResolver.ResolveAudioPath("bubbles/" + chosenPop);
 
                 if (System.IO.File.Exists(popPath))
                 {
@@ -3634,7 +3942,7 @@ namespace ConditioningControlPanel
             // Play the "cum and collapse" audio
             try
             {
-                var soundsPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "flashes_audio");
+                var soundsPath = Services.CompanionPhraseService.VoiceLineFolder;
                 var collapseFiles = new[] { "come and coll.mp3", "come and coll (1).mp3", "come and coll (2).mp3" };
                 var chosenFile = collapseFiles[_random.Next(collapseFiles.Length)];
                 var audioPath = System.IO.Path.Combine(soundsPath, chosenFile);
@@ -3733,7 +4041,7 @@ namespace ConditioningControlPanel
             }
 
             // Show the audio filename text as a speech bubble (audio is already playing from FlashService)
-            Application.Current.Dispatcher.BeginInvoke(() =>
+            DispatcherHelper.RunOnUI(() =>
             {
                 // Double-check in case state changed
                 if (_isGiggling) return;
@@ -3780,7 +4088,7 @@ namespace ConditioningControlPanel
         }
 
         // GameFailed, BubbleMissed, FlashClicked, LevelUp, MindWipe, BrainDrain
-        // phrases moved to ContentModeConfig
+        // phrases provided by App.Mods (ModService)
 
         // Counters for MindWipe/BrainDrain (not too often)
         private int _mindWipeCounter = 0;
@@ -3848,12 +4156,33 @@ namespace ConditioningControlPanel
         /// <summary>
         /// React to companion switch (v5.3).
         /// </summary>
+        private System.Windows.Threading.DispatcherTimer? _companionGreetingDebounce;
+
         private void OnCompanionSwitched(object? sender, Models.CompanionId newCompanion)
         {
             RefreshCompanionDisplay();
 
-            var companionName = Models.CompanionDefinition.GetById(newCompanion).Name;
-            Giggle($"Hi! {companionName} is here now~");
+            // Clear any queued speech so rapid cycling doesn't stack up greetings
+            _speechQueue.Clear();
+            _speechTimer?.Stop();
+            _speechDelayTimer?.Stop();
+            _isGiggling = false;
+
+            // Debounce: delay greeting so only the final companion in a rapid cycle gets one
+            _companionGreetingDebounce?.Stop();
+            _companionGreetingDebounce = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(600)
+            };
+            _companionGreetingDebounce.Tick += (_, _) =>
+            {
+                _companionGreetingDebounce.Stop();
+                var companionName = Models.CompanionDefinition.GetById(newCompanion).Name;
+                companionName = App.Mods?.MakeModAware(companionName) ?? companionName;
+                var greeting = $"Hi! {companionName} is here now~";
+                Giggle(App.Mods?.MakeModAware(greeting) ?? greeting);
+            };
+            _companionGreetingDebounce.Start();
         }
 
         /// <summary>
@@ -3937,8 +4266,8 @@ namespace ConditioningControlPanel
             _ = SendChatMessageAsync();
         }
 
-        // Quick "thinking" phrases shown while waiting for AI
-        private static readonly string[] ThinkingPhrases = new[]
+        // Default thinking phrases (used when no mod overrides)
+        private static readonly string[] DefaultThinkingPhrases = new[]
         {
             "*POP*",
             "*Poppin bubbles...*",
@@ -3950,7 +4279,9 @@ namespace ConditioningControlPanel
 
         private string GetRandomThinkingPhrase()
         {
-            return ThinkingPhrases[_random.Next(ThinkingPhrases.Length)];
+            var modPhrases = App.Mods?.GetPhrases("Thinking");
+            var phrases = modPhrases != null && modPhrases.Length > 0 ? modPhrases : DefaultThinkingPhrases;
+            return phrases[_random.Next(phrases.Length)];
         }
 
         /// <summary>
@@ -3985,7 +4316,7 @@ namespace ConditioningControlPanel
                     GigglePriority(GetRandomThinkingPhrase(), playSound: false);
 
                     // Get AI response - no truncation, scrollable bubble handles long text
-                    var reply = await App.Ai.GetBambiReplyAsync(input);
+                    var reply = await App.Ai.GetBambiReplyAsync(input, isUserMessage: true);
 
                     // Double bounce to attract attention, then show AI response
                     PlayDoubleBounce();
@@ -4011,18 +4342,8 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var tubeUri = useAlternative
-                    ? "pack://application:,,,/Resources/tube2.png"
-                    : "pack://application:,,,/Resources/tube.png";
-
-                var bitmap = new BitmapImage();
-                bitmap.BeginInit();
-                bitmap.UriSource = new Uri(tubeUri, UriKind.Absolute);
-                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.EndInit();
-                bitmap.Freeze();
-
-                ImgTubeFrame.Source = bitmap;
+                var tubeName = useAlternative ? "tube2.png" : "tube.png";
+                ImgTubeFrame.Source = Services.ModResourceResolver.ResolveImage(tubeName);
                 App.Logger?.Information("Tube style changed to: {Style}", useAlternative ? "tube2.png" : "tube.png");
             }
             catch (Exception ex)
@@ -4097,22 +4418,14 @@ namespace ConditioningControlPanel
             // Switch to alternative tube image
             SetTubeStyle(true);
 
-            // Move avatar position when detached (6px more left from previous)
-            AvatarBorder.Margin = new Thickness(5, 100, 426, 203);
+            // Apply tube layout offsets for detached mode
+            ApplyTubeLayoutOffsets();
 
-            // Speech bubble position when detached - left side of avatar (110px more to the left)
-            // If a bubble is currently visible, recalculate its position for detached mode
+            // Speech bubble stays at same position in both modes (right side of tube, clearly visible)
             if (SpeechBubble.Visibility == Visibility.Visible && !string.IsNullOrEmpty(TxtSpeech.Text))
             {
                 AdjustBubbleSize(TxtSpeech.Text);
             }
-            else
-            {
-                SpeechBubble.Margin = new Thickness(0, 0, 410, 550);
-            }
-
-            // Title box position when detached (120px to the left)
-            TitleBox.Margin = new Thickness(0, 0, 416, 193);
 
             // Keep hidden from taskbar and Alt+Tab
             ShowInTaskbar = false;
@@ -4145,22 +4458,14 @@ namespace ConditioningControlPanel
             // Switch back to original tube image
             SetTubeStyle(false);
 
-            // Restore avatar position when attached (matches XAML default)
-            AvatarBorder.Margin = new Thickness(5, 100, 126, 205);
+            // Apply tube layout offsets for attached mode
+            ApplyTubeLayoutOffsets();
 
-            // Restore speech bubble position when attached - right side of avatar
-            // If a bubble is currently visible, recalculate its position for attached mode
+            // Restore speech bubble position when attached
             if (SpeechBubble.Visibility == Visibility.Visible && !string.IsNullOrEmpty(TxtSpeech.Text))
             {
                 AdjustBubbleSize(TxtSpeech.Text);
             }
-            else
-            {
-                SpeechBubble.Margin = new Thickness(0, 0, 125, 550);
-            }
-
-            // Restore title box position when attached (matches XAML default)
-            TitleBox.Margin = new Thickness(0, 0, 121, 180);
 
             // Hide from taskbar and Alt+Tab when attached
             ShowInTaskbar = false;
@@ -4326,8 +4631,8 @@ namespace ConditioningControlPanel
 
             // Show current scale percentage
             int scalePercent = (int)(_currentScale * 100);
-            MenuItemShrink.Header = _currentScale > MinScale ? "－ Shrink" : "－ Shrink (min)";
-            MenuItemGrow.Header = _currentScale < MaxScale ? "＋ Grow" : "＋ Grow (max)";
+            MenuItemShrink.Header = _currentScale > MinScale ? Loc.Get("menu_shrink") : Loc.Get("menu_shrink_min");
+            MenuItemGrow.Header = _currentScale < MaxScale ? Loc.Get("menu_grow") : Loc.Get("menu_grow_max");
 
             // Gray out disabled items
             MenuItemShrink.Foreground = MenuItemShrink.IsEnabled
@@ -4589,8 +4894,7 @@ namespace ConditioningControlPanel
             if (!current)
             {
                 App.Autonomy?.Start();
-                var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-                Giggle(Models.ContentModeConfig.GetAutonomyOnPhrase(mode));
+                Giggle(App.Mods?.GetAutonomyOnPhrase() ?? "Bambi takes over~ *giggles*");
             }
             else
             {
@@ -4632,18 +4936,18 @@ namespace ConditioningControlPanel
             var customPromptActive = App.Settings?.Current?.CompanionPrompt?.UseCustomPrompt == true;
 
             // Dark background for submenu items
-            var darkBg = new SolidColorBrush(Color.FromRgb(37, 37, 66)); // #252542
+            var darkBg = (SolidColorBrush)Application.Current.Resources["PanelBgBrush"];
 
             if (customPromptActive)
             {
                 // Show custom prompt indicator
-                MenuItemPersonality.Header = "Personality: Custom Prompt";
+                MenuItemPersonality.Header = Loc.Get("label_personality_custom_prompt");
                 MenuItemPersonality.Foreground = new SolidColorBrush(Color.FromRgb(255, 165, 0)); // Orange for custom
 
                 // Add info item
                 var infoItem = new MenuItem
                 {
-                    Header = "Custom Prompt Active",
+                    Header = Loc.Get("menu_custom_prompt_active"),
                     Foreground = new SolidColorBrush(Color.FromRgb(255, 165, 0)),
                     Background = darkBg,
                     IsEnabled = false
@@ -4651,12 +4955,12 @@ namespace ConditioningControlPanel
                 MenuItemPersonality.Items.Add(infoItem);
 
                 // Add separator
-                MenuItemPersonality.Items.Add(new Separator { Background = new SolidColorBrush(Color.FromRgb(255, 105, 180)) });
+                MenuItemPersonality.Items.Add(new Separator { Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")) });
 
                 // Add option to disable custom prompt
                 var disableItem = new MenuItem
                 {
-                    Header = "Disable Custom Prompt",
+                    Header = Loc.Get("menu_disable_custom_prompt"),
                     Foreground = new SolidColorBrush(Colors.White),
                     Background = darkBg
                 };
@@ -4667,7 +4971,7 @@ namespace ConditioningControlPanel
                         App.Settings.Current.CompanionPrompt.UseCustomPrompt = false;
                         App.Settings.Save();
                         UpdateQuickMenuState();
-                        Giggle("Back to presets~ *giggles*");
+                        Giggle(Loc.Get("avatar_back_to_presets"));
                     }
                 };
                 MenuItemPersonality.Items.Add(disableItem);
@@ -4676,7 +4980,7 @@ namespace ConditioningControlPanel
             }
 
             // Normal preset menu
-            MenuItemPersonality.Foreground = new SolidColorBrush(Color.FromRgb(255, 105, 180)); // Pink default
+            MenuItemPersonality.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")); // Pink default
 
             var presets = App.Personality?.GetAllPresets() ?? new List<PersonalityPreset>();
             var activeId = App.Settings?.Current?.ActivePersonalityPresetId ?? PersonalityPresets.BambiSpriteId;
@@ -4689,7 +4993,7 @@ namespace ConditioningControlPanel
                     Tag = preset.Id,
                     Background = darkBg,
                     Foreground = preset.Id == activeId
-                        ? new SolidColorBrush(Color.FromRgb(255, 105, 180)) // Pink for active
+                        ? new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")) // Pink for active
                         : new SolidColorBrush(Colors.White)
                 };
 
@@ -4699,16 +5003,14 @@ namespace ConditioningControlPanel
 
             // Update parent menu header with mode-aware name
             var activePreset = App.Personality?.GetActivePreset();
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var displayName = Models.ContentModeConfig.GetPersonalityDisplayName(activePreset?.Name ?? "BambiSprite", mode);
-            MenuItemPersonality.Header = $"Personality: {displayName}";
+            var displayName = App.Mods?.GetPersonalityDisplayName(activePreset?.Name ?? "BambiSprite") ?? activePreset?.Name ?? "BambiSprite";
+            MenuItemPersonality.Header = Loc.GetF("avatar_personality_format", displayName);
         }
 
         private string GetPersonalityMenuHeader(PersonalityPreset preset, string activeId)
         {
             var check = preset.Id == activeId ? "☑" : "☐";
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var displayName = Models.ContentModeConfig.GetPersonalityDisplayName(preset.Name, mode);
+            var displayName = App.Mods?.GetPersonalityDisplayName(preset.Name) ?? preset.Name;
             return $"{check} {displayName}";
         }
 
@@ -4821,41 +5123,40 @@ namespace ConditioningControlPanel
         public void UpdateQuickMenuState()
         {
             // Talk to companion - mode-aware label
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var talkToLabel = Models.ContentModeConfig.GetTalkToLabel(mode);
+            var talkToLabel = App.Mods?.GetTalkToLabel() ?? Loc.Get("menu_talk_to_bambi");
             var chatAvailable = App.Ai?.IsAvailable == true;
             MenuItemTalkToBambi.IsEnabled = chatAvailable;
             if (chatAvailable)
             {
-                MenuItemTalkToBambi.Header = $"💬 {talkToLabel}";
-                MenuItemTalkToBambi.Foreground = new SolidColorBrush(Color.FromRgb(255, 105, 180)); // Pink
+                MenuItemTalkToBambi.Header = Loc.GetF("menu_talk_to_format", talkToLabel);
+                MenuItemTalkToBambi.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")); // Pink
             }
             else
             {
-                MenuItemTalkToBambi.Header = $"🔒 {talkToLabel}";
+                MenuItemTalkToBambi.Header = Loc.GetF("menu_talk_to_locked_format", talkToLabel);
                 MenuItemTalkToBambi.Foreground = new SolidColorBrush(Color.FromRgb(155, 89, 182)); // Purple for Patreon
             }
 
             // Engine state (use Flash.IsRunning as proxy)
             var engineRunning = App.Flash?.IsRunning == true;
-            MenuItemEngine.Header = engineRunning ? "■ Stop Engine" : "▶ Start Engine";
+            MenuItemEngine.Header = engineRunning ? Loc.Get("menu_stop_engine") : Loc.Get("menu_start_engine");
             MenuItemEngine.Foreground = engineRunning ? new SolidColorBrush(Color.FromRgb(255, 99, 71)) : new SolidColorBrush(Color.FromRgb(144, 238, 144));
 
             // Trigger mode
             var triggerOn = App.Settings?.Current?.TriggerModeEnabled == true;
-            MenuItemTriggerMode.Header = triggerOn ? "☑ Trigger Mode" : "☐ Trigger Mode";
+            MenuItemTriggerMode.Header = triggerOn ? Loc.Get("menu_trigger_mode_on") : Loc.Get("menu_trigger_mode_off");
             MenuItemTriggerMode.Foreground = triggerOn ? new SolidColorBrush(Color.FromRgb(144, 238, 144)) : new SolidColorBrush(Colors.White);
 
             // Takeover (Patreon only) - mode-aware name
             var takeoverAvailable = App.Patreon?.HasPremiumAccess == true;
             var takeoverOn = App.Settings?.Current?.AutonomyModeEnabled == true;
-            var takeoverName = Models.ContentModeConfig.GetTakeoverLabel(mode);
-            MenuItemBambiTakeover.Header = takeoverOn ? $"☑ {takeoverName}" : $"☐ {takeoverName}";
-            MenuItemBambiTakeover.Foreground = takeoverOn ? new SolidColorBrush(Color.FromRgb(255, 105, 180)) : new SolidColorBrush(Colors.White);
+            var takeoverName = App.Mods?.GetTakeoverLabel() ?? Loc.Get("menu_bambi_takeover");
+            MenuItemBambiTakeover.Header = takeoverOn ? Loc.GetF("menu_takeover_on_format", takeoverName) : Loc.GetF("menu_takeover_off_format", takeoverName);
+            MenuItemBambiTakeover.Foreground = takeoverOn ? new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")) : new SolidColorBrush(Colors.White);
             MenuItemBambiTakeover.IsEnabled = takeoverAvailable;
             if (!takeoverAvailable)
             {
-                MenuItemBambiTakeover.Header = $"🔒 {takeoverName} (Patreon)";
+                MenuItemBambiTakeover.Header = Loc.GetF("menu_takeover_locked_format", takeoverName);
                 MenuItemBambiTakeover.Foreground = new SolidColorBrush(Color.FromRgb(155, 89, 182)); // Purple for Patreon
             }
 
@@ -4863,16 +5164,16 @@ namespace ConditioningControlPanel
             PopulatePersonalityMenu();
 
             // Mute avatar
-            MenuItemMute.Header = _isMuted ? "☑ Mute Avatar" : "☐ Mute Avatar";
+            MenuItemMute.Header = _isMuted ? Loc.Get("menu_mute_avatar_on") : Loc.Get("menu_mute_avatar_off");
             MenuItemMute.Foreground = _isMuted ? new SolidColorBrush(Color.FromRgb(255, 99, 71)) : new SolidColorBrush(Colors.White);
 
             // Mute whispers (inverted - muted when SubAudioEnabled is false)
             var whispersMuted = App.Settings?.Current?.SubAudioEnabled != true;
-            MenuItemMuteWhispers.Header = whispersMuted ? "☑ Mute Whispers" : "☐ Mute Whispers";
+            MenuItemMuteWhispers.Header = whispersMuted ? Loc.Get("menu_mute_whispers_on") : Loc.Get("menu_mute_whispers_off");
             MenuItemMuteWhispers.Foreground = whispersMuted ? new SolidColorBrush(Color.FromRgb(255, 99, 71)) : new SolidColorBrush(Colors.White);
 
             // Pause browser
-            MenuItemPauseBrowser.Header = _isBrowserPaused ? "▶ Resume Browser" : "⏸ Pause Browser";
+            MenuItemPauseBrowser.Header = _isBrowserPaused ? Loc.Get("menu_resume_browser") : Loc.Get("menu_pause_browser");
             MenuItemPauseBrowser.Foreground = _isBrowserPaused ? new SolidColorBrush(Color.FromRgb(144, 238, 144)) : new SolidColorBrush(Colors.White);
 
             // Lock most options when remote controlled (keep talk, attach/detach, resize)
@@ -4880,7 +5181,7 @@ namespace ConditioningControlPanel
             {
                 var lockedBrush = new SolidColorBrush(Color.FromRgb(0x60, 0x60, 0x70));
                 MenuItemEngine.IsEnabled = false;
-                MenuItemEngine.Header = "🔒 Start Engine";
+                MenuItemEngine.Header = Loc.Get("label_start_engine");
                 MenuItemEngine.Foreground = lockedBrush;
                 MenuItemTriggerMode.IsEnabled = false;
                 MenuItemTriggerMode.Foreground = lockedBrush;

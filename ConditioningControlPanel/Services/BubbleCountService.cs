@@ -1,15 +1,9 @@
-using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
-using NAudio.Wave;
 using Screen = System.Windows.Forms.Screen;
+using ConditioningControlPanel.Helpers;
 
 namespace ConditioningControlPanel.Services;
 
@@ -48,7 +42,6 @@ public class BubbleCountService : IDisposable
     
     public event EventHandler? GameCompleted;
     public event EventHandler? GameFailed;
-    public event EventHandler? BubblePopped;
 
     public void Start()
     {
@@ -56,13 +49,6 @@ public class BubbleCountService : IDisposable
         
         var settings = App.Settings.Current;
 
-        // Check level requirement (Level 50)
-        if (!settings.IsLevelUnlocked(50))
-        {
-            App.Logger?.Information("BubbleCountService: Level {Level} is below 50, not available", settings.PlayerLevel);
-            return;
-        }
-        
         if (!settings.BubbleCountEnabled)
         {
             App.Logger?.Information("BubbleCountService: Disabled in settings");
@@ -133,9 +119,6 @@ public class BubbleCountService : IDisposable
 
         var settings = App.Settings.Current;
 
-        // Level check - skip for forced tests
-        if (!forceTest && !settings.IsLevelUnlocked(50)) return;
-
         // Check if another fullscreen interaction is active (video, lock card)
         // If so, queue this bubble count for later
         // Note: If CurrentInteraction is already BubbleCount, the queue dequeued us — proceed normally
@@ -176,7 +159,7 @@ public class BubbleCountService : IDisposable
         // Small delay to let the freeze effect register before game starts
         Task.Delay(800).ContinueWith(_ =>
         {
-            Application.Current.Dispatcher.BeginInvoke(() =>
+            DispatcherHelper.RunOnUI(() =>
             {
                 try
                 {
@@ -199,6 +182,10 @@ public class BubbleCountService : IDisposable
 
                     // Show the game on all monitors
                     BubbleCountWindow.ShowOnAllMonitors(videoPath, difficulty, settings.BubbleCountStrictLock, OnGameComplete);
+
+                    // Extend the stuck detection timeout to cover full video + counting phase
+                    var videoDuration = BubbleCountWindow.LastVideoDurationSeconds;
+                    App.InteractionQueue?.ExtendTimeout(videoDuration + 120);
                 }
                 catch (Exception ex)
                 {
@@ -261,9 +248,8 @@ public class BubbleCountService : IDisposable
                 {
                     // Mercy after 3 retries - let them go
                     App.Logger?.Information("Bubble count mercy after {Retries} retries", _retryCount);
-                    var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
                     ShowFullscreenMessage(
-                        Models.ContentModeConfig.GetAttentionCheckMercyMessage(mode),
+                        App.Mods?.GetAttentionCheckMercyMessage() ?? "BAMBI GETS MERCY",
                         2500,
                         () =>
                         {
@@ -278,9 +264,8 @@ public class BubbleCountService : IDisposable
                 {
                     // Replay - show message then start new video
                     App.Logger?.Information("Bubble count retry {Count} (mercy at 3)", _retryCount);
-                    var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
                     ShowFullscreenMessage(
-                        Models.ContentModeConfig.GetBubbleCountRetryMessage(mode),
+                        App.Mods?.GetBubbleCountRetryMessage() ?? "WRONG!\nWATCH AGAIN",
                         2000,
                         RetryGame);
                 }
@@ -302,6 +287,11 @@ public class BubbleCountService : IDisposable
     {
         // Check if panic button was pressed during message
         if (!_isBusy) return;
+
+        // Extend the stuck detection timeout to prevent InteractionQueue from
+        // auto-completing BubbleCount during the retry gap, which would let queued
+        // interactions (e.g. Video) start while the retry game plays.
+        App.InteractionQueue?.ExtendTimeout(300);
 
         try
         {
@@ -353,6 +343,7 @@ public class BubbleCountService : IDisposable
 
             foreach (var screen in screens)
             {
+                var dpiScale = BubbleCountWindow.GetDpiForScreen(screen);
                 var win = new Window
                 {
                     WindowStyle = WindowStyle.None,
@@ -361,8 +352,8 @@ public class BubbleCountService : IDisposable
                     ShowInTaskbar = false,
                     ShowActivated = false,
                     WindowStartupLocation = WindowStartupLocation.Manual,
-                    Left = screen.Bounds.X + 100,
-                    Top = screen.Bounds.Y + 100,
+                    Left = (screen.Bounds.X + 100) / dpiScale,
+                    Top = (screen.Bounds.Y + 100) / dpiScale,
                     Width = 400,
                     Height = 300,
                     Content = new TextBlock
@@ -386,8 +377,7 @@ public class BubbleCountService : IDisposable
             {
                 try
                 {
-                    if (Application.Current?.Dispatcher == null) return;
-                    Application.Current.Dispatcher.BeginInvoke(() =>
+                    DispatcherHelper.RunOnUI(() =>
                     {
                         CloseMessageWindows();
                         then();
@@ -499,13 +489,40 @@ public class BubbleCountService : IDisposable
         _regularVideos.Clear();
         _packVideos.Clear();
 
-        // Get regular videos from filesystem
+        // Get regular videos from filesystem (including subfolders for content pack organization)
         if (Directory.Exists(_videosPath))
         {
-            var files = Directory.GetFiles(_videosPath)
-                .Where(f => new[] { ".mp4", ".webm", ".avi", ".mkv", ".mov", ".wmv" }
-                    .Contains(Path.GetExtension(f).ToLowerInvariant()))
-                .ToList();
+            var validExtensions = new[] { ".mp4", ".webm", ".avi", ".mkv", ".mov", ".wmv" };
+            var allFiles = Directory.GetFiles(_videosPath, "*.*", SearchOption.AllDirectories);
+            var files = new List<string>();
+
+            foreach (var file in allFiles)
+            {
+                var ext = Path.GetExtension(file).ToLowerInvariant();
+                if (!validExtensions.Contains(ext)) continue;
+
+                // Security: validate path is within allowed directories
+                if (!SecurityHelper.IsPathSafe(file, AppDomain.CurrentDomain.BaseDirectory)
+                    && !SecurityHelper.IsPathSafe(file, App.UserDataPath)
+                    && !SecurityHelper.IsPathSafe(file, App.EffectiveAssetsPath))
+                    continue;
+
+                var fileName = SecurityHelper.SanitizeFilename(Path.GetFileName(file));
+                if (string.IsNullOrEmpty(fileName)) continue;
+
+                files.Add(file);
+            }
+
+            // Filter out disabled assets
+            if (App.Settings?.Current?.DisabledAssetPaths.Count > 0)
+            {
+                var basePath = App.EffectiveAssetsPath;
+                files = files.Where(f =>
+                {
+                    var relativePath = Path.GetRelativePath(basePath, f);
+                    return !App.Settings.Current.DisabledAssetPaths.Contains(relativePath);
+                }).ToList();
+            }
 
             _regularVideos = files.OrderBy(_ => _random.Next()).ToList();
         }
@@ -528,6 +545,20 @@ public class BubbleCountService : IDisposable
         CloseMessageWindows();
         App.InteractionQueue?.Complete(InteractionQueueService.InteractionType.BubbleCount);
         App.Logger?.Debug("BubbleCountService: Busy state reset");
+    }
+
+    /// <summary>
+    /// Force cleanup all bubble count state and windows.
+    /// Called by InteractionQueue stuck detection to prevent lingering windows.
+    /// </summary>
+    public void ForceCleanup()
+    {
+        App.Logger?.Information("BubbleCountService: ForceCleanup called");
+        _isBusy = false;
+        _retryCount = 0;
+        CloseMessageWindows();
+        BubbleCountWindow.ForceCloseAll();
+        App.Bubbles?.Resume();
     }
 
     /// <summary>

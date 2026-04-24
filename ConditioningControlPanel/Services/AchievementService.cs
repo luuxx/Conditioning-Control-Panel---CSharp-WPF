@@ -1,8 +1,8 @@
-using System;
 using System.IO;
 using System.Text.Json;
-using System.Windows;
 using System.Windows.Threading;
+using ConditioningControlPanel.Helpers;
+using ConditioningControlPanel.Localization;
 using ConditioningControlPanel.Models;
 
 namespace ConditioningControlPanel.Services;
@@ -19,6 +19,7 @@ public class AchievementService : IDisposable
     private bool _isDirty;
     private DateTime _lastPinkFilterCheck = DateTime.Now;
     private DateTime _lastSpiralCheck = DateTime.Now;
+    private DateTime _lastBrainDrainCheck = DateTime.Now;
     private DateTime _lastMindWipeCheck = DateTime.Now;
     
     public event EventHandler<Achievement>? AchievementUnlocked;
@@ -134,7 +135,8 @@ public class AchievementService : IDisposable
     /// </summary>
     private void TrackTimeBasedProgress(object? sender, EventArgs e)
     {
-        var settings = App.Settings.Current;
+        var settings = App.Settings?.Current;
+        if (settings == null) return;
         var now = DateTime.Now;
 
         // Track total conditioning time for skill tree (when overlay is running = session active)
@@ -202,7 +204,26 @@ public class AchievementService : IDisposable
             // Reset timer when inactive to prevent time accumulation bugs
             _lastSpiralCheck = now;
         }
-        
+
+        // Track BrainDrain time - only when overlay is actually running
+        var isBrainDrainActive = settings.BrainDrainEnabled &&
+                                 App.Overlay?.IsRunning == true;
+        if (isBrainDrainActive)
+        {
+            var elapsed = (now - _lastBrainDrainCheck).TotalMinutes;
+            if (elapsed > 0 && elapsed < 0.1) // Sanity check - max 6 seconds between ticks
+            {
+                // Track for quests (feeds into Combined/Mindless Minutes)
+                App.Quests?.TrackBrainDrainMinutes(elapsed);
+            }
+            _lastBrainDrainCheck = now;
+        }
+        else
+        {
+            // Reset timer when inactive to prevent time accumulation bugs
+            _lastBrainDrainCheck = now;
+        }
+
         // Check System Overload (Bubbles + Bouncing Text + Spiral all active)
         if (settings.BubblesEnabled && settings.BouncingTextEnabled && settings.SpiralEnabled)
         {
@@ -282,8 +303,54 @@ public class AchievementService : IDisposable
             TryUnlock("pop_the_thought");
         }
 
+        // Award 1 sparkle point every 100 bubbles
+        if (_progress.TotalBubblesPopped % 100 == 0)
+        {
+            var settings = App.Settings?.Current;
+            if (settings != null)
+            {
+                settings.SkillPoints += 1;
+                App.Settings?.Save();
+                App.Logger?.Information("Bubble milestone! {Total} bubbles popped — awarded 1 sparkle point (total: {Points})",
+                    _progress.TotalBubblesPopped, settings.SkillPoints);
+                ShowBubbleMilestoneNotification(_progress.TotalBubblesPopped);
+            }
+        }
+
         // Track for quests
         App.Quests?.TrackBubblePopped();
+    }
+
+    private void ShowBubbleMilestoneNotification(int totalBubbles)
+    {
+        try
+        {
+            var fakeAchievement = new Achievement
+            {
+                Id = "bubble_milestone",
+                Name = Loc.GetF("achievement_bubble_milestone_name", totalBubbles),
+                FlavorText = Loc.Get("achievement_bubble_milestone_flavor"),
+                ImageName = "bubble_pop.png",
+                Category = AchievementCategory.Minigames
+            };
+
+            DispatcherHelper.RunOnUI(() =>
+            {
+                try
+                {
+                    var popup = new AchievementPopup(fakeAchievement, "✨", Loc.Get("achievement_bubble_milestone_header"));
+                    popup.Show();
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Warning(ex, "Failed to show bubble milestone popup");
+                }
+            }, DispatcherPriority.ApplicationIdle);
+        }
+        catch (Exception ex)
+        {
+            App.Logger?.Warning(ex, "Failed to show bubble milestone notification");
+        }
     }
     
     /// <summary>
@@ -579,7 +646,7 @@ public class AchievementService : IDisposable
         // Fire event to show popup
         try
         {
-            Application.Current.Dispatcher.Invoke(() =>
+            DispatcherHelper.RunOnUISync(() =>
             {
                 App.Logger?.Debug("Firing AchievementUnlocked event for: {Name}", achievement.Name);
                 AchievementUnlocked?.Invoke(this, achievement);

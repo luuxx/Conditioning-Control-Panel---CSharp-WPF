@@ -1,11 +1,9 @@
-using System;
 using System.IO;
-using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Windows.Threading;
+using ConditioningControlPanel.Helpers;
+using ConditioningControlPanel.Localization;
 using NAudio.Wave;
-using Serilog;
 
 namespace ConditioningControlPanel.Services
 {
@@ -286,7 +284,7 @@ namespace ConditioningControlPanel.Services
         
         private void CrossfadeTimer_Tick(object? sender, EventArgs e)
         {
-            if (!_loopMode || string.IsNullOrEmpty(_loopFilePath)) return;
+            if (!_isRunning || !_loopMode || string.IsNullOrEmpty(_loopFilePath)) return;
             
             // Check for Clean Slate achievement (60 seconds of continuous loop)
             if (!_cleanSlateAchieved)
@@ -306,7 +304,7 @@ namespace ConditioningControlPanel.Services
         
         private void StartNextLoopPlayer()
         {
-            if (!_loopMode || string.IsNullOrEmpty(_loopFilePath)) return;
+            if (!_isRunning || !_loopMode || string.IsNullOrEmpty(_loopFilePath)) return;
             
             try
             {
@@ -361,7 +359,7 @@ namespace ConditioningControlPanel.Services
             // Wait a bit longer than the overlap to ensure smooth transition, then cleanup old player
             Task.Delay(TimeSpan.FromSeconds(CROSSFADE_OVERLAP_SECONDS + 0.1)).ContinueWith(_ =>
             {
-                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                DispatcherHelper.RunOnUI(() =>
                 {
                     if (cleanupA)
                     {
@@ -411,8 +409,12 @@ namespace ConditioningControlPanel.Services
             _loopMode = false;
             _loopFilePath = null;
             
-            _crossfadeTimer?.Stop();
-            _crossfadeTimer = null;
+            if (_crossfadeTimer != null)
+            {
+                _crossfadeTimer.Tick -= CrossfadeTimer_Tick;
+                _crossfadeTimer.Stop();
+                _crossfadeTimer = null;
+            }
             
             DisposePlayerA();
             DisposePlayerB();
@@ -550,9 +552,9 @@ namespace ConditioningControlPanel.Services
             {
                 App.Logger?.Warning("MindWipe: No audio files available in assets/mindwipe/");
                 System.Windows.MessageBox.Show(
-                    "No audio files found!\n\nPlace .mp3, .wav, or .ogg files in:\nassets/mindwipe/", 
-                    "Mind Wipe", 
-                    System.Windows.MessageBoxButton.OK, 
+                    Loc.Get("mindwipe_no_audio_files"),
+                    Loc.Get("mindwipe_title"),
+                    System.Windows.MessageBoxButton.OK,
                     System.Windows.MessageBoxImage.Warning);
                 return;
             }
@@ -579,6 +581,7 @@ namespace ConditioningControlPanel.Services
             Stop();
             StopCurrentAudio();
             StopLoop();
+            _timer.Tick -= Timer_Tick;
         }
     }
 }

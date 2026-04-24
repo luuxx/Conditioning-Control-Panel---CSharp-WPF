@@ -1,5 +1,5 @@
-using System.Windows;
 using System.Windows.Media;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel;
 
@@ -40,25 +40,25 @@ public partial class HapticsSetupWindow : Window
 
         if (_selectedProvider == Provider.Lovense)
         {
-            TxtTitle.Text = "Lovense Setup Guide";
-            TxtTitle.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4")!);
+            TxtTitle.Text = Loc.Get("label_lovense_setup_guide");
+            TxtTitle.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")!);
             LovenseSlides.Visibility = Visibility.Visible;
             ButtplugSlides.Visibility = Visibility.Collapsed;
 
             // Set indicator colors for Lovense (pink)
-            SetIndicatorColor(new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4")!));
-            BtnNext.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4")!);
+            SetIndicatorColor(new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")!));
+            BtnNext.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")!);
         }
         else
         {
-            TxtTitle.Text = "Buttplug.io Setup Guide";
-            TxtTitle.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9B59B6")!);
+            TxtTitle.Text = Loc.Get("label_buttplug_io_setup_guide");
+            TxtTitle.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetSecondaryColorHex() ?? "#9B59B6")!);
             LovenseSlides.Visibility = Visibility.Collapsed;
             ButtplugSlides.Visibility = Visibility.Visible;
 
             // Set indicator colors for Buttplug (purple)
-            SetIndicatorColor(new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9B59B6")!));
-            BtnNext.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#9B59B6")!);
+            SetIndicatorColor(new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetSecondaryColorHex() ?? "#9B59B6")!));
+            BtnNext.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetSecondaryColorHex() ?? "#9B59B6")!);
         }
 
         ShowNavigationControls();
@@ -91,8 +91,8 @@ public partial class HapticsSetupWindow : Window
             BtnNext.Visibility = Visibility.Collapsed;
             BtnDone.Visibility = Visibility.Collapsed;
             SlideIndicators.Visibility = Visibility.Collapsed;
-            TxtTitle.Text = "Haptics Setup Guide";
-            TxtTitle.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4")!);
+            TxtTitle.Text = Loc.Get("dialog_haptics_setup_guide");
+            TxtTitle.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")!);
         }
         else
         {
@@ -128,7 +128,7 @@ public partial class HapticsSetupWindow : Window
 
         // Update slide indicators
         var activeColor = Dot1.Tag as Brush ?? Brushes.White;
-        var inactiveColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#404060")!);
+        var inactiveColor = (SolidColorBrush)Application.Current.Resources["PanelAccentBrush"];
 
         Dot1.Fill = _currentSlide >= 1 ? activeColor : inactiveColor;
         Dot2.Fill = _currentSlide >= 2 ? activeColor : inactiveColor;

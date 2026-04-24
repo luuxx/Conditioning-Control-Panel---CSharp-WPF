@@ -51,8 +51,8 @@ public class QuestDefinitionService : IDisposable
     {
         { 1, "Jerk-it January" },
         { 2, "Fucked-up February" },
-        { 3, "Mindfuck March" },
-        { 4, "Anal April" },
+        { 3, "Mindless March" },
+        { 4, "Airhead April" },
         { 5, "Mesmerize May" },
         { 6, "Juicy June" },
         { 7, "Jizzly July" },
@@ -72,6 +72,8 @@ public class QuestDefinitionService : IDisposable
     public QuestDefinitionService()
     {
         _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        _httpClient.DefaultRequestHeaders.Add("X-Client-Version", UpdateService.AppVersion);
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"ConditioningControlPanel/{UpdateService.AppVersion}");
 
         // Set up cache directories
         var appDataPath = Path.Combine(
@@ -264,16 +266,16 @@ public class QuestDefinitionService : IDisposable
     {
         return category?.ToLowerInvariant() switch
         {
-            "flash" => "pack://application:,,,/Resources/features/flash.png",
-            "spiral" => "pack://application:,,,/Resources/features/spiral_overlay.png",
-            "bubbles" => "pack://application:,,,/Resources/features/Bubble_pop.png",
-            "pinkfilter" => "pack://application:,,,/Resources/features/Pink_filter.png",
-            "video" => "pack://application:,,,/Resources/features/mandatory_videos.png",
-            "session" => "pack://application:,,,/Resources/features/bambi takeover.png",
-            "lockcard" => "pack://application:,,,/Resources/features/Phrase_Lock.png",
-            "bubblecount" => "pack://application:,,,/Resources/features/Bubble_count.png",
-            "streak" => "pack://application:,,,/Resources/achievements/daily_maintenance.png",
-            _ => "pack://application:,,,/Resources/logo.png"
+            "flash" => ModResourceResolver.ResolveUri("features/flash.png"),
+            "spiral" => ModResourceResolver.ResolveUri("features/spiral_overlay.png"),
+            "bubbles" => ModResourceResolver.ResolveUri("features/Bubble_pop.png"),
+            "pinkfilter" => ModResourceResolver.ResolveUri("features/Pink_filter.png"),
+            "video" => ModResourceResolver.ResolveUri("features/mandatory_videos.png"),
+            "session" => ModResourceResolver.ResolveUri("features/bambi takeover.png"),
+            "lockcard" => ModResourceResolver.ResolveUri("features/Phrase_Lock.png"),
+            "bubblecount" => ModResourceResolver.ResolveUri("features/Bubble_count.png"),
+            "streak" => ModResourceResolver.ResolveUri("achievements/daily_maintenance.png"),
+            _ => ModResourceResolver.ResolveUri("logo.png")
         };
     }
 

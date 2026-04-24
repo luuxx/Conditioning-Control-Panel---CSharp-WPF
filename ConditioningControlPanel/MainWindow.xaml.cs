@@ -1,25 +1,22 @@
-using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Rectangle = System.Windows.Shapes.Rectangle;
 using NAudio.Wave;
+using ConditioningControlPanel.Localization;
 using ConditioningControlPanel.Models;
+using ConditioningControlPanel.Helpers;
 using ConditioningControlPanel.Services;
 
 namespace ConditioningControlPanel
@@ -83,6 +80,7 @@ namespace ConditioningControlPanel
         private bool _isCapturingPanicKey = false;
         private bool _exitRequested = false;
         private int _panicPressCount = 0;
+        private string _leaderboardMode = "monthly";
 
         // Lockdown mode
         private int _lockdownTimerClickCount = 0;
@@ -93,28 +91,33 @@ namespace ConditioningControlPanel
         private DispatcherTimer? _remoteNotificationTimer;
         private DispatcherTimer? _remoteSessionInfoTimer;
 
+        // Tab animation storyboards (so they can be stopped when tab is hidden)
+        private Storyboard? _seasonTitleStoryboard;
+        private Storyboard? _lockdownPulseStoryboard;
+        private bool _skillTreeAnimationsActive = false;
+
         private static readonly Dictionary<string, string> CommandLabels = new()
         {
-            ["show_pink_filter"] = "Pink Filter enabled",
-            ["stop_pink_filter"] = "Pink Filter disabled",
-            ["show_spiral"] = "Spiral enabled",
-            ["stop_spiral"] = "Spiral disabled",
-            ["start_bubbles"] = "Bubbles started",
-            ["stop_bubbles"] = "Bubbles stopped",
-            ["trigger_video"] = "Video triggered",
-            ["trigger_haptic"] = "Haptic triggered",
-            ["trigger_bubble_count"] = "Bubble Count triggered",
-            ["start_autonomy"] = "Autonomy enabled",
-            ["stop_autonomy"] = "Autonomy disabled",
-            ["start_session"] = "Session started",
-            ["pause_session"] = "Session paused",
-            ["resume_session"] = "Session resumed",
-            ["stop_session"] = "Session stopped",
-            ["enable_strict_lock"] = "Strict Lock enabled",
-            ["disable_strict_lock"] = "Strict Lock disabled",
-            ["disable_panic"] = "Panic key disabled",
-            ["enable_panic"] = "Panic key enabled",
-            ["trigger_panic"] = "All effects stopped",
+            ["show_pink_filter"] = "cmd_pink_filter_enabled",
+            ["stop_pink_filter"] = "cmd_pink_filter_disabled",
+            ["show_spiral"] = "cmd_spiral_enabled",
+            ["stop_spiral"] = "cmd_spiral_disabled",
+            ["start_bubbles"] = "cmd_bubbles_started",
+            ["stop_bubbles"] = "cmd_bubbles_stopped",
+            ["trigger_video"] = "cmd_video_triggered",
+            ["trigger_haptic"] = "cmd_haptic_triggered",
+            ["trigger_bubble_count"] = "cmd_bubble_count_triggered",
+            ["start_autonomy"] = "cmd_autonomy_enabled",
+            ["stop_autonomy"] = "cmd_autonomy_disabled",
+            ["start_session"] = "cmd_session_started",
+            ["pause_session"] = "cmd_session_paused",
+            ["resume_session"] = "cmd_session_resumed",
+            ["stop_session"] = "cmd_session_stopped",
+            ["enable_strict_lock"] = "cmd_strict_lock_enabled",
+            ["disable_strict_lock"] = "cmd_strict_lock_disabled",
+            ["disable_panic"] = "cmd_panic_key_disabled",
+            ["enable_panic"] = "cmd_panic_key_enabled",
+            ["trigger_panic"] = "cmd_all_effects_stopped",
         };
 
         private static readonly HashSet<string> SuppressedCommands = new()
@@ -129,6 +132,7 @@ namespace ConditioningControlPanel
         /// </summary>
         public event EventHandler? EngineStopped;
         private DateTime _lastPanicTime = DateTime.MinValue;
+        private string? _lastKnownUnifiedId;
 
         /// <summary>
         /// Gets the browser WebView2 control for external access (e.g., avatar audio controls)
@@ -156,6 +160,9 @@ namespace ConditioningControlPanel
 
         // Pink Rush popup
         private PinkRushPopup? _pinkRushPopup;
+
+        // Lucky proc toast popup
+        private Window? _luckyProcPopup;
         
         // Ramp tracking
         private DispatcherTimer? _rampTimer;
@@ -213,8 +220,8 @@ namespace ConditioningControlPanel
             // Load logo
             LoadLogo();
 
-            // Initialize content mode toggle (BS/SH switch)
-            InitializeContentModeToggle();
+            // Initialize mod selector display
+            InitializeModSelector();
 
             // Initialize tray icon
             _trayIcon = new TrayIconService(this);
@@ -277,6 +284,7 @@ namespace ConditioningControlPanel
 
             // Subscribe to cloud profile sync event to refresh UI when profile loads
             App.ProfileSync.ProfileLoaded += OnProfileLoaded;
+            App.ProfileSync.SyncHealthChanged += OnSyncHealthChanged;
 
             LoadSettings();
             InitializePresets();
@@ -311,6 +319,7 @@ namespace ConditioningControlPanel
             {
                 App.SkillTree.PinkRushStarted += OnPinkRushStarted;
                 App.SkillTree.PinkRushEnded += OnPinkRushEnded;
+                App.SkillTree.LuckyProc += OnLuckyProc;
             }
 
             // Subscribe to roadmap events
@@ -323,6 +332,9 @@ namespace ConditioningControlPanel
             // Initialize Avatar tab settings
             InitializePatreonTab();
 
+            // Initialize Exclusives section visibility for already-logged-in users
+            UpdateAccountLinkingUI();
+
             // Initialize banner rotation
             InitializeBannerRotation();
 
@@ -330,8 +342,8 @@ namespace ConditioningControlPanel
             App.BouncingText.Stop();
             App.Overlay.Stop();
             
-            // Show content mode selection on first launch (before welcome dialog)
-            ContentModeDialog.ShowIfNeeded();
+            // Show mod selection on first launch (before welcome dialog)
+            ModSelectorDialog.ShowIfNeeded();
 
             // Show welcome dialog on first launch, then start tutorial
             // But delay tutorial if update dialog is being shown
@@ -373,6 +385,7 @@ namespace ConditioningControlPanel
 
             Task.Delay(TimeSpan.FromSeconds(schedulerGracePeriodSeconds)).ContinueWith(_ =>
             {
+                if (Application.Current?.Dispatcher?.HasShutdownStarted == true) return;
                 Dispatcher.BeginInvoke(() =>
                 {
                     if (Application.Current == null) return;
@@ -388,6 +401,26 @@ namespace ConditioningControlPanel
 
             // Initialize browser when window is loaded
             Loaded += MainWindow_Loaded;
+
+            // Close the Exclusives submenu popup on Alt+Tab / focus loss.
+            // MouseLeave doesn't fire during Alt+Tab, so without this the popup
+            // stays pinned on top of whatever app the user switched to.
+            Deactivated += (_, __) =>
+            {
+                if (ExclusivesSubmenuPopup != null && ExclusivesSubmenuPopup.IsOpen)
+                {
+                    _exclusivesMenuCloseTimer?.Stop();
+                    ExclusivesSubmenuPopup.IsOpen = false;
+                }
+            };
+
+            // velvet-mosaic: highlight dashboard cards whose feature is enabled, and
+            // keep them in sync when settings change anywhere else.
+            Loaded += (_, __) => RefreshFeatureCardActiveStates();
+            if (App.Settings?.Current is System.ComponentModel.INotifyPropertyChanged settingsInpc)
+            {
+                settingsInpc.PropertyChanged += OnSettingsPropertyChangedForCards;
+            }
         }
 
         private void OnXPChanged(object? sender, double xp)
@@ -407,7 +440,7 @@ namespace ConditioningControlPanel
 
                 // Start autonomy if it was enabled but couldn't start earlier (Patreon wasn't validated yet)
                 var s = App.Settings?.Current;
-                if (s != null && s.AutonomyModeEnabled && s.AutonomyConsentGiven && s.IsLevelUnlocked(100)
+                if (s != null && s.AutonomyModeEnabled && s.AutonomyConsentGiven
                     && App.Autonomy?.IsEnabled != true)
                 {
                     var hasAccess = s.PatreonTier >= 1 || App.Patreon?.IsWhitelisted == true;
@@ -416,6 +449,24 @@ namespace ConditioningControlPanel
                         App.Autonomy?.Start();
                         App.Logger?.Information("Started autonomy service after profile loaded");
                     }
+                }
+            });
+        }
+
+        private void OnSyncHealthChanged(object? sender, int failureCount)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (failureCount >= 3)
+                {
+                    App.Logger?.Warning("[SyncHealth] {Count} consecutive sync failures — notifying user", failureCount);
+                    // Show a subtle notification in the title bar area
+                    Title = $"Conditioning Control Panel — Cloud sync issue";
+                }
+                else if (failureCount == 0)
+                {
+                    // Restore normal title
+                    Title = "Conditioning Control Panel";
                 }
             });
         }
@@ -531,19 +582,30 @@ namespace ConditioningControlPanel
                         var outputDevice = new WaveOutEvent();
 
                         var masterVolume = App.Settings.Current.MasterVolume / 100f;
-                        var curvedVolume = (float)Math.Pow(masterVolume, 1.5) * 0.5f;
+                        var curvedVolume = (float)Math.Pow(masterVolume, 1.5) * 0.2625f;
                         audioFile.Volume = Math.Max(0.01f, curvedVolume);
 
                         outputDevice.Init(audioFile);
                         outputDevice.PlaybackStopped += (s, e) =>
                         {
-                            outputDevice.Dispose();
-                            audioFile.Dispose();
-                            if (_levelUpSoundDevice == outputDevice)
+                            // Defer disposal — disposing inside PlaybackStopped causes
+                            // "Handle is not initialized" when NAudio's internal cleanup
+                            // races with our Dispose call.
+                            Task.Run(() =>
                             {
-                                _levelUpSoundDevice = null;
-                                _levelUpSoundFile = null;
-                            }
+                                try
+                                {
+                                    Thread.Sleep(50); // Let NAudio finish its internal cleanup
+                                    outputDevice.Dispose();
+                                    audioFile.Dispose();
+                                    if (_levelUpSoundDevice == outputDevice)
+                                    {
+                                        _levelUpSoundDevice = null;
+                                        _levelUpSoundFile = null;
+                                    }
+                                }
+                                catch (Exception) { }
+                            });
                         };
 
                         _levelUpSoundDevice = outputDevice;
@@ -554,7 +616,7 @@ namespace ConditioningControlPanel
                     }
                     catch (Exception ex)
                     {
-                        App.Logger?.Debug("Failed to play level up sound: {Error}", ex.Message);
+                        App.Logger?.Warning("Failed to play level up sound: {Error}", ex.Message);
                     }
                 });
             }
@@ -632,6 +694,9 @@ namespace ConditioningControlPanel
             _panicPressCount++;
             _lastPanicTime = now;
             
+            // ALWAYS cancel AI commands on ANY panic key press
+            App.Commands?.CancelAllCommands();
+            
             if (_isRunning)
             {
                 // First press while running: stop engine, pause session if active
@@ -654,10 +719,20 @@ namespace ConditioningControlPanel
                     sessionWasPaused = true;
                 }
 
+                // Remember if autonomy was running before we stop everything
+                bool autonomyWasRunning = App.Autonomy?.IsEnabled == true;
+
                 StopEngine();
 
                 // Reset interaction queue to clear any pending queued items
                 App.InteractionQueue?.ForceReset();
+
+                // Restart autonomy if it was running — panic should skip the current action, not kill autonomy
+                if (autonomyWasRunning && !sessionWasPaused)
+                {
+                    App.Autonomy?.Start();
+                    App.Logger?.Information("Panic key: Restarted autonomy after skipping current action");
+                }
 
                 // Restore window - always show and bring to front
                 Show();
@@ -672,7 +747,7 @@ namespace ConditioningControlPanel
                 {
                     // Update pause button to show resume icon
                     if (TxtPauseIcon != null) TxtPauseIcon.Text = "▶";
-                    if (BtnPauseSession != null) BtnPauseSession.ToolTip = "Resume session";
+                    if (BtnPauseSession != null) BtnPauseSession.ToolTip = Loc.Get("tooltip_resume_session");
                 }
             }
             else if (_panicPressCount >= 2)
@@ -716,22 +791,178 @@ namespace ConditioningControlPanel
             }
         }
 
+        // ---- velvet-mosaic: internal wrappers called by popup feature UserControls ----
+        // These delegate complex system-level operations (assets, panic key, offline mode,
+        // no-panic) to the existing private handlers so the popup doesn't duplicate logic.
+
+        internal void RequestPickAssetsFolder()
+        {
+            BtnPickAssetsFolder_Click(this, new RoutedEventArgs());
+        }
+
+        internal void RequestBeginPanicKeyCapture()
+        {
+            BtnPanicKey_Click(this, new RoutedEventArgs());
+        }
+
+        internal void RequestToggleOfflineMode(bool enable)
+        {
+            // Drive the existing handler via the legacy checkbox so the two-way sync logic
+            // (UpdateOfflineModeUI, login button disable, etc.) runs exactly once.
+            if (ChkOfflineMode == null) return;
+            if ((ChkOfflineMode.IsChecked ?? false) == enable) return;
+            ChkOfflineMode.IsChecked = enable;
+        }
+
+        internal void RequestToggleNoPanic(bool disablePanic)
+        {
+            if (ChkNoPanic == null) return;
+            if ((ChkNoPanic.IsChecked ?? false) == disablePanic) return;
+            ChkNoPanic.IsChecked = disablePanic;
+        }
+
+        /// <summary>
+        /// Applies no-panic mode change directly (for use by feature popups).
+        /// Returns true if the change was applied, false if cancelled.
+        /// </summary>
+        internal bool ApplyNoPanic(bool disablePanic, Window dialogOwner)
+        {
+            if (disablePanic)
+            {
+                var confirmed = WarningDialog.ShowDoubleWarning(dialogOwner,
+                    "Disable Panic Key",
+                    "• You will have NO emergency escape option\n" +
+                    "• The ONLY way to exit will be the Exit button\n" +
+                    "• Combined with Strict Lock, this is VERY restrictive\n" +
+                    "• Make sure you know what you're doing!");
+
+                if (!confirmed) return false;
+
+                if (App.Settings.Current.KeywordTriggersEnabled != true)
+                    _keyboardHook?.Stop();
+                App.Settings.Current.PanicKeyEnabled = false;
+                App.Settings?.Save();
+                App.Logger?.Information("Keyboard hook stopped - panic key disabled");
+            }
+            else
+            {
+                _keyboardHook?.Start();
+                App.Settings.Current.PanicKeyEnabled = true;
+                App.Settings?.Save();
+                App.Logger?.Information("Keyboard hook started - panic key enabled");
+            }
+
+            // Sync MainWindow checkbox without triggering handler
+            _isLoading = true;
+            ChkNoPanic.IsChecked = disablePanic;
+            _isLoading = false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Applies offline mode change directly (for use by feature popups).
+        /// Returns true if the change was applied, false if cancelled.
+        /// </summary>
+        internal bool ApplyOfflineMode(bool enable, Window dialogOwner)
+        {
+            if (enable)
+            {
+                if (string.IsNullOrWhiteSpace(App.Settings.Current.OfflineUsername))
+                {
+                    var dialog = new OfflineUsernameDialog();
+                    dialog.Owner = dialogOwner;
+                    dialog.Topmost = true;
+
+                    if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.Username))
+                    {
+                        App.Settings.Current.OfflineUsername = dialog.Username;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+
+                App.Settings.Current.OfflineMode = true;
+                DisconnectNetworkServices();
+                App.Logger?.Information("Offline mode enabled with username '{Username}'",
+                    App.Settings.Current.OfflineUsername);
+            }
+            else
+            {
+                App.Settings.Current.OfflineMode = false;
+                App.Logger?.Information("Offline mode disabled");
+            }
+
+            UpdateOfflineModeUI(enable);
+            App.Settings.Save();
+
+            // Sync MainWindow checkbox without triggering handler
+            _isLoading = true;
+            ChkOfflineMode.IsChecked = enable;
+            _isLoading = false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Syncs the keyboard hook and MainWindow NoPanic checkbox after the setting changes externally.
+        /// </summary>
+        internal void SyncNoPanicState()
+        {
+            var panicEnabled = App.Settings.Current.PanicKeyEnabled;
+            if (panicEnabled)
+            {
+                _keyboardHook?.Start();
+                App.Logger?.Information("Keyboard hook started - panic key enabled");
+            }
+            else
+            {
+                if (App.Settings.Current.KeywordTriggersEnabled != true)
+                    _keyboardHook?.Stop();
+                App.Logger?.Information("Keyboard hook stopped - panic key disabled");
+            }
+
+            _isLoading = true;
+            ChkNoPanic.IsChecked = !panicEnabled;
+            _isLoading = false;
+        }
+
+        /// <summary>
+        /// Syncs the MainWindow offline mode UI after the setting changes externally.
+        /// </summary>
+        internal void SyncOfflineModeState()
+        {
+            var isOffline = App.Settings.Current.OfflineMode;
+            if (isOffline)
+                DisconnectNetworkServices();
+            UpdateOfflineModeUI(isOffline);
+
+            _isLoading = true;
+            ChkOfflineMode.IsChecked = isOffline;
+            _isLoading = false;
+        }
+
+        internal bool RequestToggleWindowsStartup(bool enable)
+        {
+            // Drive the existing handler via the legacy checkbox so the combined-with-hidden
+            // warning runs. Return the final state reflected on the checkbox.
+            if (ChkWinStart == null) return StartupManager.IsRegistered();
+            if ((ChkWinStart.IsChecked ?? false) == enable) return enable;
+            ChkWinStart.IsChecked = enable;
+            return ChkWinStart.IsChecked ?? false;
+        }
+
         private void LoadLogo()
         {
             try
             {
-                var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-                var logoFile = mode == Models.ContentMode.SissyHypno ? "logo2.png" : "logo.png";
-                var resourceUri = new Uri($"pack://application:,,,/Resources/{logoFile}", UriKind.Absolute);
-
-                var bitmap = new System.Windows.Media.Imaging.BitmapImage();
-                bitmap.BeginInit();
-                bitmap.UriSource = resourceUri;
-                bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                bitmap.CreateOptions = System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreImageCache;
-                bitmap.EndInit();
-
-                ImgLogo.Source = bitmap;
+                // Use mod resource resolver for logo — allows mod overrides
+                var logoFile = App.Settings?.Current?.IsSissyMode == true ? "logo2.png" : "logo.png";
+                var image = Services.ModResourceResolver.ResolveImage(logoFile);
+                if (image != null)
+                    ImgLogo.Source = image;
                 App.Logger?.Debug("Logo loaded: {Logo}", logoFile);
             }
             catch (Exception ex)
@@ -747,27 +978,16 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-                var imageFile = mode == Models.ContentMode.SissyHypno ? "takeover.png" : "bambi takeover.png";
-                var resourceUri = new Uri($"pack://application:,,,/Resources/features/{imageFile}", UriKind.Absolute);
-
-                var bitmap = new System.Windows.Media.Imaging.BitmapImage();
-                bitmap.BeginInit();
-                bitmap.UriSource = resourceUri;
-                bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                bitmap.CreateOptions = System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreImageCache;
-                bitmap.EndInit();
-
-                ImgTakeover.Source = bitmap;
-
-                // Update mode-aware takeover labels
-                var takeoverLabel = Models.ContentModeConfig.GetTakeoverLabel(mode);
-                TxtTakeoverHeader.Text = $"🤖 {takeoverLabel}";
-                TxtTakeoverLocked.Text = $"🤖 {takeoverLabel}";
-                TxtTakeoverUnlocked.Text = $"🤖 {takeoverLabel}";
-                BtnAutonomyStartStop.ToolTip = $"Start/Stop {takeoverLabel}";
-                ImgTakeover.ToolTip = $"{takeoverLabel} - Let her take control~";
-                RunPatreonFeatures.Text = $"AI Chat, Window Awareness, Slut Mode, {takeoverLabel}";
+                // Update mod-aware takeover labels. ImgTakeover and TxtTakeoverHeader
+                // were removed when the Bambi feature image moved out of the Exclusives
+                // page into BambiTakeoverTab — guard the legacy element references.
+                var takeoverLabel = App.Mods?.GetTakeoverLabel() ?? "Bambi Takeover";
+                if (TxtTakeoverLocked != null) TxtTakeoverLocked.Text = $"🤖 {takeoverLabel}";
+                if (TxtTakeoverUnlocked != null) TxtTakeoverUnlocked.Text = $"🤖 {takeoverLabel}";
+                if (BtnAutonomyStartStop != null)
+                    BtnAutonomyStartStop.ToolTip = Loc.GetF("tooltip_start_stop_takeover", takeoverLabel);
+                if (RunPatreonFeatures != null)
+                    RunPatreonFeatures.Text = Loc.GetF("label_patreon_features", takeoverLabel);
             }
             catch (Exception ex)
             {
@@ -777,48 +997,130 @@ namespace ConditioningControlPanel
 
         /// <summary>
         /// Refreshes UI elements that need manual updates when theme changes.
-        /// Updates colors based on content mode (Bambi Sleep = Pink, Sissy Hypno = Purple).
+        /// Updates Application.Current.Resources Color and Brush entries so all
+        /// DynamicResource bindings across the app auto-update.
+        /// Also updates named elements that use direct property assignment.
         /// </summary>
         private void RefreshThemeAwareElements()
         {
             try
             {
-                var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-                var accentHex = Models.ContentModeConfig.GetAccentColorHex(mode);
-                var accentLightHex = Models.ContentModeConfig.GetAccentLightColorHex(mode);
-                var accentDarkHex = Models.ContentModeConfig.GetAccentDarkColorHex(mode);
+                var accentHex = App.Mods?.GetAccentColorHex() ?? "#FF69B4";
+                var darkHex = App.Mods?.GetAccentDarkColorHex() ?? "#FF1493";
+                var lightHex = App.Mods?.GetAccentLightColorHex() ?? "#FF8FAF";
+                var secondaryHex = App.Mods?.GetSecondaryColorHex() ?? "#9B59B6";
 
-                var accentColor = (Color)ColorConverter.ConvertFromString(accentHex);
-                var accentLightColor = (Color)ColorConverter.ConvertFromString(accentLightHex);
-                var accentDarkColor = (Color)ColorConverter.ConvertFromString(accentDarkHex);
+                var accent = (Color)ColorConverter.ConvertFromString(accentHex);
+                var dark = (Color)ColorConverter.ConvertFromString(darkHex);
+                var light = (Color)ColorConverter.ConvertFromString(lightHex);
+                var secondary = (Color)ColorConverter.ConvertFromString(secondaryHex);
+                var transparent30 = Color.FromArgb(0x30, accent.R, accent.G, accent.B);
+                var transparent20 = Color.FromArgb(0x20, accent.R, accent.G, accent.B);
+                var accentPressed = Color.FromArgb(0xFF,
+                    (byte)Math.Max(0, accent.R - 30),
+                    (byte)Math.Max(0, accent.G - 30),
+                    (byte)Math.Max(0, accent.B - 30));
 
-                var accentBrush = new SolidColorBrush(accentColor);
-                var accentLightBrush = new SolidColorBrush(accentLightColor);
-                var accentDarkBrush = new SolidColorBrush(accentDarkColor);
+                // === BACKGROUND COLORS (mod-customizable) ===
+                var bgHex = App.Mods?.GetBackgroundColorHex() ?? "#1A1A2E";
+                var panelHex = App.Mods?.GetPanelColorHex() ?? "#252542";
+                var surfaceHex = App.Mods?.GetSurfaceColorHex() ?? "#1E1E3A";
 
-                // === TITLE BAR (most visible) ===
+                var bgColor = (Color)ColorConverter.ConvertFromString(bgHex);
+                var panelColor = (Color)ColorConverter.ConvertFromString(panelHex);
+                var surfaceColor = (Color)ColorConverter.ConvertFromString(surfaceHex);
+
+                // Auto-computed derivatives
+                var panelAccentColor = LightenColor(panelColor, 0.15);
+                var panelAccentHoverColor = LightenColor(panelColor, 0.25);
+                var previewBgColor = DarkenColor(bgColor, 0.15);
+                var panelBgTransparent = Color.FromArgb(0xB0, panelColor.R, panelColor.G, panelColor.B);
+
+                var res = Application.Current.Resources;
+
+                // Update background Color resources
+                res["DarkerBg"] = bgColor;
+                res["PanelBg"] = panelColor;
+                res["SurfaceBg"] = surfaceColor;
+                res["PanelAccent"] = panelAccentColor;
+                res["PanelAccentHover"] = panelAccentHoverColor;
+                res["PreviewBg"] = previewBgColor;
+                res["PanelBgTransparent"] = panelBgTransparent;
+
+                // Update background Brush resources
+                res["DarkerBgBrush"] = new SolidColorBrush(bgColor);
+                res["PanelBgBrush"] = new SolidColorBrush(panelColor);
+                res["SurfaceBgBrush"] = new SolidColorBrush(surfaceColor);
+                res["PanelAccentBrush"] = new SolidColorBrush(panelAccentColor);
+                res["PanelAccentHoverBrush"] = new SolidColorBrush(panelAccentHoverColor);
+                res["PreviewBgBrush"] = new SolidColorBrush(previewBgColor);
+                res["PanelBgTransparentBrush"] = new SolidColorBrush(panelBgTransparent);
+
+                // Accent-tinted dark backgrounds: blend accent onto mod's background color
+                byte baseR = bgColor.R, baseG = bgColor.G, baseB = bgColor.B;
+                var tintedBg = Color.FromRgb(
+                    (byte)(baseR + (accent.R - baseR) * 0.15),
+                    (byte)(baseG + (accent.G - baseG) * 0.15),
+                    (byte)(baseB + (accent.B - baseB) * 0.15));
+                var tintedBgHover = Color.FromRgb(
+                    (byte)(baseR + (accent.R - baseR) * 0.20),
+                    (byte)(baseG + (accent.G - baseG) * 0.20),
+                    (byte)(baseB + (accent.B - baseB) * 0.20));
+                var midGradient = Color.FromRgb(
+                    (byte)(baseR + (accent.R - baseR) * 0.10),
+                    (byte)(baseG + (accent.G - baseG) * 0.10),
+                    (byte)(baseB + (accent.B - baseB) * 0.10));
+
+                var transparent40 = Color.FromArgb(0x40, accent.R, accent.G, accent.B);
+                var transparent50 = Color.FromArgb(0x50, accent.R, accent.G, accent.B);
+
+                // === UPDATE COLOR RESOURCES (drives DynamicResource brushes in Brushes.xaml) ===
+                res["PinkColor"] = accent;
+                res["DarkPink"] = dark;
+                res["PinkButtonHovered"] = light;
+                res["TransparentPink"] = transparent30;
+                res["TransparentPink20"] = transparent20;
+                res["TransparentPink40"] = transparent40;
+                res["TransparentPink50"] = transparent50;
+                res["AccentPressed"] = accentPressed;
+                res["PatreonPurple"] = secondary;
+                res["AccentTintedBg"] = tintedBg;
+                res["AccentTintedBgHover"] = tintedBgHover;
+                res["AccentMidGradient"] = midGradient;
+
+                // === ALSO UPDATE BRUSH RESOURCES (in case any are frozen from initial load) ===
+                res["PinkBrush"] = new SolidColorBrush(accent);
+                res["DarkPinkBrush"] = new SolidColorBrush(dark);
+                res["PinkButtonHoveredBrush"] = new SolidColorBrush(light);
+                res["TransparentPinkBrush"] = new SolidColorBrush(transparent30);
+                res["TransparentPink20Brush"] = new SolidColorBrush(transparent20);
+                res["TransparentPink40Brush"] = new SolidColorBrush(transparent40);
+                res["TransparentPink50Brush"] = new SolidColorBrush(transparent50);
+                res["AccentPressedBrush"] = new SolidColorBrush(accentPressed);
+                res["PatreonPurpleBrush"] = new SolidColorBrush(secondary);
+                res["SecondaryBrush"] = new SolidColorBrush(secondary);
+                res["AccentTintedBgBrush"] = new SolidColorBrush(tintedBg);
+                res["AccentTintedBgHoverBrush"] = new SolidColorBrush(tintedBgHover);
+                res["AccentMidGradientBrush"] = new SolidColorBrush(midGradient);
+
+                // === TITLE BAR (most visible — direct assignment for immediate update) ===
+                var accentBrush = new SolidColorBrush(accent);
                 if (TitleBarBorder != null)
                     TitleBarBorder.Background = accentBrush;
 
                 // === HEADER AREA ===
-                // Player title and glow
                 if (TxtPlayerTitle != null)
                 {
                     TxtPlayerTitle.Foreground = accentBrush;
                     if (TxtPlayerTitle.Effect is System.Windows.Media.Effects.DropShadowEffect glow)
-                        glow.Color = accentColor;
+                        glow.Color = accent;
                 }
-
-                // Header version text
                 if (TxtHeaderVersion != null)
                     TxtHeaderVersion.Foreground = accentBrush;
 
                 // === XP/LEVEL DISPLAY ===
-                // Level label (e.g., "LVL 42")
                 if (TxtLevelLabel != null)
                     TxtLevelLabel.Foreground = accentBrush;
-
-                // XP progress bar fill
                 if (XPBar != null)
                     XPBar.Background = accentBrush;
 
@@ -830,7 +1132,11 @@ namespace ConditioningControlPanel
                 if (TxtBannerTertiary != null)
                     TxtBannerTertiary.Foreground = accentBrush;
 
-                App.Logger?.Debug("Theme-aware UI elements refreshed for mode {Mode}", mode);
+                // === MOD SELECTOR DOT ===
+                if (ModColorDot != null)
+                    ModColorDot.Background = accentBrush;
+
+                App.Logger?.Debug("Theme-aware UI elements refreshed for mod {ModId}", App.Mods?.ActiveModId);
             }
             catch (Exception ex)
             {
@@ -838,105 +1144,183 @@ namespace ConditioningControlPanel
             }
         }
 
+        private static Color LightenColor(Color c, double amount)
+        {
+            return Color.FromRgb(
+                (byte)Math.Min(255, c.R + (255 - c.R) * amount),
+                (byte)Math.Min(255, c.G + (255 - c.G) * amount),
+                (byte)Math.Min(255, c.B + (255 - c.B) * amount));
+        }
+
+        private static Color DarkenColor(Color c, double amount)
+        {
+            return Color.FromRgb(
+                (byte)Math.Max(0, c.R * (1 - amount)),
+                (byte)Math.Max(0, c.G * (1 - amount)),
+                (byte)Math.Max(0, c.B * (1 - amount)));
+        }
+
         /// <summary>
         /// Initializes the content mode toggle based on current settings.
         /// </summary>
-        private void InitializeContentModeToggle()
+        private void InitializeModSelector()
         {
-            var mode = App.Settings.Current.ContentMode;
-            var isSissyMode = mode == Models.ContentMode.SissyHypno;
-            ChkContentMode.IsChecked = isSissyMode;
+            // Update mod name display
+            TxtModName.Text = App.Mods?.GetModeDisplayName() ?? "Bambi Sleep";
 
-            // Update toggle label colors using mode-aware accent
-            var (r, g, b) = Models.ContentModeConfig.GetAccentColorRgb(mode);
-            var accentColor = Color.FromRgb(r, g, b);
-            var mutedColor = Color.FromRgb(96, 96, 128);
-            TxtModeBS.Foreground = new SolidColorBrush(isSissyMode ? mutedColor : accentColor);
-            TxtModeSH.Foreground = new SolidColorBrush(isSissyMode ? accentColor : mutedColor);
-
-            // Hide BambiCloud option in Sissy mode
-            RbBambiCloud.Visibility = isSissyMode ? Visibility.Collapsed : Visibility.Visible;
-
-            // If in Sissy mode, ensure HypnoTube is selected
-            if (isSissyMode)
+            // Update mod color dot
+            var accentHex = App.Mods?.GetAccentColorHex() ?? "#FF69B4";
+            try
             {
-                RbHypnoTube.IsChecked = true;
+                ModColorDot.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(accentHex));
+            }
+            catch
+            {
+                ModColorDot.Background = new SolidColorBrush(Colors.HotPink);
             }
 
-            // Load mode-aware images
+            // Hide BambiCloud option if mod doesn't want it
+            var showBambiCloud = App.Mods?.ShowBambiCloudOption() ?? true;
+            RbBambiCloud.Visibility = showBambiCloud ? Visibility.Visible : Visibility.Collapsed;
+
+            if (!showBambiCloud)
+                RbHypnoTube.IsChecked = true;
+
+            // Update browser loading text
+            var browserSiteName = showBambiCloud ? "BambiCloud" : "HypnoTube";
+            BrowserLoadingText.Text = $"🌐 Click to connect to {browserSiteName}";
+
+            // Load mod-aware images
             LoadTakeoverImage();
+            LoadFeatureImages();
             RefreshThemeAwareElements();
         }
 
-        private void ChkContentMode_Changed(object sender, RoutedEventArgs e)
+        /// <summary>
+        /// Loads feature images from mod resources (if overrides exist) or embedded resources.
+        /// </summary>
+        private void LoadFeatureImages()
+        {
+            try
+            {
+                // Dashboard feature cards (velvet mosaic)
+                var cardMap = new (string resourcePath, Features.FeatureCard? card)[]
+                {
+                    ("features/flash.png", CardFlash),
+                    ("features/mandatory_videos.png", CardVideo),
+                    ("features/subliminal.png", CardSubliminal),
+                    ("features/spiral_overlay.png", CardSpiral),
+                    ("features/Pink_filter.png", CardPinkFilter),
+                    ("features/Bubble_pop.png", CardBubblePop),
+                    ("features/Phrase_Lock.png", CardLockCard),
+                    ("features/bouncing_text.png", CardBouncingText),
+                    ("features/Mind_Wipers.png", CardMindWipe),
+                    ("features/Bubble_count.png", CardBubbleCount),
+                };
+                foreach (var (path, card) in cardMap)
+                {
+                    if (card == null) continue;
+                    var image = ModResourceResolver.ResolveImage(path);
+                    if (image != null)
+                        card.Icon = image;
+                }
+
+                // Legacy progression tab rectangles
+                var featureMap = new (string resourcePath, System.Windows.Shapes.Rectangle? rect)[]
+                {
+                    ("features/spiral_overlay.png", SpiralFeatureImage),
+                    ("features/Pink_filter.png", PinkFilterFeatureImage),
+                    ("features/Bubble_pop.png", BubblePopFeatureImage),
+                    ("features/Phrase_Lock.png", LockCardFeatureImage),
+                    ("features/Bubble_count.png", BubbleCountFeatureImage),
+                    ("features/bouncing_text.png", BouncingTextFeatureImage),
+                    ("features/brain_drain.png", BrainDrainFeatureImage),
+                    ("features/Mind_Wipers.png", MindWipeFeatureImage),
+                };
+
+                foreach (var (path, rect) in featureMap)
+                {
+                    if (rect == null) continue;
+                    var image = ModResourceResolver.ResolveImage(path);
+                    if (image != null)
+                    {
+                        rect.Fill = new ImageBrush(image) { Stretch = Stretch.UniformToFill };
+                    }
+                }
+
+                // Image elements in description cards + Video Haptic Sync card.
+                // Takeover image is mod-specific: BambiSleep uses "bambi takeover.png",
+                // other mods use the generic "takeover.png" (or override via their resources/ folder).
+                var takeoverPath = App.Mods?.ActiveModId == Models.BuiltInMods.BambiSleepId
+                    ? "features/bambi takeover.png"
+                    : "features/takeover.png";
+                var descImageMap = new (string resourcePath, System.Windows.Controls.Image? img)[]
+                {
+                    (takeoverPath, ImgBambiTakeoverDesc),
+                    ("features/vibe.png", ImgHapticsVibeDesc),
+                    ("features/vibe.png", ImgVideoHapticSync),
+                };
+                foreach (var (path, img) in descImageMap)
+                {
+                    if (img == null) continue;
+                    var resolved = ModResourceResolver.ResolveImage(path);
+                    if (resolved != null)
+                        img.Source = resolved;
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Failed to load some feature images");
+            }
+        }
+
+        private void ModSelector_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
             if (_isLoading) return;
 
-            var isSissyMode = ChkContentMode.IsChecked == true;
-            var newMode = isSissyMode ? Models.ContentMode.SissyHypno : Models.ContentMode.BambiSleep;
-            var oldMode = App.Settings.Current.ContentMode;
+            var dialog = new ModManagerDialog { Owner = this };
+            dialog.ShowDialog();
 
-            // Save current pools for the old mode before switching
-            App.Settings.Current.SubliminalPoolByMode ??= new();
-            App.Settings.Current.AttentionPoolByMode ??= new();
-            App.Settings.Current.LockCardPhrasesByMode ??= new();
-            App.Settings.Current.CustomTriggersByMode ??= new();
-
-            App.Settings.Current.SubliminalPoolByMode[oldMode] = new(App.Settings.Current.SubliminalPool);
-            App.Settings.Current.AttentionPoolByMode[oldMode] = new(App.Settings.Current.AttentionPool);
-            App.Settings.Current.LockCardPhrasesByMode[oldMode] = new(App.Settings.Current.LockCardPhrases);
-            App.Settings.Current.CustomTriggersByMode[oldMode] = new(App.Settings.Current.CustomTriggers);
-
-            // Update setting
-            App.Settings.Current.ContentMode = newMode;
-
-            // Restore saved pools for new mode, or use defaults if no backup exists
-            App.Settings.Current.SubliminalPool = App.Settings.Current.SubliminalPoolByMode.TryGetValue(newMode, out var savedSub) && savedSub.Count > 0
-                ? savedSub : Models.ContentModeConfig.GetDefaultSubliminalPool(newMode);
-            App.Settings.Current.AttentionPool = App.Settings.Current.AttentionPoolByMode.TryGetValue(newMode, out var savedAtt) && savedAtt.Count > 0
-                ? savedAtt : Models.ContentModeConfig.GetDefaultSubliminalPool(newMode);
-            App.Settings.Current.LockCardPhrases = App.Settings.Current.LockCardPhrasesByMode.TryGetValue(newMode, out var savedLock) && savedLock.Count > 0
-                ? savedLock : Models.ContentModeConfig.GetDefaultLockCardPhrases(newMode);
-            App.Settings.Current.CustomTriggers = App.Settings.Current.CustomTriggersByMode.TryGetValue(newMode, out var savedTrig) && savedTrig.Count > 0
-                ? savedTrig : Models.ContentModeConfig.GetDefaultCustomTriggers(newMode);
-
-            App.Settings.Save();
-
-            // Update toggle label colors using mode-aware accent
-            var (r, g, b) = Models.ContentModeConfig.GetAccentColorRgb(newMode);
-            var accentColor = Color.FromRgb(r, g, b);
-            var mutedColor = Color.FromRgb(96, 96, 128);
-            TxtModeBS.Foreground = new SolidColorBrush(isSissyMode ? mutedColor : accentColor);
-            TxtModeSH.Foreground = new SolidColorBrush(isSissyMode ? accentColor : mutedColor);
-
-            // Hide/show BambiCloud option based on mode
-            RbBambiCloud.Visibility = isSissyMode ? Visibility.Collapsed : Visibility.Visible;
-
-            // If switching to Sissy mode, always switch to HypnoTube and navigate browser
-            if (isSissyMode)
+            if (dialog.ModWasChanged)
             {
-                RbHypnoTube.IsChecked = true;
+                // Update settings to reflect new active mod
+                App.Settings.Current.ActiveModId = App.Mods.ActiveModId;
+                App.Settings.Save();
 
-                // Force browser navigation to HypnoTube regardless of current content
-                if (_browser != null && _browserInitialized)
+                // Refresh all mod-aware UI
+                InitializeModSelector();
+                LoadLogo();
+                LoadTakeoverImage();
+                LoadFeatureImages();
+                RefreshThemeAwareElements();
+
+                // Refresh achievement images for new mod
+                PopulateAchievementGrid();
+
+                // Refresh skill tree images for new mod
+                DrawSkillTree();
+
+                // Hide/show BambiCloud based on mod
+                var showBambiCloud = App.Mods?.ShowBambiCloudOption() ?? true;
+                RbBambiCloud.Visibility = showBambiCloud ? Visibility.Visible : Visibility.Collapsed;
+                if (!showBambiCloud)
                 {
-                    _browser.Navigate("https://hypnotube.com/");
-                    App.Logger?.Information("Browser navigated to HypnoTube due to Sissy mode switch");
+                    RbHypnoTube.IsChecked = true;
+                    if (_browser != null && _browserInitialized)
+                    {
+                        var url = App.Mods?.GetDefaultBrowserUrl() ?? "https://hypnotube.com/";
+                        _browser.Navigate(url);
+                    }
                 }
+
+                // Update hypnotube links UI for new mod
+                RefreshHypnotubeLinksUI();
+
+                // Update avatar context menu
+                _avatarTubeWindow?.UpdateQuickMenuState();
+
+                App.Logger?.Information("Mod changed to {ModId}", App.Mods?.ActiveModId);
             }
-
-            // Refresh UI elements and mode-aware images
-            LoadLogo();
-            LoadTakeoverImage();
-            RefreshThemeAwareElements();
-
-            // Update hypnotube links UI for new mode
-            RefreshHypnotubeLinksUI();
-
-            // Update avatar context menu for new mode
-            _avatarTubeWindow?.UpdateQuickMenuState();
-
-            App.Logger?.Information("Content mode changed to {Mode}", newMode);
         }
 
         private void RefreshHypnotubeLinksUI()
@@ -981,15 +1365,26 @@ namespace ConditioningControlPanel
             if (string.IsNullOrEmpty(imagePath))
                 return imagePath;
 
-            // Only swap if in Sissy Hypno mode (only applies to embedded resources)
-            if (App.Settings?.Current?.IsSissyMode == true && imagePath.StartsWith("pack://"))
+            // For embedded resources, check if mod has overrides or if mode-specific swap is needed
+            if (imagePath.StartsWith("pack://"))
             {
-                // Swap Bambi-specific images to generic alternatives
-                if (imagePath.Contains("logo.png"))
-                    return "pack://application:,,,/Resources/logo2.png";
+                // Extract relative path from pack URI
+                var prefix = "pack://application:,,,/Resources/";
+                if (imagePath.StartsWith(prefix))
+                {
+                    var relativePath = imagePath.Substring(prefix.Length);
+                    if (Services.ModResourceResolver.HasModOverride(relativePath))
+                        return Services.ModResourceResolver.ResolveUri(relativePath);
+                }
 
-                if (imagePath.Contains("bambi takeover.png"))
-                    return "pack://application:,,,/Resources/features/mandatory_videos.png";
+                // Legacy mode-specific swaps for built-in mods
+                if (App.Settings?.Current?.IsSissyMode == true)
+                {
+                    if (imagePath.Contains("logo.png"))
+                        return "pack://application:,,,/Resources/logo2.png";
+                    if (imagePath.Contains("bambi takeover.png"))
+                        return "pack://application:,,,/Resources/features/mandatory_videos.png";
+                }
             }
 
             return imagePath;
@@ -1150,8 +1545,47 @@ namespace ConditioningControlPanel
             // Initialize hypnotube links UI
             RefreshHypnotubeLinksUI();
 
+            // Apply mod-aware feature names to static XAML labels
+            ApplyModFeatureNames();
+            if (App.Mods != null)
+            {
+                App.Mods.ModChanged += (_, _) => Dispatcher.Invoke(ApplyModFeatureNames);
+                // Re-render the Remote Control QR code in the new mod's accent color
+                App.Mods.ModChanged += (_, _) => Dispatcher.Invoke(() =>
+                {
+                    var code = App.RemoteControl?.SessionCode;
+                    if (!string.IsNullOrEmpty(code))
+                        RefreshRemoteQrCode(BuildRemotePairingUrl(code));
+                });
+                // Re-load mod-aware feature images (description card images, VHS card)
+                App.Mods.ModChanged += (_, _) => Dispatcher.Invoke(LoadFeatureImages);
+            }
+
+            // Re-apply code-behind strings when language changes (section headers, feature names, etc.)
+            LocalizationManager.Instance.LanguageChanged += (_, _) => Dispatcher.Invoke(ApplyModFeatureNames);
+
+            // Initialize language selector
+            InitializeLanguageSelector();
+
             // Initialize quick login UI
             UpdateQuickLoginUI();
+
+            // Load past quizzes list
+            RefreshPastQuizzes();
+
+            // Initialize wallpaper override from settings
+            if (ChkWallpaperEnabled != null && App.Settings.Current.WallpaperEnabled)
+                ChkWallpaperEnabled.IsChecked = true;
+
+            // Initialize pop quiz UI from settings
+            if (ChkPopQuizEnabled != null)
+                ChkPopQuizEnabled.IsChecked = App.Settings.Current.PopQuizEnabled;
+            if (SliderPopQuizFrequency != null)
+            {
+                SliderPopQuizFrequency.Value = App.Settings.Current.PopQuizFrequency;
+                if (TxtPopQuizFrequency != null)
+                    TxtPopQuizFrequency.Text = $"{App.Settings.Current.PopQuizFrequency}/session hr";
+            }
 
             // Handle start minimized (to tray) - delay briefly to let window render properly first
             if (App.Settings.Current.StartMinimized)
@@ -1190,8 +1624,7 @@ namespace ConditioningControlPanel
             // Start periodic stat pill update timer
             StartStatPillUpdateTimer();
 
-            // Auto-initialize browser on startup
-            await InitializeBrowserAsync();
+            // Browser is lazy-loaded on first interaction (click radio toggle, pop-out, or external navigation)
 
             // Check if this is first run and prompt for assets folder
             await CheckFirstRunAssetsPromptAsync();
@@ -1199,9 +1632,17 @@ namespace ConditioningControlPanel
             // Initialize Avatar Tube Window
             InitializeAvatarTube();
 
-            // Initialize Discord Rich Presence checkboxes (both locations)
-            ChkDiscordRichPresence.IsChecked = App.Settings.Current.DiscordRichPresenceEnabled;
-            ChkQuickDiscordRichPresence.IsChecked = App.Settings.Current.DiscordRichPresenceEnabled;
+            // Initialize Discord Rich Presence checkboxes (both locations).
+            // Guard with _isLoading so the Changed handler doesn't fire the
+            // "Discord Not Linked" MessageBox during startup for users whose
+            // saved setting is enabled but who haven't linked Discord.
+            _isLoading = true;
+            try
+            {
+                ChkDiscordRichPresence.IsChecked = App.Settings.Current.DiscordRichPresenceEnabled;
+                ChkQuickDiscordRichPresence.IsChecked = App.Settings.Current.DiscordRichPresenceEnabled;
+            }
+            finally { _isLoading = false; }
 
             // Initialize Audio Sync checkbox and sliders
             ChkHapticAudioSync.IsChecked = App.Settings.Current.Haptics.AudioSync.Enabled;
@@ -1395,8 +1836,6 @@ namespace ConditioningControlPanel
             }
         }
 
-        private const int WM_SYSCOMMAND = 0x0112;
-        private const int SC_MINIMIZE = 0xF020;
         private const int WM_GETMINMAXINFO = 0x0024;
 
         [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
@@ -1414,16 +1853,8 @@ namespace ConditioningControlPanel
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            // Intercept minimize command to hide to tray instead
-            if (msg == WM_SYSCOMMAND && (wParam.ToInt32() & 0xFFF0) == SC_MINIMIZE)
-            {
-                handled = true; // Mark as handled to prevent default minimize
-                // Hide avatar tube FIRST to avoid event handler issues
-                HideAvatarTube();
-                _trayIcon?.MinimizeToTray();
-            }
             // Fix maximized window extending behind taskbar (buttons cut off)
-            else if (msg == WM_GETMINMAXINFO)
+            if (msg == WM_GETMINMAXINFO)
             {
                 var mmi = System.Runtime.InteropServices.Marshal.PtrToStructure<MINMAXINFO>(lParam);
 
@@ -1560,10 +1991,8 @@ namespace ConditioningControlPanel
             RefreshPresetsList();
         }
 
-        private void BtnProgression_Click(object sender, RoutedEventArgs e)
-        {
-            ShowTab("progression");
-        }
+        // BtnProgression handler removed in velvet-mosaic phase 6 — the Progression
+        // tab no longer has a header button; its features live on the Dashboard now.
 
         private void BtnQuests_Click(object sender, RoutedEventArgs e)
         {
@@ -1727,13 +2156,11 @@ namespace ConditioningControlPanel
                 Height = 240,
                 Margin = new Thickness(10, 0, 10, 0),
                 CornerRadius = new CornerRadius(15),
-                Background = new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#252542")),
+                Background = (SolidColorBrush)Application.Current.Resources["PanelBgBrush"],
                 BorderThickness = new Thickness(step.StepType == Models.RoadmapStepType.Boss ? 3 : 2),
                 BorderBrush = step.StepType == Models.RoadmapStepType.Boss
                     ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.Gold)
-                    : (isActive ? accentBrush : new System.Windows.Media.SolidColorBrush(
-                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#404060"))),
+                    : (isActive ? accentBrush : (SolidColorBrush)Application.Current.Resources["PanelAccentBrush"]),
                 Cursor = System.Windows.Input.Cursors.Hand,
                 Tag = step.Id
             };
@@ -1750,10 +2177,8 @@ namespace ConditioningControlPanel
             // Background ellipse
             var bgEllipse = new System.Windows.Shapes.Ellipse
             {
-                Fill = new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#1A1A2E")),
-                Stroke = isActive ? accentBrush : new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#404060")),
+                Fill = (SolidColorBrush)Application.Current.Resources["DarkerBgBrush"],
+                Stroke = isActive ? accentBrush : (SolidColorBrush)Application.Current.Resources["PanelAccentBrush"],
                 StrokeThickness = isActive ? 3 : 2
             };
             circleGrid.Children.Add(bgEllipse);
@@ -1963,7 +2388,7 @@ namespace ConditioningControlPanel
             // If not active (locked), show message
             if (App.Roadmap?.IsStepActive(stepId) != true)
             {
-                MessageBox.Show("Complete the previous steps first!", "Step Locked",
+                MessageBox.Show(Loc.Get("msg_complete_the_previous_steps_first"), "Step Locked",
                     MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
@@ -1998,8 +2423,8 @@ namespace ConditioningControlPanel
 
             // Prompt for optional note
             string? note = null;
-            var noteDialog = new InputDialog("Add Note (Optional)",
-                "Add a personal note about this step:", "");
+            var noteDialog = new InputDialog(Loc.Get("title_add_note"),
+                Loc.Get("msg_add_note_prompt"), "");
             if (noteDialog.ShowDialog() == true && !string.IsNullOrEmpty(noteDialog.ResultText))
             {
                 note = noteDialog.ResultText;
@@ -2083,6 +2508,9 @@ namespace ConditioningControlPanel
             var questService = App.Quests;
             if (questService == null) return;
 
+            // Proactively recalculate streak from calendar so stale values are caught immediately
+            questService.RecalculateStreak();
+
             // Update season title from server or defaults
             var seasonTitle = App.QuestDefinitions?.SeasonTitle;
             if (!string.IsNullOrEmpty(seasonTitle))
@@ -2119,15 +2547,15 @@ namespace ConditioningControlPanel
                 BtnRerollDaily.Visibility = Visibility.Visible;
 
                 TxtDailyQuestIcon.Text = dailyDef.Icon;
-                TxtDailyQuestName.Text = dailyDef.Name;
-                TxtDailyQuestDesc.Text = dailyDef.Description;
+                TxtDailyQuestName.Text = App.Mods?.MakeModAware(dailyDef.Name) ?? dailyDef.Name;
+                TxtDailyQuestDesc.Text = App.Mods?.MakeModAware(dailyDef.Description) ?? dailyDef.Description;
                 TxtDailyProgress.Text = $"{dailyProgress.CurrentProgress} / {dailyDef.TargetValue}";
-                // Show scaled XP based on level (+2% per level), reroll bonus, and streak bonus
+                // Show scaled XP based on level (+4% per level), reroll bonus, and streak bonus
                 var playerLevel = App.Settings?.Current?.PlayerLevel ?? 1;
                 var rerollMult = App.SkillTree?.GetRerollBonusMultiplier() ?? 1.0;
                 var questStreak = App.Settings?.Current?.DailyQuestStreak ?? 0;
                 var streakMult = 1.0 + (questStreak * 0.03);
-                var scaledDailyXP = (int)Math.Round(dailyDef.XPReward * (1 + playerLevel * 0.02) * rerollMult * streakMult);
+                var scaledDailyXP = (int)Math.Round(dailyDef.XPReward * (1 + playerLevel * 0.04) * rerollMult * streakMult);
                 TxtDailyXP.Text = $"🎁 {scaledDailyXP} XP";
                 if (questStreak > 0)
                 {
@@ -2173,7 +2601,7 @@ namespace ConditioningControlPanel
                 {
                     DailyCompletedOverlay.Visibility = Visibility.Visible;
                     BtnRerollDaily.IsEnabled = false;
-                    BtnRerollDaily.Content = "✅ Completed";
+                    BtnRerollDaily.Content = Loc.Get("btn_completed");
                 }
                 else
                 {
@@ -2190,15 +2618,15 @@ namespace ConditioningControlPanel
             if (weeklyDef != null && weeklyProgress != null)
             {
                 TxtWeeklyQuestIcon.Text = weeklyDef.Icon;
-                TxtWeeklyQuestName.Text = weeklyDef.Name;
-                TxtWeeklyQuestDesc.Text = weeklyDef.Description;
+                TxtWeeklyQuestName.Text = App.Mods?.MakeModAware(weeklyDef.Name) ?? weeklyDef.Name;
+                TxtWeeklyQuestDesc.Text = App.Mods?.MakeModAware(weeklyDef.Description) ?? weeklyDef.Description;
                 TxtWeeklyProgress.Text = $"{weeklyProgress.CurrentProgress} / {weeklyDef.TargetValue}";
-                // Show scaled XP based on level (+2% per level), reroll bonus, and streak bonus
+                // Show scaled XP based on level (+4% per level), reroll bonus, and streak bonus
                 var wPlayerLevel = App.Settings?.Current?.PlayerLevel ?? 1;
                 var wRerollMult = App.SkillTree?.GetRerollBonusMultiplier() ?? 1.0;
                 var wQuestStreak = App.Settings?.Current?.DailyQuestStreak ?? 0;
                 var wStreakMult = 1.0 + (wQuestStreak * 0.03);
-                var scaledWeeklyXP = (int)Math.Round(weeklyDef.XPReward * (1 + wPlayerLevel * 0.02) * wRerollMult * wStreakMult);
+                var scaledWeeklyXP = (int)Math.Round(weeklyDef.XPReward * (1 + wPlayerLevel * 0.04) * wRerollMult * wStreakMult);
                 TxtWeeklyXP.Text = $"🎁 {scaledWeeklyXP} XP";
                 if (wQuestStreak > 0)
                 {
@@ -2244,7 +2672,7 @@ namespace ConditioningControlPanel
                 {
                     WeeklyCompletedOverlay.Visibility = Visibility.Visible;
                     BtnRerollWeekly.IsEnabled = false;
-                    BtnRerollWeekly.Content = "✅ Completed";
+                    BtnRerollWeekly.Content = Loc.Get("btn_completed");
                 }
                 else
                 {
@@ -2333,7 +2761,7 @@ namespace ConditioningControlPanel
                         Y2 = centerY,
                         StrokeThickness = 2,
                         Stroke = (isCompleted && prevCompleted)
-                            ? new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4"))
+                            ? new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4"))
                             : new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3D3D60"))
                     };
                     Canvas.SetZIndex(line, 0);
@@ -2348,8 +2776,8 @@ namespace ConditioningControlPanel
                     RadiusX = nodeSize / 2.0,
                     RadiusY = nodeSize / 2.0,
                     Fill = isCompleted
-                        ? new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4"))
-                        : new SolidColorBrush((Color)ColorConverter.ConvertFromString("#252542")),
+                        ? new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4"))
+                        : (SolidColorBrush)Application.Current.Resources["PanelBgBrush"],
                     Stroke = isToday
                         ? new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFD700"))
                         : new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3D3D60")),
@@ -2409,7 +2837,7 @@ namespace ConditioningControlPanel
                         RadiusX = highlightSize / 2.0,
                         RadiusY = highlightSize / 2.0,
                         Fill = Brushes.Transparent,
-                        Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4")),
+                        Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")),
                         StrokeThickness = 2,
                         Cursor = System.Windows.Input.Cursors.Hand,
                         Tag = day.Date
@@ -2455,21 +2883,21 @@ namespace ConditioningControlPanel
 
                 if (_isStreakFixMode)
                 {
-                    BtnFixStreak.Content = "✖ Cancel";
+                    BtnFixStreak.Content = Loc.Get("btn_cancel_2");
                 }
                 else
                 {
-                    BtnFixStreak.Content = "🔧 Fix Day";
+                    BtnFixStreak.Content = Loc.Get("btn_fix_day");
                 }
 
                 if (alreadyUsed)
-                    BtnFixStreak.ToolTip = "Already used this season";
+                    BtnFixStreak.ToolTip = Loc.Get("tooltip_already_used_this_season");
                 else if (!hasEnoughXP)
-                    BtnFixStreak.ToolTip = "Requires 500 XP";
+                    BtnFixStreak.ToolTip = Loc.Get("tooltip_requires_500_xp");
                 else if (!hasMissedDays)
-                    BtnFixStreak.ToolTip = "No missed days — your streak is perfect!";
+                    BtnFixStreak.ToolTip = Loc.Get("tooltip_no_missed_days_your_streak_is_perfect");
                 else
-                    BtnFixStreak.ToolTip = "Use Oopsie Insurance to fix a missed day (500 XP)";
+                    BtnFixStreak.ToolTip = Loc.Get("tooltip_use_oopsie_insurance_to_fix_a_missed_day_500");
             }
             else
             {
@@ -2497,7 +2925,7 @@ namespace ConditioningControlPanel
 
             if (settings.SeasonalStreakRecoveryUsed)
             {
-                TxtFixStreakStatus.Text = "Already used Oopsie Insurance this season!";
+                TxtFixStreakStatus.Text = Loc.Get("label_already_used_oopsie_insurance_this_season");
                 TxtFixStreakStatus.Visibility = Visibility.Visible;
                 return;
             }
@@ -2514,21 +2942,21 @@ namespace ConditioningControlPanel
 
             if (!hasMissedDays)
             {
-                TxtFixStreakStatus.Text = "No broken streak — you're doing great sweetie!";
+                TxtFixStreakStatus.Text = Loc.Get("label_no_broken_streak_you_re_doing_great_sweetie");
                 TxtFixStreakStatus.Visibility = Visibility.Visible;
                 return;
             }
 
             if (settings.PlayerXP < 500)
             {
-                TxtFixStreakStatus.Text = "Not enough XP! You need 500 XP to fix a day.";
+                TxtFixStreakStatus.Text = Loc.Get("label_not_enough_xp_you_need_500_xp_to_fix_a_day");
                 TxtFixStreakStatus.Visibility = Visibility.Visible;
                 return;
             }
 
             // Enter fix mode
             _isStreakFixMode = true;
-            TxtFixStreakStatus.Text = "Click a missed day to fix it (costs 500 XP, once per season)";
+            TxtFixStreakStatus.Text = Loc.Get("label_click_a_missed_day_to_fix_it_costs_500_xp_onc");
             TxtFixStreakStatus.Visibility = Visibility.Visible;
             RefreshStreakCalendar();
         }
@@ -2562,7 +2990,7 @@ namespace ConditioningControlPanel
             var fixDateStr = fixDate.ToString("yyyy-MM-dd");
             if (App.ProfileSync != null && !string.IsNullOrEmpty(App.Settings?.Current?.UnifiedId))
             {
-                TxtFixStreakStatus.Text = "Processing...";
+                TxtFixStreakStatus.Text = Loc.Get("label_processing");
                 TxtFixStreakStatus.Visibility = Visibility.Visible;
 
                 var (success, error, newXp) = await App.ProfileSync.UseOopsieInsuranceAsync(fixDateStr);
@@ -2591,7 +3019,7 @@ namespace ConditioningControlPanel
             else
             {
                 // No cloud account
-                TxtFixStreakStatus.Text = "❌ Oopsie Insurance requires a cloud account. Please log in first.";
+                TxtFixStreakStatus.Text = Loc.Get("label_oopsie_insurance_requires_a_cloud_account_ple");
                 TxtFixStreakStatus.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF5252"));
                 TxtFixStreakStatus.Visibility = Visibility.Visible;
                 return;
@@ -2623,35 +3051,13 @@ namespace ConditioningControlPanel
             if (!_isStreakFixMode)
             {
                 TxtFixStreakStatus.Visibility = Visibility.Collapsed;
-                TxtFixStreakStatus.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4"));
+                TxtFixStreakStatus.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4"));
             }
         }
 
         private void RecalculateDailyQuestStreak()
         {
-            var settings = App.Settings?.Current;
-            if (settings == null) return;
-
-            var questService = App.Quests;
-            var completedDates = new HashSet<DateTime>(
-                questService?.Progress?.DailyQuestCompletionDates?.Select(d => d.Date)
-                ?? Enumerable.Empty<DateTime>());
-
-            // Walk backward from today through completion dates to compute contiguous streak
-            int streak = 0;
-            var checkDate = DateTime.Today;
-
-            // If today isn't completed yet, start checking from yesterday
-            if (!completedDates.Contains(checkDate))
-                checkDate = checkDate.AddDays(-1);
-
-            while (completedDates.Contains(checkDate))
-            {
-                streak++;
-                checkDate = checkDate.AddDays(-1);
-            }
-
-            settings.DailyQuestStreak = streak;
+            App.Quests?.RecalculateStreak();
         }
 
         private void BtnAchievements_Click(object sender, RoutedEventArgs e)
@@ -2676,8 +3082,122 @@ namespace ConditioningControlPanel
 
         private void BtnPatreonExclusives_Click(object sender, RoutedEventArgs e)
         {
-            ShowTab("patreon");
+            // The Exclusives tab no longer exists — this button is now purely a
+            // launcher for the submenu popup (Remote Control / Bambi Takeover /
+            // Haptics / Awareness). The account/data content that used to live in
+            // the Exclusives tab now lives in the dashboard's App Info & Data popup.
+            RefreshExclusivesSubmenuLocks();
+            ExclusivesSubmenuPopup.IsOpen = true;
         }
+
+        /// <summary>
+        /// Opens the dashboard's "App Info &amp; Data" popup. This is the new home
+        /// for account management (Patreon/Discord login, cloud backup, data
+        /// export, privacy policy, support links) that used to live in the
+        /// Patreon Exclusives tab.
+        /// </summary>
+        internal void ShowAppInfoPopup()
+        {
+            VelvetBtnAppInfo_Click(this, new RoutedEventArgs());
+        }
+
+        private void BtnAwareness_Click(object sender, RoutedEventArgs e)
+        {
+            ShowTab("awareness");
+        }
+
+        #region Exclusives Submenu
+
+        private DispatcherTimer? _exclusivesMenuCloseTimer;
+
+        private void BtnPatreonExclusives_MouseEnter(object sender, MouseEventArgs e)
+        {
+            _exclusivesMenuCloseTimer?.Stop();
+            RefreshExclusivesSubmenuLocks();
+            ExclusivesSubmenuPopup.IsOpen = true;
+        }
+
+        private void ExclusivesSubmenuPopup_MouseEnter(object sender, MouseEventArgs e)
+        {
+            _exclusivesMenuCloseTimer?.Stop();
+        }
+
+        private void ExclusivesMenu_MouseLeave(object sender, MouseEventArgs e)
+        {
+            if (_exclusivesMenuCloseTimer == null)
+            {
+                _exclusivesMenuCloseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(280) };
+                _exclusivesMenuCloseTimer.Tick += ExclusivesMenuCloseTick;
+            }
+            _exclusivesMenuCloseTimer.Stop();
+            _exclusivesMenuCloseTimer.Start();
+        }
+
+        private void ExclusivesMenuCloseTick(object? sender, EventArgs e)
+        {
+            _exclusivesMenuCloseTimer?.Stop();
+            ExclusivesSubmenuPopup.IsOpen = false;
+        }
+
+        private void BtnSubRemoteControl_Click(object sender, RoutedEventArgs e)
+        {
+            ExclusivesSubmenuPopup.IsOpen = false;
+            ShowTab("remotecontrol");
+        }
+
+        private void BtnSubBambiTakeover_Click(object sender, RoutedEventArgs e)
+        {
+            ExclusivesSubmenuPopup.IsOpen = false;
+            ShowTab("bambitakeover");
+        }
+
+        private void BtnSubHaptics_Click(object sender, RoutedEventArgs e)
+        {
+            ExclusivesSubmenuPopup.IsOpen = false;
+            ShowTab("haptics");
+        }
+
+        private void BtnSubAwareness_Click(object sender, RoutedEventArgs e)
+        {
+            ExclusivesSubmenuPopup.IsOpen = false;
+            ShowTab("awareness");
+        }
+
+        /// <summary>
+        /// Updates "Premium" badges on the Exclusives submenu items based on the
+        /// user's current subscription state. Called whenever the popup opens.
+        /// </summary>
+        private void RefreshExclusivesSubmenuLocks()
+        {
+            var hasPremium = App.Patreon?.HasPremiumAccess == true;
+            var badgeVis = hasPremium ? Visibility.Collapsed : Visibility.Visible;
+            if (SubBadgeRemoteControl != null) SubBadgeRemoteControl.Visibility = badgeVis;
+            if (SubBadgeBambiTakeover != null) SubBadgeBambiTakeover.Visibility = badgeVis;
+            if (SubBadgeHaptics != null) SubBadgeHaptics.Visibility = badgeVis;
+            if (SubBadgeAwareness != null) SubBadgeAwareness.Visibility = badgeVis;
+        }
+
+        /// <summary>
+        /// Routes the gating overlay's CTA button to the App Info &amp; Data popup,
+        /// where users can sign in with Patreon/Discord to unlock premium features.
+        /// </summary>
+        private void BtnGateUnlock_Click(object sender, RoutedEventArgs e)
+        {
+            ShowAppInfoPopup();
+        }
+
+        /// <summary>
+        /// Toggles a translucent gating overlay's visibility based on the user's
+        /// premium subscription state. Used by the new visible-but-locked tabs.
+        /// </summary>
+        private void RefreshPremiumGate(Border? gate)
+        {
+            if (gate == null) return;
+            var hasPremium = App.Patreon?.HasPremiumAccess == true;
+            gate.Visibility = hasPremium ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        #endregion
 
         #region Unified Login
 
@@ -2694,6 +3214,8 @@ namespace ConditioningControlPanel
         /// </summary>
         private void OpenUnifiedLoginDialog()
         {
+            var previousUnifiedId = App.UnifiedUserId ?? _lastKnownUnifiedId;
+
             var loginDialog = new LoginDialog
             {
                 Owner = this,
@@ -2703,6 +3225,10 @@ namespace ConditioningControlPanel
             if (loginDialog.ShowDialog() == true && loginDialog.Result != null)
             {
                 var result = loginDialog.Result;
+
+                // Detect same-account re-login (e.g. re-linking Patreon on same account)
+                var isSameAccount = !string.IsNullOrEmpty(previousUnifiedId)
+                    && previousUnifiedId == App.UnifiedUserId;
 
                 // Update all UI
                 UpdateQuickLoginUI();
@@ -2714,8 +3240,29 @@ namespace ConditioningControlPanel
                 UpdateBannerWelcomeMessage();
                 UpdateAccountLinkingUI();
 
-                // Clear stale progression data from previous account before syncing
-                ClearProgressionData();
+                if (!isSameAccount)
+                {
+                    // Save new account's identity/lifetime data set by ApplyUserDataToSettings inside LoginDialog.
+                    // ClearProgressionData will zero these, so we restore them after clearing.
+                    var savedHighestLevelEver = App.Settings?.Current?.HighestLevelEver ?? 0;
+                    var savedIsSeason0Og = App.Settings?.Current?.IsSeason0Og ?? false;
+                    var savedCurrentSeason = App.Settings?.Current?.CurrentSeason;
+                    var savedPatreonTier = App.Settings?.Current?.PatreonTier ?? 0;
+
+                    // Clear stale progression data from previous account before syncing.
+                    // Defer quest generation — cloud data will be restored first.
+                    ClearProgressionData(generateQuests: false);
+
+                    // Restore the new account's lifetime data that ClearProgressionData just zeroed
+                    if (App.Settings?.Current != null)
+                    {
+                        App.Settings.Current.HighestLevelEver = savedHighestLevelEver;
+                        App.Settings.Current.IsSeason0Og = savedIsSeason0Og;
+                        App.Settings.Current.CurrentSeason = savedCurrentSeason;
+                        App.Settings.Current.PatreonTier = savedPatreonTier;
+                        App.Settings.Save();
+                    }
+                }
 
                 // Start profile sync
                 App.ProfileSync?.StartHeartbeat();
@@ -2731,12 +3278,21 @@ namespace ConditioningControlPanel
                         if (App.Achievements != null) App.Achievements.SuppressPopups = true;
                         try
                         {
-                            // IMPORTANT: Load FIRST, then sync. ClearProgressionData() zeroed local data,
-                            // so we must restore from cloud before syncing UP — otherwise we'd push
-                            // level=1/xp=0 to the server, which can permanently erase progress if the
-                            // server also has low values (e.g. right after migration/season reset).
-                            await App.ProfileSync.LoadProfileAsync();
-                            await App.ProfileSync.SyncProfileAsync();
+                            // Load profile from cloud, then sync. Server is authoritative for
+                            // progression data after login (local was just cleared).
+                            var loaded = await App.ProfileSync.LoadProfileAsync();
+                            if (loaded)
+                            {
+                                await App.ProfileSync.SyncProfileAsync();
+                            }
+                            else
+                            {
+                                // LoadProfileAsync fails for invite-code users (no OAuth token).
+                                // For V2 users with UnifiedId, LoadProfileAsync calls SyncProfileAsync
+                                // internally and returns its result. If it still returns false here,
+                                // force a sync anyway — server will return authoritative data.
+                                await App.ProfileSync.SyncProfileAsync();
+                            }
                         }
                         finally
                         {
@@ -2744,8 +3300,14 @@ namespace ConditioningControlPanel
                         }
 
                         // Refresh UI on the dispatcher thread after sync completes
-                        Application.Current?.Dispatcher?.Invoke(() =>
+                        DispatcherHelper.RunOnUISync(() =>
                         {
+                            // Generate quests AFTER cloud data has been restored
+                            if (!isSameAccount)
+                            {
+                                App.Quests?.CheckAndGenerateQuests();
+                            }
+
                             UpdateLevelDisplay();
                             RefreshQuestUI();
                             DrawSkillTree();
@@ -2755,11 +3317,6 @@ namespace ConditioningControlPanel
                     }
                 });
 
-                // Show OG welcome if applicable
-                if (result.ShouldShowOgWelcome)
-                {
-                    ShowOgWelcomePopup();
-                }
             }
         }
 
@@ -2768,7 +3325,8 @@ namespace ConditioningControlPanel
         /// Does NOT clear identity fields (UnifiedId, UserDisplayName, link flags).
         /// Called on login (before sync), logout, and account deletion.
         /// </summary>
-        private void ClearProgressionData()
+        /// <param name="generateQuests">If false, skip quest generation (caller will generate after cloud sync)</param>
+        private void ClearProgressionData(bool generateQuests = true)
         {
             if (App.Settings?.Current != null)
             {
@@ -2813,7 +3371,7 @@ namespace ConditioningControlPanel
             }
 
             // Reset quest progress (active quests + stats in quests.json)
-            App.Quests?.ResetProgress();
+            App.Quests?.ResetProgress(generateQuests);
 
             // Reset achievement progress (unlocked achievements + stats in achievements.json)
             App.Achievements?.ResetProgress();
@@ -2858,8 +3416,23 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Logs out from all providers
         /// </summary>
-        private void BtnQuickLogout_Click(object sender, RoutedEventArgs e)
+        private async void BtnQuickLogout_Click(object sender, RoutedEventArgs e)
         {
+            // Push latest state to server before clearing local data
+            // (prevents streak/progression loss when heartbeat hasn't synced yet)
+            try
+            {
+                if (App.ProfileSync != null && !string.IsNullOrEmpty(App.UnifiedUserId))
+                    await App.ProfileSync.SyncProfileAsync();
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Failed to sync before logout");
+            }
+
+            // Remember which account was logged in (for same-account detection on re-login)
+            _lastKnownUnifiedId = App.UnifiedUserId;
+
             // Stop heartbeat
             App.ProfileSync?.StopHeartbeat();
 
@@ -2946,12 +3519,6 @@ namespace ConditioningControlPanel
                         UpdatePatreonUI();
                         UpdateBannerWelcomeMessage();
                         UpdateAccountLinkingUI();
-
-                        // Show OG welcome popup if applicable
-                        if (result.ShouldShowOgWelcome)
-                        {
-                            ShowOgWelcomePopup();
-                        }
                     }
                 }
                 catch (OperationCanceledException)
@@ -3024,12 +3591,6 @@ namespace ConditioningControlPanel
                         UpdateQuickDiscordUI();
                         UpdateBannerWelcomeMessage();
                         UpdateAccountLinkingUI();
-
-                        // Show OG welcome popup if applicable
-                        if (result.ShouldShowOgWelcome)
-                        {
-                            ShowOgWelcomePopup();
-                        }
                     }
                 }
                 catch (OperationCanceledException)
@@ -3092,13 +3653,32 @@ namespace ConditioningControlPanel
 
         private void ChkDiscordRichPresence_Changed(object sender, RoutedEventArgs e)
         {
+            if (_isLoading) return;
+
             // Get the state from whichever checkbox was clicked
             var checkbox = sender as CheckBox;
             var isEnabled = checkbox?.IsChecked == true;
 
-            // Sync both checkboxes
+            // Block enabling Rich Presence if Discord is not linked — prevents accidental
+            // exposure for users who chose anonymous invite-code accounts
+            if (isEnabled && App.Settings?.Current?.HasLinkedDiscord != true)
+            {
+                _isLoading = true;
+                ChkDiscordRichPresence.IsChecked = false;
+                ChkQuickDiscordRichPresence.IsChecked = false;
+                if (ChkDiscordTabRichPresence != null) ChkDiscordTabRichPresence.IsChecked = false;
+                _isLoading = false;
+                MessageBox.Show(Loc.Get("msg_discord_rich_presence_requires_a_linked_disco"),
+                    "Discord Not Linked", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            // Sync all checkboxes without re-entrancy
+            _isLoading = true;
             ChkDiscordRichPresence.IsChecked = isEnabled;
             ChkQuickDiscordRichPresence.IsChecked = isEnabled;
+            if (ChkDiscordTabRichPresence != null) ChkDiscordTabRichPresence.IsChecked = isEnabled;
+            _isLoading = false;
 
             App.Settings.Current.DiscordRichPresenceEnabled = isEnabled;
 
@@ -3157,10 +3737,55 @@ namespace ConditioningControlPanel
 
         #endregion
 
+        private void InitializeLanguageSelector()
+        {
+            if (CmbLanguagePill == null) return;
+
+            CmbLanguagePill.Items.Clear();
+            int selectedIndex = 0;
+            var currentLang = App.Settings?.Current?.Language ?? "en";
+
+            for (int i = 0; i < LocalizationManager.AvailableLanguages.Length; i++)
+            {
+                var (code, displayName, shortName) = LocalizationManager.AvailableLanguages[i];
+                CmbLanguagePill.Items.Add(new ComboBoxItem
+                {
+                    Content = $"🌐 {shortName}",
+                    Tag = code,
+                    ToolTip = displayName
+                });
+                if (code == currentLang)
+                    selectedIndex = i;
+            }
+
+            CmbLanguagePill.SelectedIndex = selectedIndex;
+        }
+
+        private void CmbLanguagePill_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (CmbLanguagePill?.SelectedItem is not ComboBoxItem selected) return;
+            var langCode = selected.Tag as string ?? "en";
+
+            if (App.Settings?.Current != null && App.Settings.Current.Language != langCode)
+            {
+                App.Settings.Current.Language = langCode;
+                LocalizationManager.Instance.SetLanguage(langCode);
+                App.Settings.Save();
+
+                // XAML bindings update live; code-behind strings need a restart
+                if (TxtBannerSecondary != null)
+                {
+                    TxtBannerSecondary.Text = Loc.Get("msg_restart_to_apply");
+                    TxtBannerSecondary.Opacity = 1;
+                    TxtBannerSecondary.IsHitTestVisible = true;
+                }
+            }
+        }
+
         private async void BtnCheckUpdates_Click(object sender, RoutedEventArgs e)
         {
             BtnCheckUpdates.IsEnabled = false;
-            BtnCheckUpdates.Content = "Checking...";
+            BtnCheckUpdates.Content = Loc.Get("btn_checking");
 
             try
             {
@@ -3169,7 +3794,7 @@ namespace ConditioningControlPanel
             finally
             {
                 BtnCheckUpdates.IsEnabled = true;
-                BtnCheckUpdates.Content = "Check for Updates";
+                BtnCheckUpdates.Content = Loc.Get("btn_check_updates");
             }
         }
 
@@ -3213,6 +3838,147 @@ namespace ConditioningControlPanel
             });
         }
 
+        #region Tab Animation Management
+
+        private void StartSeasonTitleShimmer()
+        {
+            if (_seasonTitleStoryboard != null) return; // already running
+            try
+            {
+                _seasonTitleStoryboard = new Storyboard { RepeatBehavior = RepeatBehavior.Forever };
+                var startPt = new PointAnimation { From = new Point(-1, 0.5), To = new Point(1, 0.5), Duration = TimeSpan.FromSeconds(3) };
+                Storyboard.SetTargetName(startPt, "SeasonTitleBrush");
+                Storyboard.SetTargetProperty(startPt, new PropertyPath("StartPoint"));
+                var endPt = new PointAnimation { From = new Point(0, 0.5), To = new Point(2, 0.5), Duration = TimeSpan.FromSeconds(3) };
+                Storyboard.SetTargetName(endPt, "SeasonTitleBrush");
+                Storyboard.SetTargetProperty(endPt, new PropertyPath("EndPoint"));
+                var glow = new DoubleAnimation { From = 0.3, To = 0.9, Duration = TimeSpan.FromSeconds(1.5), AutoReverse = true };
+                Storyboard.SetTargetName(glow, "TxtSeasonTitle");
+                Storyboard.SetTargetProperty(glow, new PropertyPath("(TextBlock.Effect).(DropShadowEffect.Opacity)"));
+                _seasonTitleStoryboard.Children.Add(startPt);
+                _seasonTitleStoryboard.Children.Add(endPt);
+                _seasonTitleStoryboard.Children.Add(glow);
+                _seasonTitleStoryboard.Begin(this, true);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning("Failed to start season title shimmer: {Error}", ex.Message);
+            }
+        }
+
+        private void StopSeasonTitleShimmer()
+        {
+            try
+            {
+                _seasonTitleStoryboard?.Stop(this);
+                _seasonTitleStoryboard = null;
+            }
+            catch { }
+        }
+
+        private void StartLockdownPulse()
+        {
+            if (_lockdownPulseStoryboard != null) return;
+            try
+            {
+                _lockdownPulseStoryboard = new Storyboard { RepeatBehavior = RepeatBehavior.Forever, AutoReverse = true };
+                var colorAnim = new ColorAnimation { From = (Color)ColorConverter.ConvertFromString("#FF1493"), To = (Color)ColorConverter.ConvertFromString("#FF69B4"), Duration = TimeSpan.FromSeconds(1.5) };
+                Storyboard.SetTargetName(colorAnim, "LockdownImageBorderBrush");
+                Storyboard.SetTargetProperty(colorAnim, new PropertyPath(SolidColorBrush.ColorProperty));
+                var blurAnim = new DoubleAnimation { From = 12, To = 22, Duration = TimeSpan.FromSeconds(1.5) };
+                Storyboard.SetTargetName(blurAnim, "LockdownImageGlow");
+                Storyboard.SetTargetProperty(blurAnim, new PropertyPath(DropShadowEffect.BlurRadiusProperty));
+                var opacAnim = new DoubleAnimation { From = 0.7, To = 1.0, Duration = TimeSpan.FromSeconds(1.5) };
+                Storyboard.SetTargetName(opacAnim, "LockdownImageGlow");
+                Storyboard.SetTargetProperty(opacAnim, new PropertyPath(DropShadowEffect.OpacityProperty));
+                _lockdownPulseStoryboard.Children.Add(colorAnim);
+                _lockdownPulseStoryboard.Children.Add(blurAnim);
+                _lockdownPulseStoryboard.Children.Add(opacAnim);
+                _lockdownPulseStoryboard.Begin(this, true);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning("Failed to start lockdown pulse: {Error}", ex.Message);
+            }
+        }
+
+        private void StopLockdownPulse()
+        {
+            try
+            {
+                _lockdownPulseStoryboard?.Stop(this);
+                _lockdownPulseStoryboard = null;
+            }
+            catch { }
+        }
+
+        private void StopSkillTreeAnimations()
+        {
+            if (!_skillTreeAnimationsActive) return;
+            _skillTreeAnimationsActive = false;
+            try
+            {
+                // Stop gradient animations on the outer border background
+                if (SkillTreeOuterBorder.Background is LinearGradientBrush bgBrush)
+                {
+                    foreach (var stop in bgBrush.GradientStops)
+                    {
+                        stop.BeginAnimation(GradientStop.OffsetProperty, null);
+                        stop.BeginAnimation(GradientStop.ColorProperty, null);
+                    }
+                }
+
+                // Stop particle opacity animations
+                foreach (var child in SkillTreeCanvas.Children)
+                {
+                    if (child is System.Windows.Shapes.Ellipse ellipse)
+                    {
+                        ellipse.BeginAnimation(OpacityProperty, null);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning("Failed to stop skill tree animations: {Error}", ex.Message);
+            }
+        }
+
+        private void RestartSkillTreeAnimations()
+        {
+            if (_skillTreeAnimationsActive) return;
+            _skillTreeAnimationsActive = true;
+            try
+            {
+                // Re-apply gradient animations on outer border
+                SkillTreeOuterBorder.Background = CreateAnimatedSkillTreeBrush(isHeader: false);
+
+                // Re-animate particles
+                foreach (var child in SkillTreeCanvas.Children)
+                {
+                    if (child is System.Windows.Shapes.Ellipse ellipse)
+                    {
+                        var opacityAnim = new DoubleAnimation
+                        {
+                            From = 0,
+                            To = 1,
+                            Duration = TimeSpan.FromSeconds(2 + Random.Shared.NextDouble() * 3),
+                            BeginTime = TimeSpan.FromSeconds(Random.Shared.NextDouble() * 5),
+                            AutoReverse = true,
+                            RepeatBehavior = RepeatBehavior.Forever,
+                            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
+                        };
+                        ellipse.BeginAnimation(OpacityProperty, opacityAnim);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning("Failed to restart skill tree animations: {Error}", ex.Message);
+            }
+        }
+
+        #endregion
+
         private void AnimateTabIn(UIElement tab)
         {
             try
@@ -3232,6 +3998,21 @@ namespace ConditioningControlPanel
 
         private void ShowTab(string tab)
         {
+            // Legacy redirect: the "patreon" tab was eliminated and its
+            // account/data content lives in the dashboard's App Info popup now.
+            // Route any legacy callers there WITHOUT disturbing the currently
+            // active tab (opening a popup is overlay-style, not a tab switch).
+            if (tab == "patreon")
+            {
+                ShowAppInfoPopup();
+                return;
+            }
+
+            // Stop animations on tabs we're leaving to reduce idle CPU
+            StopSeasonTitleShimmer();
+            StopLockdownPulse();
+            StopSkillTreeAnimations();
+
             // Hide all tabs
             SettingsTab.Visibility = Visibility.Collapsed;
             PresetsTab.Visibility = Visibility.Collapsed;
@@ -3245,13 +4026,16 @@ namespace ConditioningControlPanel
             DiscordTab.Visibility = Visibility.Collapsed;
             EnhancementsTab.Visibility = Visibility.Collapsed;
             LabTab.Visibility = Visibility.Collapsed;
+            AwarenessTab.Visibility = Visibility.Collapsed;
+            if (RemoteControlTab != null) RemoteControlTab.Visibility = Visibility.Collapsed;
+            if (BambiTakeoverTab != null) BambiTakeoverTab.Visibility = Visibility.Collapsed;
+            if (HapticsTab != null) HapticsTab.Visibility = Visibility.Collapsed;
 
             // Reset all button styles to inactive
             var inactiveStyle = FindResource("TabButton") as Style;
             var activeStyle = FindResource("TabButtonActive") as Style;
             BtnSettings.Style = inactiveStyle;
             BtnPresets.Style = inactiveStyle;
-            BtnProgression.Style = inactiveStyle;
             BtnQuests.Style = inactiveStyle;
             BtnEnhancements.Style = inactiveStyle;
             BtnAchievements.Style = inactiveStyle;
@@ -3259,6 +4043,8 @@ namespace ConditioningControlPanel
             BtnLeaderboard.Style = inactiveStyle;
             BtnLab.Style = inactiveStyle;
             BtnOpenAssetsTop.Style = inactiveStyle;
+            // BtnAwareness was removed from the primary tab bar — its only entry point
+            // is now the Exclusives popup submenu
             // BtnPatreonExclusives keeps its inline Patreon red style defined in XAML
 
             switch (tab)
@@ -3275,26 +4061,20 @@ namespace ConditioningControlPanel
                     BtnPresets.Style = activeStyle;
                     break;
 
+                // "progression" tab removed in velvet-mosaic phase 6 — its content
+                // is now on the Dashboard. Legacy callers (e.g. older tutorial steps)
+                // that request ShowTab("progression") fall through to the Dashboard.
                 case "progression":
-                    App.Logger?.Debug("ShowTab: Attempting to make ProgressionTab visible.");
-                    try
-                    {
-                        ProgressionTab.Visibility = Visibility.Visible;
-                        AnimateTabIn(ProgressionTab);
-                        App.Logger?.Debug("ShowTab: ProgressionTab visibility set to Visible.");
-                    }
-                    catch (Exception ex)
-                    {
-                        App.Logger?.Error("ShowTab: Error making ProgressionTab visible: {Error}", ex.Message);
-                        throw;
-                    }
-                    BtnProgression.Style = activeStyle;
+                    SettingsTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(SettingsTab);
+                    BtnSettings.Style = activeStyle;
                     break;
 
                 case "quests":
                     QuestsTab.Visibility = Visibility.Visible;
                     AnimateTabIn(QuestsTab);
                     BtnQuests.Style = activeStyle;
+                    StartSeasonTitleShimmer();
                     RefreshQuestUI();
                     break;
 
@@ -3325,14 +4105,12 @@ namespace ConditioningControlPanel
                     LabTab.Visibility = Visibility.Visible;
                     AnimateTabIn(LabTab);
                     BtnLab.Style = activeStyle;
+                    StartLockdownPulse();
                     break;
 
-                case "patreon":
-                    PatreonTab.Visibility = Visibility.Visible;
-                    AnimateTabIn(PatreonTab);
-                    // Note: The main Discord login button isn't a tab button, so no style update needed
-                    UpdatePatreonUI();
-                    break;
+                // Note: "patreon" case is handled at the top of ShowTab as a
+                // legacy redirect to the App Info & Data popup (Exclusives tab
+                // was eliminated; account/data UI now lives in the dashboard).
 
                 case "leaderboard":
                     LeaderboardTab.Visibility = Visibility.Visible;
@@ -3355,6 +4133,30 @@ namespace ConditioningControlPanel
                     AnimateTabIn(DiscordTab);
                     // BtnDiscordTab keeps its inline Discord blue style defined in XAML
                     UpdateDiscordTabUI();
+                    break;
+
+                case "awareness":
+                    AwarenessTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(AwarenessTab);
+                    SyncAwarenessTabUI();
+                    break;
+
+                case "remotecontrol":
+                    RemoteControlTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(RemoteControlTab);
+                    UpdateRemoteControlUI();
+                    break;
+
+                case "bambitakeover":
+                    BambiTakeoverTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(BambiTakeoverTab);
+                    UpdatePatreonUI();
+                    break;
+
+                case "haptics":
+                    HapticsTab.Visibility = Visibility.Visible;
+                    AnimateTabIn(HapticsTab);
+                    UpdatePatreonUI();
                     break;
 
             }
@@ -3397,6 +4199,196 @@ namespace ConditioningControlPanel
             App.Lockdown.Activate(duration);
         }
 
+        private void BtnStartQuiz_Click(object sender, RoutedEventArgs e)
+        {
+            // Prevent opening multiple quiz windows — focus existing one instead
+            var existingQuiz = Application.Current.Windows.OfType<QuizWindow>().FirstOrDefault();
+            if (existingQuiz != null)
+            {
+                existingQuiz.Activate();
+                existingQuiz.Focus();
+                return;
+            }
+
+            if (App.Ai == null || !App.Ai.IsAvailable)
+            {
+                MessageBox.Show(Loc.Get("msg_you_need_to_be_logged_in_to_use_the_ai_quiz"), "Login Required",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var fullscreen = ChkQuizFullscreen?.IsChecked == true;
+            var playDrone = ChkQuizDrone?.IsChecked == true;
+            var quizWindow = new QuizWindow(fullscreen, playDrone);
+            quizWindow.Closed += (s, args) => RefreshPastQuizzes();
+            quizWindow.Show();
+        }
+
+        private void RefreshPastQuizzes()
+        {
+            try
+            {
+                var history = QuizService.LoadHistory();
+                PastQuizzesList.Children.Clear();
+
+                if (history.Count == 0)
+                {
+                    TxtPastQuizzesHeader.Visibility = Visibility.Collapsed;
+                    PastQuizzesPanel.Visibility = Visibility.Collapsed;
+                    return;
+                }
+
+                TxtPastQuizzesHeader.Visibility = Visibility.Visible;
+                PastQuizzesPanel.Visibility = Visibility.Visible;
+
+                // Trend summary at top — show latest archetype + trend per category that has history
+                var categories = history.Select(h => h.Category).Distinct();
+                foreach (var cat in categories)
+                {
+                    var trend = QuizService.GetScoreTrend(history, cat);
+                    if (trend == null) continue;
+
+                    // Extract archetype from latest profile text
+                    var latestEntry = history.FirstOrDefault(h => h.Category == cat);
+                    var archetype = "";
+                    if (latestEntry != null)
+                    {
+                        var match = System.Text.RegularExpressions.Regex.Match(latestEntry.ProfileText, @"You are a (.+?)\.");
+                        if (match.Success) archetype = match.Groups[1].Value;
+                    }
+
+                    var arrow = trend.Direction switch
+                    {
+                        TrendDirection.Up => "\u2191",
+                        TrendDirection.Down => "\u2193",
+                        TrendDirection.Flat => "\u2192",
+                        _ => ""
+                    };
+                    var catDisplay = latestEntry != null && !string.IsNullOrEmpty(latestEntry.CategoryName)
+                        ? latestEntry.CategoryName : cat.ToString();
+                    var trendLabel = trend.Direction == TrendDirection.FirstQuiz
+                        ? $"{catDisplay}: {trend.LatestPercent}%"
+                        : $"{catDisplay}: {trend.LatestPercent}% {arrow}{Math.Abs(trend.DeltaPercent)}%";
+                    if (!string.IsNullOrEmpty(archetype))
+                        trendLabel += $" · {archetype}";
+
+                    var trendRow = new TextBlock
+                    {
+                        Text = trendLabel,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x69, 0xB4)),
+                        FontSize = 11,
+                        FontWeight = FontWeights.SemiBold,
+                        Margin = new Thickness(8, 3, 8, 3)
+                    };
+                    PastQuizzesList.Children.Add(trendRow);
+                }
+
+                foreach (var entry in history)
+                {
+                    var pct = entry.MaxScore > 0 ? (int)Math.Round((double)entry.TotalScore / entry.MaxScore * 100) : 0;
+                    var catName = !string.IsNullOrEmpty(entry.CategoryName) ? entry.CategoryName : entry.Category.ToString();
+                    var label = $"{entry.TakenAt:MMM d}  ·  {catName}  ·  {entry.TotalScore}/{entry.MaxScore} ({pct}%)";
+
+                    var row = new Border
+                    {
+                        Cursor = System.Windows.Input.Cursors.Hand,
+                        Padding = new Thickness(8, 5, 8, 5),
+                        Background = System.Windows.Media.Brushes.Transparent
+                    };
+
+                    var txt = new TextBlock
+                    {
+                        Text = label,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xB8)),
+                        FontSize = 11.5
+                    };
+                    row.Child = txt;
+
+                    var captured = entry;
+                    row.MouseLeftButtonDown += (s, args) =>
+                    {
+                        // Close any existing report window before opening a new one
+                        foreach (var w in Application.Current.Windows.OfType<QuizReportWindow>().ToList())
+                            w.Close();
+                        new QuizReportWindow(captured) { Owner = this }.Show();
+                    };
+                    row.MouseEnter += (s, args) =>
+                    {
+                        if (s is Border b) b.Background = new SolidColorBrush(Color.FromArgb(0x15, 0xFF, 0xFF, 0xFF));
+                    };
+                    row.MouseLeave += (s, args) =>
+                    {
+                        if (s is Border b) b.Background = System.Windows.Media.Brushes.Transparent;
+                    };
+
+                    PastQuizzesList.Children.Add(row);
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "MainWindow: Failed to refresh past quizzes");
+            }
+        }
+
+        // ============ POP QUIZ HANDLERS ============
+
+        private void ChkPopQuizEnabled_Changed(object sender, RoutedEventArgs e)
+        {
+            if (App.Settings?.Current == null) return;
+            App.Settings.Current.PopQuizEnabled = ChkPopQuizEnabled.IsChecked == true;
+        }
+
+        private void SliderPopQuizFrequency_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (App.Settings?.Current == null || TxtPopQuizFrequency == null) return;
+            var val = (int)Math.Round(e.NewValue);
+            App.Settings.Current.PopQuizFrequency = val;
+            TxtPopQuizFrequency.Text = $"{val}/session hr";
+        }
+
+        private void BtnTestPopQuiz_Click(object sender, RoutedEventArgs e)
+        {
+            App.PopQuiz?.TestPopQuiz();
+        }
+
+        // ============ WALLPAPER OVERRIDE HANDLERS ============
+
+        private void ChkWallpaperEnabled_Changed(object sender, RoutedEventArgs e)
+        {
+            if (App.Settings?.Current == null || App.Wallpaper == null) return;
+
+            var enabled = ChkWallpaperEnabled.IsChecked == true;
+            if (enabled)
+            {
+                if (!App.Wallpaper.Activate())
+                {
+                    // No images found — uncheck and notify
+                    ChkWallpaperEnabled.IsChecked = false;
+                    App.Settings.Current.WallpaperEnabled = false;
+                    MessageBox.Show(Loc.Get("msg_no_wallpaper_images"), "Wallpaper Override",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+                TxtCurrentWallpaper.Text = App.Wallpaper.CurrentFilename;
+                TxtCurrentWallpaper.Visibility = Visibility.Visible;
+                BtnShuffleWallpaper.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                App.Wallpaper.Deactivate();
+                TxtCurrentWallpaper.Visibility = Visibility.Collapsed;
+                BtnShuffleWallpaper.Visibility = Visibility.Collapsed;
+            }
+            App.Settings.Current.WallpaperEnabled = enabled;
+        }
+
+        private void BtnShuffleWallpaper_Click(object sender, RoutedEventArgs e)
+        {
+            if (App.Wallpaper == null) return;
+            App.Wallpaper.Shuffle();
+            TxtCurrentWallpaper.Text = App.Wallpaper.CurrentFilename;
+        }
+
         private void OnLockdownActivated()
         {
             Dispatcher.BeginInvoke(() =>
@@ -3412,13 +4404,13 @@ namespace ConditioningControlPanel
                     {
                         ChkStrictLock.IsEnabled = false;
                         ChkStrictLock.Opacity = 0.4;
-                        ChkStrictLock.ToolTip = "YOU ARE IN LOCKDOWN MODE, THERE IS NO ESCAPE!";
+                        ChkStrictLock.ToolTip = Loc.Get("tooltip_you_are_in_lockdown_mode_there_is_no_escape");
                     }
                     if (ChkNoPanic != null)
                     {
                         ChkNoPanic.IsEnabled = false;
                         ChkNoPanic.Opacity = 0.4;
-                        ChkNoPanic.ToolTip = "YOU ARE IN LOCKDOWN MODE, THERE IS NO ESCAPE!";
+                        ChkNoPanic.ToolTip = Loc.Get("tooltip_you_are_in_lockdown_mode_there_is_no_escape");
                     }
 
                     // Swap UI panels
@@ -3623,23 +4615,21 @@ namespace ConditioningControlPanel
                 if (_preLockdownTitleBarBg != null && TitleBarBorder != null)
                     TitleBarBorder.Background = _preLockdownTitleBarBg;
 
-                // Restore resource brushes from theme
-                var res = Application.Current.Resources;
-                res["PinkBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4"));
-                res["DarkPinkBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF1493"));
-                res["TransparentPinkBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#30FF69B4"));
-                res["PinkButtonHoveredBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF8FAF"));
-
-                // Restore lockdown card to normal gradient border
+                // Restore lockdown card to normal gradient border using mod colors
                 if (LockdownCardBorder != null)
                 {
+                    var accentHex = App.Mods?.GetAccentColorHex() ?? "#FF69B4";
+                    var secondaryHex = App.Mods?.GetSecondaryColorHex() ?? "#9B59B6";
+                    var accentColor = (Color)ColorConverter.ConvertFromString(accentHex);
+                    var secondaryColor = (Color)ColorConverter.ConvertFromString(secondaryHex);
+
                     var borderBrush = new LinearGradientBrush
                     {
                         StartPoint = new System.Windows.Point(0, 0),
                         EndPoint = new System.Windows.Point(1, 1)
                     };
-                    borderBrush.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#FF69B4"), 0));
-                    borderBrush.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString("#9B59B6"), 1));
+                    borderBrush.GradientStops.Add(new GradientStop(accentColor, 0));
+                    borderBrush.GradientStops.Add(new GradientStop(secondaryColor, 1));
                     LockdownCardBorder.BorderBrush = borderBrush;
 
                     var bgBrush = new LinearGradientBrush
@@ -3652,7 +4642,7 @@ namespace ConditioningControlPanel
                     LockdownCardBorder.Background = bgBrush;
                 }
 
-                // Re-apply mode-aware theme colors
+                // Re-apply mode-aware theme colors (restores all resource brushes + named elements)
                 RefreshThemeAwareElements();
             }
             catch (Exception ex)
@@ -3708,10 +4698,12 @@ namespace ConditioningControlPanel
             if (e.OriginalSource is GridViewColumnHeader header && header.Content is string headerText)
             {
                 // Map header text to sort field
+                // In all-time mode, level column is hidden so skip level sort
+                var levelSort = _leaderboardMode == "all-time" ? "xp" : "level";
                 string? sortField = headerText switch
                 {
-                    "Rank" => "level",
-                    "Level" => "level",
+                    "Rank" => levelSort,
+                    "Level" => levelSort,
                     "XP" => "xp",
                     "Patreon" => "is_patreon",
                     "Name" => null, // Client-side sort
@@ -3729,31 +4721,31 @@ namespace ConditioningControlPanel
                 else if (headerText == "Name")
                 {
                     // Client-side alphabetical sort
-                    TxtLeaderboardStatus.Text = "Sorting by name...";
+                    TxtLeaderboardStatus.Text = Loc.Get("label_sorting_by_name");
                     var sorted = App.Leaderboard.Entries.OrderBy(x => x.DisplayName).ToList();
                     LstLeaderboard.ItemsSource = sorted;
-                    TxtLeaderboardStatus.Text = $"{App.Leaderboard.OnlineUsers} online / {App.Leaderboard.TotalUsers} users • Sorted by Name";
+                    TxtLeaderboardStatus.Text = Loc.GetF("label_0_online_1_users_sorted_by_name", App.Leaderboard.OnlineUsers, App.Leaderboard.TotalUsers);
                 }
                 else if (headerText == "Online")
                 {
                     // Client-side: online first, then by level descending
-                    TxtLeaderboardStatus.Text = "Sorting by online status...";
+                    TxtLeaderboardStatus.Text = Loc.Get("label_sorting_by_online_status");
                     var sorted = App.Leaderboard.Entries
                         .OrderByDescending(x => x.IsOnline)
                         .ThenByDescending(x => x.Level)
                         .ToList();
                     LstLeaderboard.ItemsSource = sorted;
-                    TxtLeaderboardStatus.Text = $"{App.Leaderboard.OnlineUsers} online / {App.Leaderboard.TotalUsers} users • Online first";
+                    TxtLeaderboardStatus.Text = Loc.GetF("label_0_online_1_users_online_first", App.Leaderboard.OnlineUsers, App.Leaderboard.TotalUsers);
                 }
                 else if (headerText == "Achievements")
                 {
                     // Client-side: by achievement count descending
-                    TxtLeaderboardStatus.Text = "Sorting by achievements...";
+                    TxtLeaderboardStatus.Text = Loc.Get("label_sorting_by_achievements");
                     var sorted = App.Leaderboard.Entries
                         .OrderByDescending(x => x.AchievementsCount)
                         .ToList();
                     LstLeaderboard.ItemsSource = sorted;
-                    TxtLeaderboardStatus.Text = $"{App.Leaderboard.OnlineUsers} online / {App.Leaderboard.TotalUsers} users • Sorted by Achievements";
+                    TxtLeaderboardStatus.Text = Loc.GetF("label_0_online_1_users_sorted_by_achievements", App.Leaderboard.OnlineUsers, App.Leaderboard.TotalUsers);
                 }
             }
         }
@@ -3761,6 +4753,147 @@ namespace ConditioningControlPanel
         private async void BtnRefreshLeaderboard_Click(object sender, RoutedEventArgs e)
         {
             await RefreshLeaderboardAsync();
+        }
+
+        private async void BtnLeaderboardMode_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is System.Windows.Controls.Button btn && btn.Tag is string mode && mode != _leaderboardMode)
+            {
+                _leaderboardMode = mode;
+                UpdateLeaderboardModeButtons();
+                // All-time defaults to XP ranking, monthly defaults to level
+                var defaultSort = mode == "all-time" ? "xp" : "level";
+                await RefreshLeaderboardAsync(defaultSort);
+            }
+        }
+
+        private void UpdateLeaderboardModeButtons()
+        {
+            try
+            {
+                if (BtnLeaderboardMonthly == null || BtnLeaderboardAllTime == null) return;
+
+                var isAllTime = _leaderboardMode == "all-time";
+                var gold = (Color)ColorConverter.ConvertFromString("#FFD700");
+                var pink = (Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4");
+                var dark = Application.Current.Resources["DarkerBg"] is Color dbg ? dbg : (Color)ColorConverter.ConvertFromString("#1A1A2E");
+                var inactive = Application.Current.Resources["AccentTintedBg"] is Color itbg ? itbg : (Color)ColorConverter.ConvertFromString("#352545");
+
+                if (isAllTime)
+                {
+                    BtnLeaderboardMonthly.Background = new SolidColorBrush(inactive);
+                    BtnLeaderboardMonthly.Foreground = new SolidColorBrush(pink);
+                    BtnLeaderboardAllTime.Background = new SolidColorBrush(gold);
+                    BtnLeaderboardAllTime.Foreground = new SolidColorBrush(dark);
+                }
+                else
+                {
+                    BtnLeaderboardMonthly.Background = new SolidColorBrush(pink);
+                    BtnLeaderboardMonthly.Foreground = new SolidColorBrush(Colors.White);
+                    BtnLeaderboardAllTime.Background = new SolidColorBrush(inactive);
+                    BtnLeaderboardAllTime.Foreground = new SolidColorBrush(pink);
+                }
+
+                // Update All-Time button border color
+                var allTimeBorder = BtnLeaderboardAllTime.Template?.FindName("AllTimeBorder", BtnLeaderboardAllTime) as Border;
+                if (allTimeBorder != null)
+                    allTimeBorder.BorderBrush = new SolidColorBrush(isAllTime ? gold : pink);
+
+                // Apply accent theme to rows, headers, and hover colors
+                ApplyLeaderboardTheme(isAllTime ? gold : pink);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "Error updating leaderboard mode buttons");
+            }
+        }
+
+        private void ApplyLeaderboardTheme(Color accent)
+        {
+            if (LstLeaderboard == null) return;
+
+            var accentBrush = new SolidColorBrush(accent);
+            var hoverBrush = new SolidColorBrush(Color.FromArgb(0x40, accent.R, accent.G, accent.B));
+            var selectedBrush = new SolidColorBrush(Color.FromArgb(0x50, accent.R, accent.G, accent.B));
+            var headerBgColor = Application.Current.Resources["AccentTintedBg"] is Color tbg ? tbg : (Color)ColorConverter.ConvertFromString("#352545");
+            var headerHoverBgColor = Application.Current.Resources["AccentTintedBgHover"] is Color thbg ? thbg : (Color)ColorConverter.ConvertFromString("#452555");
+            var headerHoverBg = new SolidColorBrush(headerHoverBgColor);
+            var headerBg = new SolidColorBrush(headerBgColor);
+
+            // Rebuild ItemContainerStyle with the new accent color
+            var itemStyle = new Style(typeof(ListViewItem));
+            itemStyle.Setters.Add(new Setter(ForegroundProperty, accentBrush));
+            itemStyle.Setters.Add(new Setter(BackgroundProperty, Brushes.Transparent));
+            itemStyle.Setters.Add(new Setter(PaddingProperty, new Thickness(8)));
+            itemStyle.Setters.Add(new Setter(MarginProperty, new Thickness(0, 2, 0, 0)));
+            itemStyle.Setters.Add(new Setter(FontSizeProperty, 18.0));
+            itemStyle.Setters.Add(new Setter(FontWeightProperty, FontWeights.ExtraBold));
+            itemStyle.Setters.Add(new Setter(FontFamilyProperty, new FontFamily("Segoe Print")));
+            itemStyle.Setters.Add(new Setter(HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
+
+            // OG gold-tinted row (always gold regardless of mode)
+            var ogTrigger = new DataTrigger { Binding = new System.Windows.Data.Binding("IsSeason0Og"), Value = true };
+            ogTrigger.Setters.Add(new Setter(BackgroundProperty, new SolidColorBrush(Color.FromArgb(0x25, 0xFF, 0xD7, 0x00))));
+            ogTrigger.Setters.Add(new Setter(BorderBrushProperty, new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0xD7, 0x00))));
+            ogTrigger.Setters.Add(new Setter(BorderThicknessProperty, new Thickness(0, 0, 0, 2)));
+            itemStyle.Triggers.Add(ogTrigger);
+
+            var hoverTrigger = new Trigger { Property = IsMouseOverProperty, Value = true };
+            hoverTrigger.Setters.Add(new Setter(BackgroundProperty, hoverBrush));
+            itemStyle.Triggers.Add(hoverTrigger);
+
+            var selectedTrigger = new Trigger { Property = ListViewItem.IsSelectedProperty, Value = true };
+            selectedTrigger.Setters.Add(new Setter(BackgroundProperty, selectedBrush));
+            itemStyle.Triggers.Add(selectedTrigger);
+
+            LstLeaderboard.ItemContainerStyle = itemStyle;
+
+            // Rebuild header style in ListView.Resources
+            var headerStyle = new Style(typeof(GridViewColumnHeader));
+            headerStyle.Setters.Add(new Setter(BackgroundProperty, headerBg));
+            headerStyle.Setters.Add(new Setter(ForegroundProperty, accentBrush));
+            headerStyle.Setters.Add(new Setter(FontWeightProperty, FontWeights.ExtraBold));
+            headerStyle.Setters.Add(new Setter(FontSizeProperty, 18.0));
+            headerStyle.Setters.Add(new Setter(FontFamilyProperty, new FontFamily("Segoe Print")));
+            headerStyle.Setters.Add(new Setter(PaddingProperty, new Thickness(12, 10, 12, 10)));
+            headerStyle.Setters.Add(new Setter(BorderThicknessProperty, new Thickness(0, 0, 1, 2)));
+            headerStyle.Setters.Add(new Setter(BorderBrushProperty, accentBrush));
+            headerStyle.Setters.Add(new Setter(CursorProperty, Cursors.Hand));
+
+            var headerHoverTrigger = new Trigger { Property = IsMouseOverProperty, Value = true };
+            headerHoverTrigger.Setters.Add(new Setter(BackgroundProperty, headerHoverBg));
+            headerStyle.Triggers.Add(headerHoverTrigger);
+
+            LstLeaderboard.Resources[typeof(GridViewColumnHeader)] = headerStyle;
+        }
+
+        private void UpdateSeasonsColumn()
+        {
+            try
+            {
+                var gridView = LstLeaderboard?.View as GridView;
+                if (gridView == null || gridView.Columns.Count == 0) return;
+
+                var isAllTime = _leaderboardMode == "all-time";
+
+                var seasonsCol = gridView.Columns.FirstOrDefault(c => c.Header?.ToString() == "Seasons");
+                if (seasonsCol != null)
+                {
+                    seasonsCol.Width = isAllTime ? 80 : 0;
+                }
+
+                // Hide level column in all-time mode (inconsistent after season resets)
+                var levelHeader = Loc.Get("label_level");
+                var levelCol = gridView.Columns.FirstOrDefault(c => c.Header?.ToString() == levelHeader);
+                if (levelCol != null)
+                {
+                    levelCol.Width = isAllTime ? 0 : 100;
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "Error updating Seasons column");
+            }
         }
 
         private void BtnLeaderboardDiscord_Click(object sender, RoutedEventArgs e)
@@ -3808,7 +4941,7 @@ namespace ConditioningControlPanel
         {
             if (App.Leaderboard == null || TxtLeaderboardStatus == null || BtnRefreshLeaderboard == null) return;
 
-            TxtLeaderboardStatus.Text = "Syncing...";
+            TxtLeaderboardStatus.Text = Loc.Get("label_syncing");
             BtnRefreshLeaderboard.IsEnabled = false;
 
             try
@@ -3829,32 +4962,45 @@ namespace ConditioningControlPanel
                     App.Logger?.Information("Profile sync completed");
                 }
 
-                TxtLeaderboardStatus.Text = "Loading...";
-                var success = await App.Leaderboard.RefreshAsync(sortBy);
+                TxtLeaderboardStatus.Text = Loc.Get("label_loading_2");
+                var success = await App.Leaderboard.RefreshAsync(sortBy, _leaderboardMode);
 
                 if (success)
                 {
                     // Apply client-side sort (server always returns XP order from sorted set)
                     ApplyLeaderboardSort(sortBy ?? App.Leaderboard.CurrentSortBy);
-                    TxtLeaderboardStatus.Text = $"{App.Leaderboard.OnlineUsers} online / {App.Leaderboard.TotalUsers} users";
+                    TxtLeaderboardStatus.Text = Loc.GetF("label_0_online_1_users", App.Leaderboard.OnlineUsers, App.Leaderboard.TotalUsers);
 
-                    // Update season flavour text
-                    var seasonTitle = App.QuestDefinitions?.SeasonTitle;
-                    if (!string.IsNullOrEmpty(seasonTitle))
-                        TxtLeaderboardSeason.Text = $"{seasonTitle} ~ prove your devotion~";
+                    // Update season flavour text based on mode
+                    if (_leaderboardMode == "all-time")
+                    {
+                        TxtLeaderboardSeason.Text = Loc.Get("label_all_time_legends_never_die");
+                        if (TxtLeaderboardSubtitle != null)
+                            TxtLeaderboardSubtitle.Text = Loc.Get("label_cumulative_xp_across_all_seasons");
+                    }
+                    else
+                    {
+                        var seasonTitle = App.QuestDefinitions?.SeasonTitle;
+                        if (!string.IsNullOrEmpty(seasonTitle))
+                            TxtLeaderboardSeason.Text = Loc.GetF("label_0_prove_your_devotion", seasonTitle);
+                        if (TxtLeaderboardSubtitle != null)
+                            TxtLeaderboardSubtitle.Text = Loc.Get("label_resets_monthly_your_rank_is_everything");
+                    }
 
                     // Show/hide Trophy Case columns based on skill unlock
                     UpdateTrophyCaseColumns();
+                    // Show/hide Seasons column based on mode
+                    UpdateSeasonsColumn();
                 }
                 else
                 {
-                    TxtLeaderboardStatus.Text = App.Leaderboard.LastRefreshError ?? "Failed to load";
+                    TxtLeaderboardStatus.Text = App.Leaderboard.LastRefreshError ?? Loc.Get("label_failed_to_load");
                 }
             }
             catch (Exception ex)
             {
                 App.Logger?.Error(ex, "Error refreshing leaderboard");
-                TxtLeaderboardStatus.Text = "Error loading leaderboard";
+                TxtLeaderboardStatus.Text = Loc.Get("label_error_loading_leaderboard");
             }
             finally
             {
@@ -3866,13 +5012,29 @@ namespace ConditioningControlPanel
         {
             if (App.Leaderboard?.Entries == null || LstLeaderboard == null) return;
 
-            var sorted = sortBy switch
+            List<Services.LeaderboardEntry> sorted;
+
+            if (_leaderboardMode == "all-time")
             {
-                "level" => App.Leaderboard.Entries.OrderByDescending(x => x.Level).ThenByDescending(x => x.Xp).ToList(),
-                "xp" => App.Leaderboard.Entries.OrderByDescending(x => x.Xp).ToList(),
-                "is_patreon" => App.Leaderboard.Entries.OrderByDescending(x => x.PatreonTier).ThenByDescending(x => x.Level).ToList(),
-                _ => App.Leaderboard.Entries.OrderByDescending(x => x.Xp).ToList()
-            };
+                // In all-time mode, default sort by total XP earned; "level" sorts by highest_level_ever
+                sorted = sortBy switch
+                {
+                    "level" => App.Leaderboard.Entries.OrderByDescending(x => x.HighestLevelEver).ThenByDescending(x => x.TotalXpEarned).ToList(),
+                    "xp" => App.Leaderboard.Entries.OrderByDescending(x => x.TotalXpEarned).ToList(),
+                    "is_patreon" => App.Leaderboard.Entries.OrderByDescending(x => x.PatreonTier).ThenByDescending(x => x.TotalXpEarned).ToList(),
+                    _ => App.Leaderboard.Entries.OrderByDescending(x => x.TotalXpEarned).ToList()
+                };
+            }
+            else
+            {
+                sorted = sortBy switch
+                {
+                    "level" => App.Leaderboard.Entries.OrderByDescending(x => x.Level).ThenByDescending(x => x.Xp).ToList(),
+                    "xp" => App.Leaderboard.Entries.OrderByDescending(x => x.Xp).ToList(),
+                    "is_patreon" => App.Leaderboard.Entries.OrderByDescending(x => x.PatreonTier).ThenByDescending(x => x.Level).ToList(),
+                    _ => App.Leaderboard.Entries.OrderByDescending(x => x.Xp).ToList()
+                };
+            }
 
             // Re-number ranks
             for (int i = 0; i < sorted.Count; i++)
@@ -3925,7 +5087,7 @@ namespace ConditioningControlPanel
             {
                 var unlocked = App.Achievements.GetUnlockedCount();
                 var total = App.Achievements.GetTotalCount();
-                TxtAchievementCount.Text = $"{unlocked} / {total} Achievements Unlocked";
+                TxtAchievementCount.Text = Loc.GetF("label_0_1_achievements_unlocked", unlocked, total);
             }
         }
 
@@ -3982,20 +5144,38 @@ namespace ConditioningControlPanel
             var cards = new[] { CompanionCard0, CompanionCard1, CompanionCard2, CompanionCard3, CompanionCard4 };
             var levelTexts = new[] { TxtCompanion0Level, TxtCompanion1Level, TxtCompanion2Level, TxtCompanion3Level, TxtCompanion4Level };
             var lockTexts = new[] { TxtCompanion0Lock, TxtCompanion1Lock, TxtCompanion2Lock, TxtCompanion3Lock, TxtCompanion4Lock };
-            var colors = new[] { "#FF69B4", "#9370DB", "#50C878", "#FF6B6B", "#F5DEB3" };
+            var nameTexts = new[] { TxtCompanion0Name, TxtCompanion1Name, TxtCompanion2Name, TxtCompanion3Name, TxtCompanion4Name };
+            var colors = new[] { App.Mods?.GetAccentColorHex() ?? "#FF69B4", "#9370DB", "#50C878", "#FF6B6B", "#F5DEB3" };
 
             for (int i = 0; i < 5; i++)
             {
                 var companionId = (Models.CompanionId)i;
                 var def = Models.CompanionDefinition.GetById(companionId);
                 var progress = App.Companion.GetProgress(companionId);
-                var isUnlocked = App.Settings?.Current?.IsLevelUnlocked(def.RequiredLevel) ?? false;
 
-                // Update level text - show required level if locked
-                if (isUnlocked)
-                    levelTexts[i].Text = progress.IsMaxLevel ? "MAX" : $"Lv.{progress.Level}";
-                else
-                    levelTexts[i].Text = $"Lv.{def.RequiredLevel}";
+                // Hide companion card if the active mod doesn't support this avatar set
+                if (App.Mods?.IsCompanionSupported(companionId) == false)
+                {
+                    cards[i].Visibility = Visibility.Collapsed;
+                    continue;
+                }
+                cards[i].Visibility = Visibility.Visible;
+
+                // Hide companion card if the active mod doesn't support this avatar set
+                if (App.Mods?.IsCompanionSupported(companionId) == false)
+                {
+                    cards[i].Visibility = Visibility.Collapsed;
+                    continue;
+                }
+                cards[i].Visibility = Visibility.Visible;
+
+                // Update companion name with mod text replacements
+                bool isSlutMode = App.Settings?.Current?.SlutModeEnabled ?? false;
+                var companionName = def.GetDisplayName(isSlutMode);
+                nameTexts[i].Text = App.Mods?.MakeModAware(companionName) ?? companionName;
+
+                // All companions are unlocked from level 1
+                levelTexts[i].Text = progress.IsMaxLevel ? "MAX" : $"Lv.{progress.Level}";
 
                 // Highlight active companion with colored border
                 var isActive = companionId == activeId;
@@ -4004,16 +5184,17 @@ namespace ConditioningControlPanel
                     ? new System.Windows.Media.SolidColorBrush(color)
                     : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Colors.Transparent);
 
-                // Update lock visibility based on player level
-                lockTexts[i].Visibility = isUnlocked ? Visibility.Collapsed : Visibility.Visible;
-                cards[i].Opacity = isUnlocked ? 1.0 : 0.5;
+                // Companion lock visuals removed — every companion is available from level 1.
+                lockTexts[i].Visibility = Visibility.Collapsed;
+                cards[i].Opacity = 1.0;
             }
 
             // Update active companion details
             var activeDef = Models.CompanionDefinition.GetById(activeId);
             var activeProgress = App.Companion.ActiveProgress;
 
-            TxtActiveCompanionName.Text = activeDef.Name;
+            var activeDisplayName = activeDef.GetDisplayName(App.Settings?.Current?.SlutModeEnabled ?? false);
+            TxtActiveCompanionName.Text = App.Mods?.MakeModAware(activeDisplayName) ?? activeDisplayName;
             TxtActiveCompanionLevel.Text = activeProgress.IsMaxLevel ? " · MAX LEVEL" : $" · Level {activeProgress.Level}";
             TxtActiveCompanionDesc.Text = activeDef.Description;
             TxtActiveCompanionXP.Text = activeProgress.IsMaxLevel
@@ -4067,11 +5248,11 @@ namespace ConditioningControlPanel
             {
                 if (App.Settings?.Current?.CompanionPrompt?.UseCustomPrompt == true)
                 {
-                    TxtActivePromptName.Text = "Custom (Edited)";
+                    TxtActivePromptName.Text = Loc.Get("label_custom_edited");
                 }
                 else
                 {
-                    TxtActivePromptName.Text = "Default (Built-in)";
+                    TxtActivePromptName.Text = Loc.Get("label_default_built_in");
                 }
                 BtnDeactivatePrompt.Visibility = Visibility.Collapsed;
             }
@@ -4224,18 +5405,6 @@ namespace ConditioningControlPanel
 
             var companionId = (Models.CompanionId)companionIndex;
             var def = Models.CompanionDefinition.GetById(companionId);
-            var playerLevel = App.Settings?.Current?.PlayerLevel ?? 1;
-
-            // Check level requirement using IsLevelUnlocked (respects OG unlock toggle)
-            if (!(App.Settings?.Current?.IsLevelUnlocked(def.RequiredLevel) ?? false))
-            {
-                System.Windows.MessageBox.Show(
-                    $"{def.Name} unlocks at Level {def.RequiredLevel}.\n\nYou're currently Level {playerLevel}. Keep training to unlock!",
-                    "Level Required",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-                return;
-            }
 
             // Switch companion
             if (App.Companion?.SwitchCompanion(companionId) == true)
@@ -4279,7 +5448,7 @@ namespace ConditioningControlPanel
             if (!isUnlocked)
             {
                 App.Logger?.Warning("{Companion} is locked", def.Name);
-                ShowStyledDialog("Locked", $"{def.Name} is not unlocked yet.\nUnlock it first to assign a personality.", "OK", "");
+                ShowStyledDialog(Loc.Get("dialog_locked"), Loc.GetF("msg_companion_locked", def.Name), "OK", "");
                 return;
             }
 
@@ -4320,15 +5489,15 @@ namespace ConditioningControlPanel
                         App.Logger?.Information("Assigned prompt '{Prompt}' to companion {Companion}",
                             prompt.Name, def.Name);
 
-                        ShowStyledDialog("Personality Assigned",
-                            $"{def.Name} will now use \"{prompt.Name}\" personality.\n\nThis will activate automatically when you switch to this companion.",
-                            "OK", "");
+                        ShowStyledDialog(Loc.Get("title_personality_assigned"),
+                            Loc.GetF("msg_personality_assigned", def.Name, prompt.Name),
+                            Loc.Get("btn_ok"), "");
                     }
                 }
                 catch (Exception ex)
                 {
                     App.Logger?.Warning(ex, "Failed to assign prompt to companion");
-                    ShowStyledDialog("Error", $"Failed to import prompt: {ex.Message}", "OK", "");
+                    ShowStyledDialog(Loc.Get("title_error"), Loc.GetF("msg_failed_to_import_prompt", ex.Message), Loc.Get("btn_ok"), "");
                 }
             }
         }
@@ -4343,8 +5512,9 @@ namespace ConditioningControlPanel
             for (int i = 0; i < promptTexts.Length; i++)
             {
                 var promptName = Services.CompanionService.GetAssignedPromptName((Models.CompanionId)i);
-                promptTexts[i].Text = promptName ?? "";
-                promptTexts[i].ToolTip = string.IsNullOrEmpty(promptName) ? null : $"AI Personality: {promptName}";
+                var displayName = App.Mods?.MakeModAware(promptName ?? "") ?? promptName ?? "";
+                promptTexts[i].Text = displayName;
+                promptTexts[i].ToolTip = string.IsNullOrEmpty(displayName) ? null : Loc.GetF("tooltip_ai_personality", displayName);
             }
         }
 
@@ -4366,7 +5536,7 @@ namespace ConditioningControlPanel
             finally
             {
                 BtnRefreshPrompts.IsEnabled = true;
-                BtnRefreshPrompts.Content = "Refresh";
+                BtnRefreshPrompts.Content = Loc.Get("btn_refresh");
             }
         }
 
@@ -4384,7 +5554,7 @@ namespace ConditioningControlPanel
                 var available = await App.CommunityPrompts?.GetAvailablePromptsAsync();
                 if (available == null || available.Count == 0)
                 {
-                    ShowStyledDialog("Community Prompts", "No community prompts available yet.\n\nCreate and export your own to share!", "OK", "");
+                    ShowStyledDialog(Loc.Get("title_community_prompts"), Loc.Get("msg_no_community_prompts"), Loc.Get("btn_ok"), "");
                     return;
                 }
 
@@ -4394,12 +5564,12 @@ namespace ConditioningControlPanel
 
                 if (notInstalled.Count == 0)
                 {
-                    ShowStyledDialog("Community Prompts", "You've installed all available prompts!", "OK", "");
+                    ShowStyledDialog(Loc.Get("title_community_prompts"), Loc.Get("msg_all_prompts_installed"), Loc.Get("btn_ok"), "");
                     return;
                 }
 
                 // Show simple selection (first 5)
-                var message = "Available prompts:\n\n";
+                var message = Loc.Get("label_available_prompts");
                 for (int i = 0; i < Math.Min(5, notInstalled.Count); i++)
                 {
                     var p = notInstalled[i];
@@ -4407,17 +5577,17 @@ namespace ConditioningControlPanel
                 }
 
                 if (notInstalled.Count > 5)
-                    message += $"...and {notInstalled.Count - 5} more\n\n";
+                    message += Loc.GetF("label_and_more_prompts", notInstalled.Count - 5);
 
-                message += "Install the first one?";
+                message += Loc.Get("label_install_first_one");
 
-                var result = ShowStyledDialog("Browse Community Prompts", message, "Install", "Cancel");
+                var result = ShowStyledDialog(Loc.Get("title_browse_community_prompts"), message, Loc.Get("btn_install"), Loc.Get("btn_cancel"));
                 if (result && notInstalled.Count > 0)
                 {
                     var prompt = await App.CommunityPrompts?.InstallPromptAsync(notInstalled[0].Id);
                     if (prompt != null)
                     {
-                        ShowStyledDialog("Installed!", $"'{prompt.Name}' has been installed.\n\nUse the 'Use' button to activate it.", "OK", "");
+                        ShowStyledDialog(Loc.Get("title_installed"), Loc.GetF("msg_prompt_installed", prompt.Name), Loc.Get("btn_ok"), "");
                         UpdateCommunityPromptsUI();
                     }
                 }
@@ -4425,7 +5595,7 @@ namespace ConditioningControlPanel
             catch (Exception ex)
             {
                 App.Logger?.Error(ex, "Error browsing prompts");
-                ShowStyledDialog("Error", $"Failed to browse prompts:\n{ex.Message}", "OK", "");
+                ShowStyledDialog(Loc.Get("title_error"), Loc.GetF("msg_failed_to_browse_prompts", ex.Message), Loc.Get("btn_ok"), "");
             }
         }
 
@@ -4436,7 +5606,7 @@ namespace ConditioningControlPanel
                 var dialog = new Microsoft.Win32.OpenFileDialog
                 {
                     Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*",
-                    Title = "Import Community Prompt"
+                    Title = Loc.Get("title_import_community_prompt")
                 };
 
                 if (dialog.ShowDialog() == true)
@@ -4444,19 +5614,19 @@ namespace ConditioningControlPanel
                     var prompt = App.CommunityPrompts?.ImportFromFile(dialog.FileName);
                     if (prompt != null)
                     {
-                        ShowStyledDialog("Imported!", $"'{prompt.Name}' by {prompt.Author} has been imported.", "OK", "");
+                        ShowStyledDialog(Loc.Get("title_imported"), Loc.GetF("msg_prompt_imported", prompt.Name, prompt.Author), Loc.Get("btn_ok"), "");
                         UpdateCommunityPromptsUI();
                     }
                     else
                     {
-                        ShowStyledDialog("Error", "Failed to import prompt. The file may be invalid.", "OK", "");
+                        ShowStyledDialog(Loc.Get("title_error"), Loc.Get("msg_failed_to_import_prompt_invalid"), Loc.Get("btn_ok"), "");
                     }
                 }
             }
             catch (Exception ex)
             {
                 App.Logger?.Error(ex, "Error importing prompt");
-                ShowStyledDialog("Error", $"Failed to import prompt:\n{ex.Message}", "OK", "");
+                ShowStyledDialog(Loc.Get("title_error"), Loc.GetF("msg_failed_to_import_prompt_error", ex.Message), Loc.Get("btn_ok"), "");
             }
         }
 
@@ -4471,27 +5641,27 @@ namespace ConditioningControlPanel
                 var prompt = App.CommunityPrompts?.ExportCurrentSettings(name, author, "A custom AI personality.");
                 if (prompt == null)
                 {
-                    ShowStyledDialog("Error", "Failed to export current settings.", "OK", "");
+                    ShowStyledDialog(Loc.Get("title_error"), Loc.Get("msg_failed_to_export_settings"), Loc.Get("btn_ok"), "");
                     return;
                 }
 
                 var dialog = new Microsoft.Win32.SaveFileDialog
                 {
                     Filter = "JSON files (*.json)|*.json",
-                    Title = "Export Community Prompt",
+                    Title = Loc.Get("title_export_community_prompt"),
                     FileName = $"{name.Replace(" ", "_")}.json"
                 };
 
                 if (dialog.ShowDialog() == true)
                 {
                     await App.CommunityPrompts?.SavePromptToFileAsync(prompt, dialog.FileName);
-                    ShowStyledDialog("Exported!", $"Prompt exported to:\n{dialog.FileName}\n\nShare this file with others!", "OK", "");
+                    ShowStyledDialog(Loc.Get("title_exported"), Loc.GetF("msg_prompt_exported", dialog.FileName), Loc.Get("btn_ok"), "");
                 }
             }
             catch (Exception ex)
             {
                 App.Logger?.Error(ex, "Error exporting prompt");
-                ShowStyledDialog("Error", $"Failed to export prompt:\n{ex.Message}", "OK", "");
+                ShowStyledDialog(Loc.Get("title_error"), Loc.GetF("msg_failed_to_export_prompt", ex.Message), Loc.Get("btn_ok"), "");
             }
         }
 
@@ -4524,15 +5694,15 @@ namespace ConditioningControlPanel
                     _ when isWhitelisted => "Whitelisted - All features unlocked!",
                     _ => isActivePatron ? "Patron - Thank you for your support!" : "Connected - Subscribe to unlock features"
                 };
-                BtnPatreonLogin.Content = "Logout";
+                BtnPatreonLogin.Content = Loc.Get("btn_logout");
             }
             else
             {
                 // Check if user is logged in with another provider (has unified_id)
                 var hasUnifiedId = !string.IsNullOrEmpty(App.Settings?.Current?.UnifiedId);
 
-                TxtPatreonStatus.Text = "Not Connected";
-                TxtPatreonTier.Text = "Login to unlock exclusive features";
+                TxtPatreonStatus.Text = Loc.Get("label_not_connected");
+                TxtPatreonTier.Text = Loc.Get("label_login_to_unlock_exclusive_features");
 
                 // Show "Link Patreon" if logged in via Discord, otherwise "Login"
                 BtnPatreonLogin.Content = hasUnifiedId ? "Link Patreon" : "Login";
@@ -4562,9 +5732,15 @@ namespace ConditioningControlPanel
             // Hide "Coming Soon" overlay for Patreon supporters
             HapticsComingSoonOverlay.Visibility = hasHapticsAccess ? Visibility.Collapsed : Visibility.Visible;
 
-            // Bambi Takeover (Autonomy) lock
-            if (AutonomyLocked != null) AutonomyLocked.Visibility = hasPremiumAccess ? Visibility.Collapsed : Visibility.Visible;
-            if (AutonomyUnlocked != null) AutonomyUnlocked.Visibility = hasPremiumAccess ? Visibility.Visible : Visibility.Collapsed;
+            // Bambi Takeover (Autonomy) — visible-but-locked: keep AutonomyUnlocked
+            // always visible, AutonomyLocked stays collapsed (legacy element), and the
+            // new BambiTakeoverGate translucent overlay handles gating.
+            if (AutonomyLocked != null) AutonomyLocked.Visibility = Visibility.Collapsed;
+            if (AutonomyUnlocked != null) AutonomyUnlocked.Visibility = Visibility.Visible;
+            RefreshPremiumGate(BambiTakeoverGate);
+            RefreshPremiumGate(HapticsGate);
+            RefreshPremiumGate(RemoteControlGate);
+            RefreshPremiumGate(AwarenessGate);
 
             // Update AI connection status
             if (TxtAiStatus != null)
@@ -4575,7 +5751,7 @@ namespace ConditioningControlPanel
                 }
                 else
                 {
-                    TxtAiStatus.Text = "AI initializing...";
+                    TxtAiStatus.Text = Loc.Get("label_ai_initializing");
                 }
             }
 
@@ -4600,6 +5776,93 @@ namespace ConditioningControlPanel
 
             // Update XP bar login state when Patreon auth changes
             UpdateXPBarLoginState();
+        }
+
+        // ========================================================================
+        // Account sections reparenting (App Info & Data popup)
+        // ========================================================================
+        // The Patreon login card, Discord login card, AccountLinkingSection,
+        // CloudSettingsBackupSection and DataPrivacySection live physically inside
+        // PatreonTab's XAML tree (so their x:Name fields resolve for ~64 handler
+        // references across this file). When the dashboard's "App Info & Data"
+        // popup opens, we temporarily detach these Borders and attach them to the
+        // popup's host StackPanel so the user can manage their account/data from
+        // the dashboard. When the popup closes we put them back — the same element
+        // instances, so all handler refs remain valid.
+
+        private readonly System.Collections.Generic.List<System.Windows.FrameworkElement> _detachedAccountSections = new();
+
+        /// <summary>
+        /// Detaches the account/data sections from PatreonTab's content StackPanel
+        /// and attaches them to the provided target host (usually the AppInfoFeatureControl's
+        /// ExternalSectionsHost). Called when the App Info &amp; Data popup opens.
+        /// </summary>
+        internal void DetachAccountSectionsInto(System.Windows.Controls.Panel target)
+        {
+            if (target == null) return;
+            if (_detachedAccountSections.Count > 0) return; // already detached
+
+            // Order matters — this is the vertical order they'll appear in the popup.
+            var toMove = new System.Windows.FrameworkElement?[]
+            {
+                PatreonLoginCard,
+                DiscordLoginCard,
+                AccountLinkingSection,
+                CloudSettingsBackupSection,
+                DataPrivacySection,
+                SupportDevelopmentCard,
+            };
+
+            foreach (var fe in toMove)
+            {
+                if (fe == null) continue;
+
+                // Detach from whichever parent it currently has (defensive:
+                // could be PatreonTabContent on first open, or a stale popup
+                // host if a previous close didn't clean up).
+                if (fe.Parent is System.Windows.Controls.Panel currentParent)
+                {
+                    currentParent.Children.Remove(fe);
+                }
+                else if (fe.Parent is System.Windows.Controls.ContentControl cc)
+                {
+                    cc.Content = null;
+                }
+
+                try
+                {
+                    target.Children.Add(fe);
+                    _detachedAccountSections.Add(fe);
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Warning(ex, "DetachAccountSectionsInto: failed to attach {Name}", fe.Name);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns the detached account/data sections to PatreonTab so their
+        /// x:Name references stay valid and they can be borrowed again next time
+        /// the popup opens. Called when the App Info &amp; Data popup closes.
+        /// </summary>
+        internal void ReattachAccountSections()
+        {
+            if (_detachedAccountSections.Count == 0 || PatreonTabContent == null) return;
+
+            // Insert right after the header Grid (index 0), preserving the original order.
+            int insertAt = 1;
+            foreach (var fe in _detachedAccountSections)
+            {
+                if (fe.Parent is System.Windows.Controls.Panel currentParent)
+                    currentParent.Children.Remove(fe);
+
+                if (insertAt > PatreonTabContent.Children.Count)
+                    insertAt = PatreonTabContent.Children.Count;
+                PatreonTabContent.Children.Insert(insertAt, fe);
+                insertAt++;
+            }
+            _detachedAccountSections.Clear();
         }
 
         private async void BtnPatreonLogin_Click(object sender, RoutedEventArgs e)
@@ -4633,7 +5896,7 @@ namespace ConditioningControlPanel
                 {
                     // Link Patreon to existing account
                     BtnPatreonLogin.IsEnabled = false;
-                    BtnPatreonLogin.Content = "Connecting...";
+                    BtnPatreonLogin.Content = Loc.Get("login_connecting");
 
                     try
                     {
@@ -4703,7 +5966,7 @@ namespace ConditioningControlPanel
                 {
                     // Link Discord to existing account
                     BtnDiscordLogin.IsEnabled = false;
-                    BtnDiscordLogin.Content = "Connecting...";
+                    BtnDiscordLogin.Content = Loc.Get("login_connecting");
 
                     try
                     {
@@ -4751,15 +6014,15 @@ namespace ConditioningControlPanel
                 var discordDisplayName = App.Settings?.Current?.UserDisplayName ?? App.Discord.DisplayName;
                 TxtDiscordStatus.Text = $"Connected as {discordDisplayName}";
                 TxtDiscordInfo.Text = $"@{App.Discord.Username}";
-                BtnDiscordLogin.Content = "Logout";
+                BtnDiscordLogin.Content = Loc.Get("btn_logout");
             }
             else
             {
                 // Check if user is logged in with another provider (has unified_id)
                 var hasUnifiedId = !string.IsNullOrEmpty(App.Settings?.Current?.UnifiedId);
 
-                TxtDiscordStatus.Text = "Not Connected";
-                TxtDiscordInfo.Text = "Link Discord for community features";
+                TxtDiscordStatus.Text = Loc.Get("label_not_connected");
+                TxtDiscordInfo.Text = Loc.Get("label_link_discord_for_community_features");
 
                 // Show "Link Discord" if logged in via Patreon, otherwise "Login"
                 BtnDiscordLogin.Content = hasUnifiedId ? "Link Discord" : "Login";
@@ -4804,7 +6067,7 @@ namespace ConditioningControlPanel
             if (App.Patreon == null) return;
 
             BtnLinkPatreon.IsEnabled = false;
-            BtnLinkPatreon.Content = "Connecting...";
+            BtnLinkPatreon.Content = Loc.Get("login_connecting");
 
             try
             {
@@ -4834,7 +6097,7 @@ namespace ConditioningControlPanel
             finally
             {
                 BtnLinkPatreon.IsEnabled = true;
-                BtnLinkPatreon.Content = "⭐ Link Patreon";
+                BtnLinkPatreon.Content = Loc.Get("btn_link_patreon");
             }
         }
 
@@ -4846,7 +6109,7 @@ namespace ConditioningControlPanel
             if (App.Discord == null) return;
 
             BtnLinkDiscord.IsEnabled = false;
-            BtnLinkDiscord.Content = "Connecting...";
+            BtnLinkDiscord.Content = Loc.Get("login_connecting");
 
             try
             {
@@ -4876,7 +6139,7 @@ namespace ConditioningControlPanel
             finally
             {
                 BtnLinkDiscord.IsEnabled = true;
-                BtnLinkDiscord.Content = "🎮 Link Discord";
+                BtnLinkDiscord.Content = Loc.Get("btn_link_discord");
             }
         }
 
@@ -4887,7 +6150,7 @@ namespace ConditioningControlPanel
             if (App.ProfileSync == null) return;
 
             BtnBackupSettingsNow.IsEnabled = false;
-            BtnBackupSettingsNow.Content = "Backing up...";
+            BtnBackupSettingsNow.Content = Loc.Get("btn_backing_up");
 
             try
             {
@@ -4896,8 +6159,8 @@ namespace ConditioningControlPanel
                 if (success)
                 {
                     MessageBox.Show(
-                        "Settings backed up to cloud successfully!",
-                        "Backup Complete",
+                        Loc.Get("msg_settings_backed_up_to_cloud_successfully"),
+                        Loc.Get("title_backup_complete"),
                         MessageBoxButton.OK,
                         MessageBoxImage.Information);
 
@@ -4906,8 +6169,8 @@ namespace ConditioningControlPanel
                 else
                 {
                     MessageBox.Show(
-                        "Failed to backup settings. Please try again later.",
-                        "Backup Failed",
+                        Loc.Get("msg_failed_to_backup_settings"),
+                        Loc.Get("title_backup_failed"),
                         MessageBoxButton.OK,
                         MessageBoxImage.Warning);
                 }
@@ -4916,15 +6179,15 @@ namespace ConditioningControlPanel
             {
                 App.Logger?.Warning(ex, "Manual settings backup failed");
                 MessageBox.Show(
-                    $"Backup failed: {ex.Message}",
-                    "Backup Error",
+                    Loc.GetF("msg_backup_failed_0", ex.Message),
+                    Loc.Get("title_backup_error"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }
             finally
             {
                 BtnBackupSettingsNow.IsEnabled = true;
-                BtnBackupSettingsNow.Content = "☁ Backup Now";
+                BtnBackupSettingsNow.Content = Loc.Get("btn_backup_now");
             }
         }
 
@@ -4933,17 +6196,15 @@ namespace ConditioningControlPanel
             if (App.ProfileSync == null) return;
 
             var confirm = MessageBox.Show(
-                "This will replace your current settings with the cloud backup.\n\n" +
-                "Your progression (level, XP, skills) will NOT be affected.\n\n" +
-                "Are you sure you want to restore?",
-                "Restore Settings from Cloud",
+                Loc.Get("msg_restore_settings_confirm"),
+                Loc.Get("title_restore_settings_from_cloud"),
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question);
 
             if (confirm != MessageBoxResult.Yes) return;
 
             BtnRestoreSettings.IsEnabled = false;
-            BtnRestoreSettings.Content = "Restoring...";
+            BtnRestoreSettings.Content = Loc.Get("btn_restoring");
 
             try
             {
@@ -4952,8 +6213,8 @@ namespace ConditioningControlPanel
                 if (restored == null)
                 {
                     MessageBox.Show(
-                        "No cloud backup found or restore failed.",
-                        "Restore Failed",
+                        Loc.Get("msg_no_cloud_backup_found_or_restore_failed"),
+                        Loc.Get("title_restore_failed"),
                         MessageBoxButton.OK,
                         MessageBoxImage.Warning);
                     return;
@@ -4986,8 +6247,8 @@ namespace ConditioningControlPanel
                 _isLoading = false;
 
                 MessageBox.Show(
-                    "Settings restored from cloud! Some changes may require a restart to take full effect.",
-                    "Settings Restored",
+                    Loc.Get("msg_settings_restored_from_cloud"),
+                    Loc.Get("title_settings_restored"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
             }
@@ -4995,15 +6256,15 @@ namespace ConditioningControlPanel
             {
                 App.Logger?.Warning(ex, "Manual settings restore failed");
                 MessageBox.Show(
-                    $"Restore failed: {ex.Message}",
-                    "Restore Error",
+                    Loc.GetF("msg_restore_failed_0", ex.Message),
+                    Loc.Get("title_restore_error"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }
             finally
             {
                 BtnRestoreSettings.IsEnabled = true;
-                BtnRestoreSettings.Content = "Restore from Cloud";
+                BtnRestoreSettings.Content = Loc.Get("btn_restore_from_cloud");
             }
         }
 
@@ -5012,7 +6273,7 @@ namespace ConditioningControlPanel
             if (App.ProfileSync == null) return;
 
             BtnExportData.IsEnabled = false;
-            BtnExportData.Content = "Exporting...";
+            BtnExportData.Content = Loc.Get("btn_exporting");
 
             try
             {
@@ -5021,8 +6282,8 @@ namespace ConditioningControlPanel
                 if (!success || jsonData == null)
                 {
                     MessageBox.Show(
-                        error ?? "Failed to export data.",
-                        "Export Failed",
+                        error ?? Loc.Get("msg_failed_to_export_data"),
+                        Loc.Get("title_export_failed"),
                         MessageBoxButton.OK,
                         MessageBoxImage.Warning);
                     return;
@@ -5032,15 +6293,15 @@ namespace ConditioningControlPanel
                 {
                     FileName = $"my-data-export-{DateTime.Now:yyyy-MM-dd}.json",
                     Filter = "JSON files (*.json)|*.json",
-                    Title = "Save Data Export"
+                    Title = Loc.Get("title_save_data_export")
                 };
 
                 if (dialog.ShowDialog() == true)
                 {
                     File.WriteAllText(dialog.FileName, jsonData);
                     MessageBox.Show(
-                        $"Data exported to:\n{dialog.FileName}",
-                        "Export Complete",
+                        Loc.GetF("msg_data_exported_to_0", dialog.FileName),
+                        Loc.Get("title_export_complete"),
                         MessageBoxButton.OK,
                         MessageBoxImage.Information);
                 }
@@ -5049,15 +6310,15 @@ namespace ConditioningControlPanel
             {
                 App.Logger?.Warning(ex, "Data export failed");
                 MessageBox.Show(
-                    $"Export failed: {ex.Message}",
-                    "Export Error",
+                    Loc.GetF("msg_export_failed_0", ex.Message),
+                    Loc.Get("title_export_error"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             }
             finally
             {
                 BtnExportData.IsEnabled = true;
-                BtnExportData.Content = "Export My Data";
+                BtnExportData.Content = Loc.Get("btn_export_my_data");
             }
         }
 
@@ -5067,7 +6328,7 @@ namespace ConditioningControlPanel
             {
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = "https://codebambi.github.io/Conditioning-Control-Panel---CSharp-WPF/privacy-policy.html",
+                    FileName = "https://cclabs.app/privacy-policy.html",
                     UseShellExecute = true
                 });
             }
@@ -5088,17 +6349,17 @@ namespace ConditioningControlPanel
                 if (info?.BackedUpAt != null)
                 {
                     var dateStr = info.BackedUpAt.Value.ToLocalTime().ToString("MMM d, yyyy h:mm tt");
-                    TxtCloudBackupStatus.Text = $"Last backup: {dateStr} (v{info.AppVersion})";
+                    TxtCloudBackupStatus.Text = Loc.GetF("label_last_backup_0_v_1", dateStr, info.AppVersion);
                 }
                 else
                 {
-                    TxtCloudBackupStatus.Text = "No cloud backup found. Back up your settings to protect them.";
+                    TxtCloudBackupStatus.Text = Loc.Get("label_no_cloud_backup_found_back_up_your_settings_t");
                 }
             }
             catch (Exception ex)
             {
                 App.Logger?.Debug("Failed to update backup status: {Error}", ex.Message);
-                TxtCloudBackupStatus.Text = "Could not check backup status.";
+                TxtCloudBackupStatus.Text = Loc.Get("label_could_not_check_backup_status");
             }
         }
 
@@ -5306,13 +6567,13 @@ namespace ConditioningControlPanel
             // Update button and status text
             if (_avatarTubeWindow.IsDetached)
             {
-                BtnDetachCompanionTab.Content = "Attach";
-                TxtDetachStatusCompanion.Text = "Floating freely - drag to reposition";
+                BtnDetachCompanionTab.Content = Loc.Get("btn_attach");
+                TxtDetachStatusCompanion.Text = Loc.Get("label_floating_freely_drag_to_reposition");
             }
             else
             {
-                BtnDetachCompanionTab.Content = "Detach";
-                TxtDetachStatusCompanion.Text = "Anchored to window";
+                BtnDetachCompanionTab.Content = Loc.Get("btn_detach");
+                TxtDetachStatusCompanion.Text = Loc.Get("label_anchored_to_window");
             }
         }
 
@@ -5337,8 +6598,7 @@ namespace ConditioningControlPanel
 
         private void UpdatePhraseCountDisplay()
         {
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var count = App.CompanionPhrases?.GetActivePhraseCount(mode) ?? 0;
+            var count = App.CompanionPhrases?.GetActivePhraseCount() ?? 0;
             TxtPhraseCount.Text = $"{count} active";
         }
 
@@ -5476,12 +6736,12 @@ namespace ConditioningControlPanel
             if (TxtPrivacyDetails.Visibility == Visibility.Collapsed)
             {
                 TxtPrivacyDetails.Visibility = Visibility.Visible;
-                BtnPrivacySpoiler.Content = "▼ Hide";
+                BtnPrivacySpoiler.Content = Loc.Get("btn_hide");
             }
             else
             {
                 TxtPrivacyDetails.Visibility = Visibility.Collapsed;
-                BtnPrivacySpoiler.Content = "▶ Click to reveal";
+                BtnPrivacySpoiler.Content = Loc.Get("btn_click_to_reveal");
             }
         }
 
@@ -5507,8 +6767,8 @@ namespace ConditioningControlPanel
             {
                 ChkHapticsEnabled.IsChecked = false;
                 MessageBox.Show(
-                    "Haptic feedback is available for Patreon supporters.",
-                    "Patreon Feature",
+                    Loc.Get("msg_haptic_feedback_patreon_only"),
+                    Loc.Get("title_patreon_feature"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
                 return;
@@ -5649,8 +6909,8 @@ namespace ConditioningControlPanel
             {
                 TxtHapticUrlHint.Text = tag switch
                 {
-                    "Lovense" => "Lovense: Enter IP from Lovense Remote → Settings → Game Mode (http://IP:30010)",
-                    "Buttplug" => "Buttplug: Start Intiface Central, use default ws://localhost:12345",
+                    "Lovense" => Loc.Get("label_lovense_hint"),
+                    "Buttplug" => Loc.Get("label_buttplug_hint"),
                     _ => ""
                 };
             }
@@ -5673,8 +6933,8 @@ namespace ConditioningControlPanel
             if (App.Patreon?.HasPremiumAccess != true)
             {
                 MessageBox.Show(
-                    "Haptic feedback is available for Patreon supporters.",
-                    "Patreon Feature",
+                    Loc.Get("msg_haptic_feedback_patreon_only"),
+                    Loc.Get("title_patreon_feature"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
                 return;
@@ -5685,15 +6945,15 @@ namespace ConditioningControlPanel
             if (App.Haptics.IsConnected)
             {
                 await App.Haptics.DisconnectAsync();
-                BtnHapticConnect.Content = "Connect";
-                TxtHapticStatus.Text = "Disconnected";
+                BtnHapticConnect.Content = Loc.Get("btn_connect");
+                TxtHapticStatus.Text = Loc.Get("label_disconnected");
                 TxtHapticStatus.Foreground = new System.Windows.Media.SolidColorBrush(
                     System.Windows.Media.Color.FromRgb(0xFF, 0x6B, 0x6B));
-                TxtHapticDevices.Text = "No devices";
+                TxtHapticDevices.Text = Loc.Get("label_no_devices");
             }
             else
             {
-                BtnHapticConnect.Content = "Connecting...";
+                BtnHapticConnect.Content = Loc.Get("login_connecting");
                 BtnHapticConnect.IsEnabled = false;
 
                 try
@@ -5702,28 +6962,28 @@ namespace ConditioningControlPanel
 
                     if (success)
                     {
-                        BtnHapticConnect.Content = "Disconnect";
-                        TxtHapticStatus.Text = "Connected";
+                        BtnHapticConnect.Content = Loc.Get("btn_disconnect");
+                        TxtHapticStatus.Text = Loc.Get("label_connected");
                         TxtHapticStatus.Foreground = new System.Windows.Media.SolidColorBrush(
                             System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
 
                         var devices = App.Haptics.ConnectedDevices;
                         TxtHapticDevices.Text = devices.Count > 0
                             ? string.Join(", ", devices)
-                            : "No devices found";
+                            : Loc.Get("label_no_devices_found");
                     }
                     else
                     {
-                        BtnHapticConnect.Content = "Connect";
-                        TxtHapticStatus.Text = "Failed";
+                        BtnHapticConnect.Content = Loc.Get("btn_connect");
+                        TxtHapticStatus.Text = Loc.Get("label_failed");
                         TxtHapticStatus.Foreground = new System.Windows.Media.SolidColorBrush(
                             System.Windows.Media.Color.FromRgb(0xFF, 0x6B, 0x6B));
                     }
                 }
                 catch (Exception ex)
                 {
-                    BtnHapticConnect.Content = "Connect";
-                    TxtHapticStatus.Text = "Error";
+                    BtnHapticConnect.Content = Loc.Get("btn_connect");
+                    TxtHapticStatus.Text = Loc.Get("label_error");
                     TxtHapticDevices.Text = ex.Message;
                 }
                 finally
@@ -5733,7 +6993,6 @@ namespace ConditioningControlPanel
             }
         }
 
-        private System.Threading.CancellationTokenSource? _hapticSliderCts;
         private System.Windows.Threading.DispatcherTimer? _hapticSliderDebounce;
 
         private void SliderHapticIntensity_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -5767,7 +7026,7 @@ namespace ConditioningControlPanel
 
             if (!App.Haptics.IsConnected)
             {
-                MessageBox.Show("Connect to a device first.", "Not Connected", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(Loc.Get("msg_connect_to_a_device_first"), Loc.Get("label_not_connected"), MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
@@ -5962,8 +7221,8 @@ namespace ConditioningControlPanel
                 if (!KeywordTriggerService.HasAccess())
                 {
                     MessageBox.Show(
-                        "Keyword Triggers are available for Patreon supporters.",
-                        "Patreon Feature",
+                        Loc.Get("msg_keyword_triggers_patreon_only"),
+                        Loc.Get("title_patreon_feature"),
                         MessageBoxButton.OK,
                         MessageBoxImage.Information);
                     return;
@@ -5997,12 +7256,12 @@ namespace ConditioningControlPanel
             if (BtnKeywordTriggersStartStop == null) return;
             var running = App.Settings?.Current?.KeywordTriggersEnabled == true;
 
-            BtnKeywordTriggersStartStop.Content = running ? "Stop" : "Start";
+            BtnKeywordTriggersStartStop.Content = running ? Loc.Get("btn_stop") : Loc.Get("btn_start");
             BtnKeywordTriggersStartStop.Background = running
                 ? new System.Windows.Media.SolidColorBrush(
                     (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#555555"))
                 : new System.Windows.Media.SolidColorBrush(
-                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#FF69B4"));
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4"));
         }
 
         private void SliderKeywordBufferTimeout_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -6019,6 +7278,34 @@ namespace ConditioningControlPanel
             var value = (int)SliderKeywordGlobalCooldown.Value;
             TxtKeywordGlobalCooldown.Text = $"{value}s";
             App.Settings.Current.KeywordGlobalCooldownSeconds = value;
+        }
+
+        private void SliderAwarenessGlobalCooldown_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_isLoading || TxtAwarenessGlobalCooldown == null) return;
+            var value = (int)SliderAwarenessGlobalCooldown.Value;
+            TxtAwarenessGlobalCooldown.Text = $"{value}s";
+            if (App.Settings?.Current != null)
+            {
+                App.Settings.Current.KeywordGlobalCooldownSeconds = value;
+                App.Settings.Save();
+                // Mirror into the Settings-tab slider so both controls stay in sync
+                // even if the Settings tab has already been bound this session.
+                if (SliderKeywordGlobalCooldown != null && (int)SliderKeywordGlobalCooldown.Value != value)
+                    SliderKeywordGlobalCooldown.Value = value;
+            }
+        }
+
+        private void SliderAwarenessSameWordCooldown_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_isLoading || TxtAwarenessSameWordCooldown == null) return;
+            var value = (int)SliderAwarenessSameWordCooldown.Value;
+            TxtAwarenessSameWordCooldown.Text = $"{value}s";
+            if (App.Settings?.Current != null)
+            {
+                App.Settings.Current.KeywordPerKeywordCooldownSeconds = value;
+                App.Settings.Save();
+            }
         }
 
         private void SliderKeywordSessionMultiplier_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -6038,8 +7325,8 @@ namespace ConditioningControlPanel
             {
                 ChkScreenOcrEnabled.IsChecked = false;
                 MessageBox.Show(
-                    "Screen OCR requires Patreon access.",
-                    "Patreon Feature",
+                    Loc.Get("msg_screen_ocr_patreon_only"),
+                    Loc.Get("title_patreon_feature"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
                 return;
@@ -6114,6 +7401,7 @@ namespace ConditioningControlPanel
                 XPAward = 10
             };
 
+            KeywordTriggerService.RebuildActionsFromFlatFields(newTrigger);
             triggers.Add(newTrigger);
             App.Settings.Save();
             RefreshKeywordTriggerList();
@@ -6124,8 +7412,8 @@ namespace ConditioningControlPanel
             var imported = App.KeywordTriggers?.ImportFromCustomTriggers();
             if (imported == null || imported.Count == 0)
             {
-                MessageBox.Show("No new triggers to import. All existing trigger phrases are already in your keyword triggers list.",
-                    "Import Complete", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(Loc.Get("msg_no_new_triggers_to_import_all_existing_trigge"),
+                    Loc.Get("title_import_complete"), MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
@@ -6134,8 +7422,8 @@ namespace ConditioningControlPanel
             App.Settings.Save();
             RefreshKeywordTriggerList();
 
-            MessageBox.Show($"Imported {imported.Count} trigger(s) from your Trigger Mode list.",
-                "Import Complete", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(Loc.GetF("msg_imported_0_trigger_s_from_your_trigger_mode_l", imported.Count),
+                Loc.Get("title_import_complete"), MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void BtnDeleteKeywordTrigger_Click(object sender, RoutedEventArgs e)
@@ -6187,6 +7475,7 @@ namespace ConditioningControlPanel
                     trigger.AudioFilePath = App.KeywordTriggers?.FindLinkedAudio(txt.Text);
                 }
 
+                KeywordTriggerService.RebuildActionsFromFlatFields(trigger);
                 App.Settings.Save();
             }
         }
@@ -6203,12 +7492,13 @@ namespace ConditioningControlPanel
             var dlg = new Microsoft.Win32.OpenFileDialog
             {
                 Filter = "Audio Files|*.mp3;*.wav;*.ogg|All Files|*.*",
-                Title = "Select Trigger Audio File"
+                Title = Loc.Get("title_select_trigger_audio")
             };
 
             if (dlg.ShowDialog() == true)
             {
                 trigger.AudioFilePath = dlg.FileName;
+                KeywordTriggerService.RebuildActionsFromFlatFields(trigger);
                 App.Settings.Save();
                 RefreshKeywordTriggerList();
             }
@@ -6225,6 +7515,7 @@ namespace ConditioningControlPanel
             if (trigger != null)
             {
                 trigger.VisualEffect = (KeywordVisualEffect)cmb.SelectedIndex;
+                KeywordTriggerService.RebuildActionsFromFlatFields(trigger);
                 App.Settings.Save();
             }
         }
@@ -6255,6 +7546,7 @@ namespace ConditioningControlPanel
             if (trigger != null)
             {
                 trigger.AudioVolume = (int)slider.Value;
+                KeywordTriggerService.RebuildActionsFromFlatFields(trigger);
                 App.Settings.Save();
             }
         }
@@ -6270,6 +7562,7 @@ namespace ConditioningControlPanel
             if (trigger != null)
             {
                 trigger.HapticEnabled = chk.IsChecked == true;
+                KeywordTriggerService.RebuildActionsFromFlatFields(trigger);
                 App.Settings.Save();
             }
         }
@@ -6285,6 +7578,7 @@ namespace ConditioningControlPanel
             if (trigger != null)
             {
                 trigger.DuckAudio = chk.IsChecked == true;
+                KeywordTriggerService.RebuildActionsFromFlatFields(trigger);
                 App.Settings.Save();
             }
         }
@@ -6297,8 +7591,13 @@ namespace ConditioningControlPanel
             var triggers = App.Settings?.Current?.KeywordTriggers;
             if (triggers == null) return;
 
+            // Filter out preset clones (Id prefix "preset:") — those are managed
+            // via their own preset detail dialogs on the Awareness tab. The
+            // Exclusives trigger list is for user-authored custom triggers only,
+            // so installing/uninstalling a preset pack never pollutes this list.
             foreach (var trigger in triggers)
             {
+                if (trigger?.Id?.StartsWith("preset:", StringComparison.Ordinal) == true) continue;
                 var row = CreateKeywordTriggerRow(trigger);
                 KeywordTriggerListPanel.Children.Add(row);
             }
@@ -6490,6 +7789,865 @@ namespace ConditioningControlPanel
 
         #endregion
 
+        #region Awareness Engine Tab
+
+        private bool _awarenessSubscribed;
+
+        /// <summary>
+        /// Called each time the Awareness tab is opened. Loads current settings
+        /// into the toggles, refreshes the pulse feed, and subscribes to fire events.
+        /// </summary>
+        private void SyncAwarenessTabUI()
+        {
+            // Toggle the premium gating overlay based on current subscription state.
+            RefreshPremiumGate(AwarenessGate);
+
+            var settings = App.Settings?.Current;
+            if (settings == null) return;
+
+            _isLoading = true;
+            try
+            {
+                bool masterOn = settings.KeywordTriggersEnabled;
+                if (ChkAwarenessMaster != null) ChkAwarenessMaster.IsChecked = masterOn;
+                if (ChkAwarenessOcr != null) ChkAwarenessOcr.IsChecked = settings.ScreenOcrEnabled;
+                if (ChkAwarenessKeyboard != null) ChkAwarenessKeyboard.IsChecked = settings.KeywordTriggersEnabled;
+                if (ChkAwarenessIgnoreOwnUi != null) ChkAwarenessIgnoreOwnUi.IsChecked = settings.AwarenessIgnoreOwnUi;
+                if (ChkAwarenessLoopProtection != null) ChkAwarenessLoopProtection.IsChecked = settings.AwarenessLoopProtectionEnabled;
+                if (ChkAwarenessHighlight != null) ChkAwarenessHighlight.IsChecked = settings.KeywordHighlightEnabled;
+                if (ChkAwarenessHighlightVisibleInCapture != null) ChkAwarenessHighlightVisibleInCapture.IsChecked = settings.OcrHighlightVisibleInCapture;
+                SyncAwarenessHighlightSwatchUi();
+
+                if (SliderAwarenessGlobalCooldown != null)
+                {
+                    var v = Math.Clamp(settings.KeywordGlobalCooldownSeconds, 1, 180);
+                    SliderAwarenessGlobalCooldown.Value = v;
+                    if (TxtAwarenessGlobalCooldown != null) TxtAwarenessGlobalCooldown.Text = $"{v}s";
+                }
+                if (SliderAwarenessSameWordCooldown != null)
+                {
+                    var v = Math.Clamp(settings.KeywordPerKeywordCooldownSeconds, 1, 180);
+                    SliderAwarenessSameWordCooldown.Value = v;
+                    if (TxtAwarenessSameWordCooldown != null) TxtAwarenessSameWordCooldown.Text = $"{v}s";
+                }
+
+                UpdateAwarenessStatusIndicator(masterOn);
+            }
+            finally
+            {
+                _isLoading = false;
+            }
+
+            // Subscribe once to fire events so the feed refreshes live while the tab is open.
+            if (!_awarenessSubscribed && App.KeywordTriggers != null)
+            {
+                App.KeywordTriggers.TriggerFired += OnAwarenessTriggerFired;
+                _awarenessSubscribed = true;
+            }
+
+            // Subscribe once to preset install/uninstall events so the Exclusives
+            // trigger list and the Awareness preset cards both stay in sync with
+            // whatever the user does in a preset detail dialog, regardless of
+            // which tab they're on when the change happens.
+            if (!_presetsChangedSubscribed && App.KeywordPresets != null)
+            {
+                App.KeywordPresets.PresetsChanged += OnPresetsChanged;
+                _presetsChangedSubscribed = true;
+            }
+
+            RefreshAwarenessPulseFeed();
+            RefreshAwarenessPresetCards();
+        }
+
+        private bool _presetsChangedSubscribed;
+
+        private void OnPresetsChanged(object? sender, EventArgs e)
+        {
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher == null || dispatcher.HasShutdownStarted) return;
+            dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    RefreshKeywordTriggerList();     // Exclusives trigger list — drops removed preset clones
+                    RefreshAwarenessPresetCards();   // Awareness tab card highlights
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Debug("OnPresetsChanged refresh failed: {Error}", ex.Message);
+                }
+            }));
+        }
+
+        private void OnAwarenessTriggerFired(object? sender, KeywordTrigger trigger)
+        {
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher == null || dispatcher.HasShutdownStarted) return;
+            dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (AwarenessTab?.Visibility == Visibility.Visible)
+                    RefreshAwarenessPulseFeed();
+            }));
+        }
+
+        private void RefreshAwarenessPulseFeed()
+        {
+            if (AwarenessPulseFeed == null) return;
+
+            var fires = App.KeywordTriggers?.GetRecentFires();
+            AwarenessPulseFeed.Children.Clear();
+
+            if (fires == null || fires.Count == 0)
+            {
+                if (TxtAwarenessPulseEmpty == null)
+                {
+                    var empty = new TextBlock
+                    {
+                        Text = "Nothing yet. Enable the engine and she'll start noticing things.",
+                        Foreground = (System.Windows.Media.Brush)FindResource("TextMutedBrush"),
+                        FontSize = 12,
+                        FontStyle = FontStyles.Italic,
+                        TextAlignment = TextAlignment.Center,
+                        Margin = new Thickness(0, 18, 0, 18)
+                    };
+                    AwarenessPulseFeed.Children.Add(empty);
+                }
+                else
+                {
+                    AwarenessPulseFeed.Children.Add(TxtAwarenessPulseEmpty);
+                }
+                if (TxtAwarenessFireCount != null) TxtAwarenessFireCount.Text = "";
+                return;
+            }
+
+            // Show up to 5 most recent fires
+            int shown = 0;
+            foreach (var f in fires)
+            {
+                if (shown >= 5) break;
+                AwarenessPulseFeed.Children.Add(BuildPulseRow(f));
+                shown++;
+            }
+
+            if (TxtAwarenessFireCount != null)
+                TxtAwarenessFireCount.Text = fires.Count == 1 ? "1 fire today" : $"{fires.Count} fires today";
+        }
+
+        private Border BuildPulseRow(TriggerFireRecord f)
+        {
+            var row = new Border
+            {
+                Background = (System.Windows.Media.Brush)FindResource("DarkerBgBrush"),
+                BorderBrush = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#2A2A40")),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(12, 8, 12, 8),
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });   // 0 accent bar
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });     // 1 keyword
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });     // 2 action chips
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // 3 filler
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });     // 4 source chip
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });     // 5 time
+
+            // Pink accent bar
+            var dot = new System.Windows.Shapes.Rectangle
+            {
+                Width = 3,
+                Height = 16,
+                Fill = (System.Windows.Media.Brush)FindResource("PinkBrush"),
+                VerticalAlignment = VerticalAlignment.Center,
+                RadiusX = 1.5,
+                RadiusY = 1.5
+            };
+            Grid.SetColumn(dot, 0);
+            grid.Children.Add(dot);
+
+            // Quote marks around the keyword
+            var keywordBlock = new TextBlock
+            {
+                Text = $"\"{f.Keyword}\"",
+                Foreground = System.Windows.Media.Brushes.White,
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(10, 0, 0, 0)
+            };
+            Grid.SetColumn(keywordBlock, 1);
+            grid.Children.Add(keywordBlock);
+
+            // Action chip strip — one small emoji per action the trigger fired,
+            // with a tooltip explaining what the action does on hover.
+            var chipStrip = BuildActionChipStrip(f.ActionKeys);
+            Grid.SetColumn(chipStrip, 2);
+            grid.Children.Add(chipStrip);
+
+            // Source chip
+            var sourceChip = new Border
+            {
+                Background = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#2A2A4A")),
+                CornerRadius = new CornerRadius(3),
+                Padding = new Thickness(6, 2, 6, 2),
+                Margin = new Thickness(10, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            sourceChip.Child = new TextBlock
+            {
+                Text = f.Source.ToUpperInvariant(),
+                Foreground = (System.Windows.Media.Brush)FindResource("TextDimBrush"),
+                FontSize = 9,
+                FontWeight = FontWeights.Bold
+            };
+            Grid.SetColumn(sourceChip, 4);
+            grid.Children.Add(sourceChip);
+
+            // Time ago
+            var timeBlock = new TextBlock
+            {
+                Text = FormatTimeAgo(f.FiredAt),
+                Foreground = (System.Windows.Media.Brush)FindResource("TextMutedBrush"),
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(10, 0, 0, 0)
+            };
+            Grid.SetColumn(timeBlock, 5);
+            grid.Children.Add(timeBlock);
+
+            row.Child = grid;
+            return row;
+        }
+
+        /// <summary>
+        /// Builds a horizontal row of small emoji "chip" icons representing every
+        /// action the trigger fired. Each chip has a tooltip that explains what
+        /// the action does when hovered. The emoji/tooltip map is kept in
+        /// <see cref="GetActionChipDisplay"/> so it can be extended as new
+        /// action types are added.
+        /// </summary>
+        private StackPanel BuildActionChipStrip(List<string> actionKeys)
+        {
+            var strip = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 0, 0, 0)
+            };
+
+            if (actionKeys == null || actionKeys.Count == 0) return strip;
+
+            foreach (var key in actionKeys)
+            {
+                var (icon, tooltip) = GetActionChipDisplay(key);
+                if (string.IsNullOrEmpty(icon)) continue;
+
+                var chip = new TextBlock
+                {
+                    Text = icon,
+                    FontSize = 13,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 4, 0),
+                    ToolTip = tooltip,
+                };
+                // Surface the tooltip after a short hover delay.
+                ToolTipService.SetInitialShowDelay(chip, 200);
+                ToolTipService.SetBetweenShowDelay(chip, 0);
+
+                strip.Children.Add(chip);
+            }
+
+            return strip;
+        }
+
+        /// <summary>
+        /// Returns the (emoji, tooltip) display pair for a fire-record action key.
+        /// Keys come from <c>KeywordTriggerService.BuildActionKeySnapshot</c> and
+        /// look like <c>"PlayAudio"</c>, <c>"VisualEffect:ImageFlash"</c>, <c>"AddXp:5"</c>.
+        /// Returns empty values for unknown keys so the chip strip silently skips them.
+        /// </summary>
+        private static (string icon, string tooltip) GetActionChipDisplay(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return ("", "");
+
+            // Parse leading discriminator and optional ":argument"
+            var colon = key.IndexOf(':');
+            var type = colon < 0 ? key : key.Substring(0, colon);
+            var arg = colon < 0 ? "" : key.Substring(colon + 1);
+
+            return type switch
+            {
+                "PlayAudio"      => ("🔊", "Plays an audio clip when the word is detected"),
+                "Highlight"      => ("👁", "Draws a glowing box around the matched word on screen (OCR matches only)"),
+                "Haptic"         => ("💥", "Fires a haptic vibration pattern on connected devices"),
+                // "AddXp" intentionally omitted — progression XP is an internal mechanic,
+                // not a user-facing trigger effect.
+                "AvatarComment"  => ("💬", "Makes the avatar comment on the matched word (AI + canned fallback)"),
+                "ExtendSession"  => ("⏱", string.IsNullOrEmpty(arg)
+                                        ? "Extends the current session"
+                                        : $"Extends the current session by {arg} minutes"),
+                "ChasterAddTime" => ("🔒", string.IsNullOrEmpty(arg)
+                                        ? "Adds time to the Chaster lock"
+                                        : $"Adds {arg} minutes to the Chaster lock"),
+                "VisualEffect"   => arg switch
+                {
+                    "SubliminalFlash" => ("✨", "Flashes a random word from your subliminal pool"),
+                    "ExactSubliminal" => ("🔤", "Flashes the matched keyword itself as subliminal text"),
+                    "ImageFlash"      => ("⚡", "Fires a flash burst image when the word is detected"),
+                    "OverlayPulse"    => ("🌫", "Briefly intensifies the screen overlay"),
+                    "MindWipe"        => ("🧠", "Triggers the MindWipe effect"),
+                    "Bubbles"         => ("🫧", "Spawns bubbles on screen"),
+                    _                 => ("✨", $"Fires visual effect: {arg}"),
+                },
+                _ => ("", ""),
+            };
+        }
+
+        private static string FormatTimeAgo(DateTime t)
+        {
+            var delta = DateTime.Now - t;
+            if (delta.TotalSeconds < 10) return "just now";
+            if (delta.TotalSeconds < 60) return $"{(int)delta.TotalSeconds}s ago";
+            if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+            if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+            return t.ToString("HH:mm");
+        }
+
+        private void UpdateAwarenessStatusIndicator(bool on)
+        {
+            if (AwarenessStatusDot == null || TxtAwarenessStatus == null) return;
+            if (on)
+            {
+                AwarenessStatusDot.Fill = (System.Windows.Media.Brush)FindResource("PinkBrush");
+                TxtAwarenessStatus.Text = "Live";
+                TxtAwarenessStatus.Foreground = (System.Windows.Media.Brush)FindResource("PinkBrush");
+            }
+            else
+            {
+                AwarenessStatusDot.Fill = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#606060"));
+                TxtAwarenessStatus.Text = "Off";
+                TxtAwarenessStatus.Foreground = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#A0A0A0"));
+            }
+        }
+
+        private void ChkAwarenessMaster_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            bool on = ChkAwarenessMaster?.IsChecked == true;
+
+            if (on && !KeywordTriggerService.HasAccess())
+            {
+                _isLoading = true;
+                try { ChkAwarenessMaster!.IsChecked = false; }
+                finally { _isLoading = false; }
+                MessageBox.Show(
+                    Loc.Get("msg_keyword_triggers_patreon_only"),
+                    Loc.Get("title_patreon_feature"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            var settings = App.Settings?.Current;
+            if (settings == null) return;
+
+            if (on)
+            {
+                settings.KeywordTriggersEnabled = true;
+                App.KeywordTriggers?.Start();
+                _keyboardHook?.Start();
+                if (settings.ScreenOcrEnabled)
+                    App.ScreenOcr?.Start();
+            }
+            else
+            {
+                settings.KeywordTriggersEnabled = false;
+                App.KeywordTriggers?.Stop();
+                App.ScreenOcr?.Stop();
+                if (settings.PanicKeyEnabled != true)
+                    _keyboardHook?.Stop();
+            }
+
+            // Keep the sub-toggle in sync with master so the UI reads consistently.
+            _isLoading = true;
+            try
+            {
+                if (ChkAwarenessKeyboard != null) ChkAwarenessKeyboard.IsChecked = on;
+            }
+            finally { _isLoading = false; }
+
+            UpdateAwarenessStatusIndicator(on);
+            UpdateKeywordTriggersButtonState();
+            App.Settings?.Save();
+        }
+
+        private void ChkAwarenessOcr_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            bool on = ChkAwarenessOcr?.IsChecked == true;
+
+            if (on && !KeywordTriggerService.HasAccess())
+            {
+                _isLoading = true;
+                try { ChkAwarenessOcr!.IsChecked = false; }
+                finally { _isLoading = false; }
+                MessageBox.Show(
+                    Loc.Get("msg_screen_ocr_patreon_only"),
+                    Loc.Get("title_patreon_feature"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            var settings = App.Settings?.Current;
+            if (settings == null) return;
+            settings.ScreenOcrEnabled = on;
+
+            if (on && settings.KeywordTriggersEnabled)
+                App.ScreenOcr?.Start();
+            else
+                App.ScreenOcr?.Stop();
+
+            // Mirror into the legacy Exclusives OCR checkbox so both screens agree.
+            if (ChkScreenOcrEnabled != null && ChkScreenOcrEnabled.IsChecked != on)
+            {
+                _isLoading = true;
+                try { ChkScreenOcrEnabled.IsChecked = on; }
+                finally { _isLoading = false; }
+            }
+
+            App.Settings?.Save();
+        }
+
+        private void ChkAwarenessKeyboard_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            bool on = ChkAwarenessKeyboard?.IsChecked == true;
+            var settings = App.Settings?.Current;
+            if (settings == null) return;
+
+            // Keyboard is one signal source — toggle it independently of the master switch.
+            // If turning keyboard ON and master is OFF, turn master ON too.
+            if (on && ChkAwarenessMaster?.IsChecked != true)
+            {
+                ChkAwarenessMaster!.IsChecked = true; // triggers ChkAwarenessMaster_Changed
+            }
+            else if (!on)
+            {
+                // Turning keyboard off — just stop the keyboard hook if nothing else needs it.
+                // Don't turn off master (other sources like OCR may still be active).
+                if (settings.PanicKeyEnabled != true && !settings.ScreenOcrEnabled)
+                    _keyboardHook?.Stop();
+            }
+        }
+
+        private void ChkAwarenessIgnoreOwnUi_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            var settings = App.Settings?.Current;
+            if (settings == null) return;
+            settings.AwarenessIgnoreOwnUi = ChkAwarenessIgnoreOwnUi?.IsChecked == true;
+            App.Settings?.Save();
+        }
+
+        private void ChkAwarenessLoopProtection_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            var settings = App.Settings?.Current;
+            if (settings == null) return;
+            settings.AwarenessLoopProtectionEnabled = ChkAwarenessLoopProtection?.IsChecked == true;
+            App.Settings?.Save();
+        }
+
+        // ---- Awareness tab: on-screen keyword highlight toggle + color picker ----
+
+        private void ChkAwarenessHighlight_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            var settings = App.Settings?.Current;
+            if (settings == null) return;
+            settings.KeywordHighlightEnabled = ChkAwarenessHighlight?.IsChecked == true;
+            App.Settings?.Save();
+
+            // Keep the Exclusives-tab mirror checkbox in sync so both UIs agree.
+            if (ChkKeywordHighlightEnabled != null && ChkKeywordHighlightEnabled.IsChecked != settings.KeywordHighlightEnabled)
+                ChkKeywordHighlightEnabled.IsChecked = settings.KeywordHighlightEnabled;
+
+            SyncAwarenessHighlightSwatchUi();
+        }
+
+        private void ChkAwarenessHighlightVisibleInCapture_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            var settings = App.Settings?.Current;
+            if (settings == null) return;
+            settings.OcrHighlightVisibleInCapture = ChkAwarenessHighlightVisibleInCapture?.IsChecked == true;
+            App.Settings?.Save();
+
+            // Flip display affinity on all existing overlay windows immediately.
+            App.KeywordHighlight?.RefreshCaptureVisibility();
+
+            // Mirror the Exclusives-tab checkbox so both stay in agreement.
+            if (ChkHighlightVisibleInCapture != null && ChkHighlightVisibleInCapture.IsChecked != settings.OcrHighlightVisibleInCapture)
+                ChkHighlightVisibleInCapture.IsChecked = settings.OcrHighlightVisibleInCapture;
+        }
+
+        private void AwarenessHighlightSwatch_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (sender is not FrameworkElement fe) return;
+            var hex = fe.Tag?.ToString();
+            if (string.IsNullOrEmpty(hex)) return;
+            ApplyAwarenessHighlightColor(hex);
+        }
+
+        private void TxtAwarenessHighlightHex_LostFocus(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            ApplyAwarenessHighlightColor(TxtAwarenessHighlightHex?.Text);
+        }
+
+        private void TxtAwarenessHighlightHex_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            if (e.Key == System.Windows.Input.Key.Enter)
+            {
+                ApplyAwarenessHighlightColor(TxtAwarenessHighlightHex?.Text);
+                e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// Validates a hex color string and writes it to settings. Silently no-ops
+        /// on malformed input so a half-typed value in the textbox doesn't wipe
+        /// the user's previously-set color.
+        /// </summary>
+        private void ApplyAwarenessHighlightColor(string? hex)
+        {
+            if (string.IsNullOrWhiteSpace(hex)) return;
+            var trimmed = hex.Trim();
+            if (!trimmed.StartsWith('#')) trimmed = "#" + trimmed;
+
+            try
+            {
+                var obj = System.Windows.Media.ColorConverter.ConvertFromString(trimmed);
+                if (obj is not System.Windows.Media.Color) return;
+            }
+            catch { return; }
+
+            var settings = App.Settings?.Current;
+            if (settings == null) return;
+            settings.KeywordHighlightColor = trimmed;
+            App.Settings?.Save();
+
+            SyncAwarenessHighlightSwatchUi();
+        }
+
+        /// <summary>
+        /// Refreshes the swatch row and hex textbox from current settings so the
+        /// UI reflects any change (from load, swatch click, or the Exclusives tab).
+        /// </summary>
+        private void SyncAwarenessHighlightSwatchUi()
+        {
+            var settings = App.Settings?.Current;
+            if (settings == null) return;
+
+            if (TxtAwarenessHighlightHex != null)
+                TxtAwarenessHighlightHex.Text = settings.KeywordHighlightColor;
+
+            // Dim all swatches then re-highlight the selected one so the user
+            // can see which preset (if any) matches their current color.
+            var selected = settings.KeywordHighlightColor?.ToUpperInvariant() ?? "";
+            foreach (var swatch in new[] {
+                SwatchHighlightPink, SwatchHighlightCyan, SwatchHighlightLime,
+                SwatchHighlightOrange, SwatchHighlightViolet, SwatchHighlightWhite })
+            {
+                if (swatch == null) continue;
+                var tag = swatch.Tag?.ToString()?.ToUpperInvariant() ?? "";
+                swatch.BorderBrush = tag == selected
+                    ? System.Windows.Media.Brushes.White
+                    : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3A, 0x3A, 0x5A));
+                swatch.BorderThickness = tag == selected ? new Thickness(2) : new Thickness(1);
+            }
+        }
+
+        private void AwarenessPresetCard_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (sender is not FrameworkElement fe) return;
+            var presetId = fe.Tag?.ToString();
+            if (string.IsNullOrEmpty(presetId)) return;
+
+            var preset = App.KeywordPresets?.GetPreset(presetId);
+            if (preset == null) return;
+
+            var dlg = new AwarenessPresetDetailDialog(preset) { Owner = this };
+            dlg.ShowDialog();
+
+            if (dlg.Changed)
+                RefreshAwarenessPresetCards();
+        }
+
+        /// <summary>
+        /// Rebuilds the Awareness tab preset card grid from the current preset service
+        /// state. Cards are generated imperatively so that a trailing "+ New Preset"
+        /// tile can share the wrap flow with the real preset cards.
+        ///
+        /// Called on tab open and after any install/uninstall/create/delete so the
+        /// "installed" pip and card list stay in sync.
+        /// </summary>
+        public void RefreshAwarenessPresetCards()
+        {
+            if (AwarenessPresetItems == null) return;
+            AwarenessPresetItems.Children.Clear();
+
+            var presets = App.KeywordPresets?.VisiblePresets;
+            if (presets != null)
+            {
+                foreach (var preset in presets)
+                {
+                    if (preset == null) continue;
+                    AwarenessPresetItems.Children.Add(BuildAwarenessPresetCard(preset));
+                }
+            }
+
+            // Trailing "New Preset" card — starts a fresh user-authored preset.
+            AwarenessPresetItems.Children.Add(BuildNewPresetCard());
+
+            UpdateAwarenessAdvancedLinkText();
+        }
+
+        /// <summary>
+        /// Imperative version of the old DataTemplate card markup. Produces the same
+        /// pink-accented tile with icon, name, description, AI badge, and ✓ Installed
+        /// indicator. Click routes to <see cref="AwarenessPresetCard_Click"/>.
+        /// </summary>
+        private System.Windows.Controls.Border BuildAwarenessPresetCard(KeywordTriggerPreset preset)
+        {
+            var card = new System.Windows.Controls.Border
+            {
+                Background = (System.Windows.Media.Brush)FindResource("SurfaceBgBrush"),
+                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2E, 0x2E, 0x48)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(16, 14, 16, 14),
+                Margin = new Thickness(0, 0, 12, 12),
+                Width = 218,
+                Height = 150,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                Tag = preset.Id,
+                ToolTip = preset.LongDescription,
+            };
+            System.Windows.Controls.ToolTipService.SetShowDuration(card, 20000);
+            System.Windows.Controls.ToolTipService.SetInitialShowDelay(card, 400);
+            card.MouseLeftButtonUp += AwarenessPresetCard_Click;
+
+            var stack = new System.Windows.Controls.StackPanel();
+            card.Child = stack;
+
+            // Top row: emoji + optional AI badge.
+            var topRow = new System.Windows.Controls.StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Horizontal,
+            };
+            stack.Children.Add(topRow);
+
+            topRow.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = preset.Icon,
+                FontSize = 26,
+            });
+
+            if (preset.RequiresAi)
+            {
+                topRow.Children.Add(new System.Windows.Controls.Border
+                {
+                    Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2A, 0x1A, 0x3E)),
+                    BorderBrush = (System.Windows.Media.Brush)FindResource("PinkBrush"),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 1, 5, 1),
+                    Margin = new Thickness(8, 4, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Child = new System.Windows.Controls.TextBlock
+                    {
+                        Text = "AI",
+                        Foreground = (System.Windows.Media.Brush)FindResource("PinkBrush"),
+                        FontSize = 9,
+                        FontWeight = FontWeights.Bold,
+                    },
+                });
+            }
+
+            // Name.
+            stack.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = preset.Name,
+                Foreground = System.Windows.Media.Brushes.White,
+                FontSize = 14,
+                FontWeight = FontWeights.Bold,
+                Margin = new Thickness(0, 6, 0, 2),
+            });
+
+            // Description (trimmed by card size).
+            stack.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = preset.Description,
+                Foreground = (System.Windows.Media.Brush)FindResource("TextMutedBrush"),
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            if (preset.MasterEnabled)
+            {
+                stack.Children.Add(new System.Windows.Controls.TextBlock
+                {
+                    Text = "✓ Installed",
+                    Foreground = (System.Windows.Media.Brush)FindResource("PinkBrush"),
+                    FontSize = 10,
+                    FontWeight = FontWeights.Bold,
+                    Margin = new Thickness(0, 8, 0, 0),
+                });
+            }
+
+            return card;
+        }
+
+        /// <summary>
+        /// Dashed-border "+ New Preset" tile that sits at the end of the preset grid
+        /// and kicks off the user-authored preset flow.
+        /// </summary>
+        private System.Windows.Controls.Border BuildNewPresetCard()
+        {
+            var card = new System.Windows.Controls.Border
+            {
+                Background = System.Windows.Media.Brushes.Transparent,
+                BorderBrush = (System.Windows.Media.Brush)FindResource("PinkBrush"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(16, 14, 16, 14),
+                Margin = new Thickness(0, 0, 12, 12),
+                Width = 218,
+                Height = 150,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                ToolTip = "Create your own keyword preset. You pick the words and what happens when they fire.",
+            };
+            card.MouseLeftButtonUp += NewPresetCard_Click;
+
+            var stack = new System.Windows.Controls.StackPanel
+            {
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            card.Child = stack;
+
+            stack.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = "＋",
+                FontSize = 40,
+                FontWeight = FontWeights.Light,
+                Foreground = (System.Windows.Media.Brush)FindResource("PinkBrush"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+            });
+            stack.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = "New Preset",
+                Foreground = System.Windows.Media.Brushes.White,
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 6, 0, 0),
+            });
+            stack.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = "Pick your own words",
+                Foreground = (System.Windows.Media.Brush)FindResource("TextMutedBrush"),
+                FontSize = 10,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 2, 0, 0),
+            });
+
+            return card;
+        }
+
+        /// <summary>
+        /// Entry point for user-authored presets. Stages an unsaved preset shell and
+        /// opens the detail dialog in "new" mode — the first metadata edit or trigger
+        /// add is what commits it to settings.
+        /// </summary>
+        private void NewPresetCard_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            var preset = new KeywordTriggerPreset
+            {
+                Id = "custom." + Guid.NewGuid().ToString("N")[..8],
+                Name = "My Preset",
+                Icon = "✨",
+                Description = "",
+                LongDescription = "",
+                Author = "You",
+                Version = 1,
+                IsBuiltIn = false,
+                RequiresAi = false,
+                MasterEnabled = false,
+                Triggers = new List<KeywordTrigger>(),
+            };
+
+            var dlg = new AwarenessPresetDetailDialog(preset, isNewCustomPreset: true) { Owner = this };
+            dlg.ShowDialog();
+
+            if (dlg.Changed)
+                RefreshAwarenessPresetCards();
+        }
+
+        /// <summary>
+        /// The "Customize individual triggers" hyperlink relabels itself based on
+        /// whether any built-in preset is installed: "Customize installed presets →"
+        /// when at least one is installed, or the plain "advanced editor" fallback
+        /// when none are, which also flips the click target to the Exclusives tab.
+        /// </summary>
+        private void UpdateAwarenessAdvancedLinkText()
+        {
+            if (LnkAwarenessAdvancedText == null) return;
+            LnkAwarenessAdvancedText.Text = GetMostRecentlyInstalledPreset() != null
+                ? "Customize installed presets →"
+                : "Advanced editor →";
+        }
+
+        /// <summary>
+        /// Returns the preset to open when the user clicks the Awareness "customize"
+        /// hyperlink. Tie-break: first visible preset whose MasterEnabled is true.
+        /// Returns null when no preset is installed.
+        /// </summary>
+        private KeywordTriggerPreset? GetMostRecentlyInstalledPreset()
+        {
+            var presets = App.KeywordPresets?.VisiblePresets;
+            if (presets == null) return null;
+            return presets.FirstOrDefault(p => p?.MasterEnabled == true);
+        }
+
+        private void LnkAwarenessAdvanced_Click(object sender, RoutedEventArgs e)
+        {
+            // Prefer opening the installed preset's inline editor dialog.
+            var installed = GetMostRecentlyInstalledPreset();
+            if (installed != null)
+            {
+                var dlg = new AwarenessPresetDetailDialog(installed) { Owner = this };
+                dlg.ShowDialog();
+                if (dlg.Changed)
+                    RefreshAwarenessPresetCards();
+                return;
+            }
+
+            // No preset installed — the Exclusives tab is gone, so just open the
+            // dashboard's App Info popup as a safe landing point. In practice the
+            // Awareness tab handles the full customization flow now.
+            ShowAppInfoPopup();
+        }
+
+        #endregion
+
         #region Remote Control Handlers
 
         private async void ChkRemoteControlEnabled_Changed(object sender, RoutedEventArgs e)
@@ -6505,7 +8663,7 @@ namespace ConditioningControlPanel
                     _isLoading = true;
                     ChkRemoteControlEnabled.IsChecked = false;
                     _isLoading = false;
-                    ShowStyledDialog("Login Required", "You need to log in and sync your profile before using Remote Control.\n\nLog in via Patreon or Discord in the Settings tab.", "OK", "");
+                    ShowStyledDialog(Loc.Get("title_login_required"), Loc.Get("msg_login_required_remote"), Loc.Get("btn_ok"), "");
                     return;
                 }
 
@@ -6514,9 +8672,14 @@ namespace ConditioningControlPanel
                 // Show consent waiver
                 if (!ShowRemoteControlWaiver(tier))
                 {
-                    _isLoading = true;
-                    ChkRemoteControlEnabled.IsChecked = false;
-                    _isLoading = false;
+                    // Defer revert so it runs after the dialog's event stack fully unwinds,
+                    // preventing WPF toggle animation from getting stuck in the ON position.
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        _isLoading = true;
+                        ChkRemoteControlEnabled.IsChecked = false;
+                        _isLoading = false;
+                    }));
                     return;
                 }
 
@@ -6529,16 +8692,21 @@ namespace ConditioningControlPanel
                     ChkRemoteControlEnabled.IsChecked = false;
                     _isLoading = false;
                     RemoteControlPanel.Visibility = System.Windows.Visibility.Collapsed;
-                    ShowStyledDialog("Connection Error", "Could not start remote control session. The server may be temporarily unavailable.\n\nPlease check your internet connection and try again.", "OK", "");
+                    ShowStyledDialog(Loc.Get("title_connection_error"), Loc.Get("msg_remote_connection_error"), Loc.Get("btn_ok"), "");
                     return;
                 }
 
                 TxtRemoteCode.Text = string.Join(" ", code.ToCharArray());
+                var pin = App.RemoteControl?.ConnectPin;
+                TxtRemotePin.Text = !string.IsNullOrEmpty(pin) ? $"PIN: {pin}" : "";
+                TxtRemotePin.Visibility = !string.IsNullOrEmpty(pin)
+                    ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
                 RemoteLinkPanel.Visibility = System.Windows.Visibility.Visible;
                 RemoteCodePanel.Visibility = System.Windows.Visibility.Visible;
                 RemoteStatusPanel.Visibility = System.Windows.Visibility.Visible;
                 BtnStopRemote.Visibility = System.Windows.Visibility.Visible;
                 UpdateRemoteStatus(false);
+                RefreshRemoteQrCode(BuildRemotePairingUrl(code));
 
                 // Listen for controller connection changes
                 App.RemoteControl.ControllerConnectedChanged += OnRemoteControllerChanged;
@@ -6594,7 +8762,7 @@ namespace ConditioningControlPanel
                           $"All media content shown comes from YOUR local files and settings.\n" +
                           $"You assume full responsibility for this interaction.\n" +
                           $"You can stop the session at ANY time by clicking \"Stop Session\" or closing the app.\n" +
-                          $"The session code expires after 4 hours automatically.";
+                          $"The session stays active as long as the app is running. If the app closes without stopping the session, it expires within 4 hours.";
 
             var confirmed = WarningDialog.ShowDoubleWarning(this,
                 "Remote Control",
@@ -6625,6 +8793,10 @@ namespace ConditioningControlPanel
                 if (code != null)
                 {
                     TxtRemoteCode.Text = string.Join(" ", code.ToCharArray());
+                    var reconnectPin = App.RemoteControl?.ConnectPin;
+                    TxtRemotePin.Text = !string.IsNullOrEmpty(reconnectPin) ? $"PIN: {reconnectPin}" : "";
+                    TxtRemotePin.Visibility = !string.IsNullOrEmpty(reconnectPin)
+                        ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
                     UpdateRemoteStatus(false);
                 }
 
@@ -6643,16 +8815,18 @@ namespace ConditioningControlPanel
             {
                 try
                 {
-                    System.Windows.Clipboard.SetText(code);
-                    BtnCopyRemoteCode.Content = "Copied!";
+                    var pin = App.RemoteControl?.ConnectPin;
+                    var copyText = !string.IsNullOrEmpty(pin) ? $"{code} (PIN: {pin})" : code;
+                    System.Windows.Clipboard.SetText(copyText);
+                    BtnCopyRemoteCode.Content = Loc.Get("btn_copied");
                 }
                 catch (Exception ex)
                 {
                     App.Logger?.Warning(ex, "Failed to copy remote code to clipboard");
-                    BtnCopyRemoteCode.Content = "Failed";
+                    BtnCopyRemoteCode.Content = Loc.Get("label_failed");
                 }
                 var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-                timer.Tick += (s, _) => { BtnCopyRemoteCode.Content = "Copy"; timer.Stop(); };
+                timer.Tick += (s, _) => { BtnCopyRemoteCode.Content = Loc.Get("btn_copy"); timer.Stop(); };
                 timer.Start();
             }
         }
@@ -6660,21 +8834,21 @@ namespace ConditioningControlPanel
         private void BtnCopyRemoteLink_Click(object sender, RoutedEventArgs e)
         {
             var code = App.RemoteControl?.SessionCode;
-            var url = "https://codebambi.github.io/Conditioning-Control-Panel---CSharp-WPF/remote/";
-            if (!string.IsNullOrEmpty(code))
-                url += $"?code={code}";
+            var url = !string.IsNullOrEmpty(code)
+                ? BuildRemotePairingUrl(code)
+                : "https://cclabs.app/remote/";
             try
             {
                 System.Windows.Clipboard.SetText(url);
-                BtnCopyRemoteLink.Content = "Copied!";
+                BtnCopyRemoteLink.Content = Loc.Get("btn_copied");
             }
             catch (Exception ex)
             {
                 App.Logger?.Warning(ex, "Failed to copy remote link to clipboard");
-                BtnCopyRemoteLink.Content = "Failed";
+                BtnCopyRemoteLink.Content = Loc.Get("label_failed");
             }
             var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-            timer.Tick += (s, _) => { BtnCopyRemoteLink.Content = "Copy Link"; timer.Stop(); };
+            timer.Tick += (s, _) => { BtnCopyRemoteLink.Content = Loc.Get("btn_copy_link"); timer.Stop(); };
             timer.Start();
         }
 
@@ -6684,6 +8858,14 @@ namespace ConditioningControlPanel
             _isLoading = true;
             ChkRemoteControlEnabled.IsChecked = false;
             _isLoading = false;
+        }
+
+        private void ChkStopEffectsOnRemoteDisconnect_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            if (App.Settings?.Current == null) return;
+            App.Settings.Current.StopEffectsOnRemoteDisconnect = ChkStopEffectsOnRemoteDisconnect.IsChecked ?? false;
+            App.Settings.Save();
         }
 
         private async Task StopRemoteControl()
@@ -6703,6 +8885,8 @@ namespace ConditioningControlPanel
             RemoteCodePanel.Visibility = System.Windows.Visibility.Collapsed;
             RemoteStatusPanel.Visibility = System.Windows.Visibility.Collapsed;
             BtnStopRemote.Visibility = System.Windows.Visibility.Collapsed;
+            if (ImgRemoteQrCode != null) ImgRemoteQrCode.Source = null;
+            if (LstRemoteCommandLog != null) LstRemoteCommandLog.Items.Clear();
         }
 
         private void OnRemoteControllerChanged(object? sender, EventArgs e)
@@ -6714,9 +8898,18 @@ namespace ConditioningControlPanel
                 UpdateStartButtonForRemoteControl(connected);
 
                 if (connected)
+                {
+                    // Stop any in-progress local session so the remote controller
+                    // has clean state to drive.
+                    try { _sessionEngine?.StopSession(completed: false); } catch { }
+
                     ShowRemoteControlOverlay();
+                    NotifyRemoteControllerJoined();
+                }
                 else
+                {
                     HideRemoteControlOverlay();
+                }
             });
         }
 
@@ -6756,7 +8949,7 @@ namespace ConditioningControlPanel
             {
                 RemoteStatusDot.Fill = new System.Windows.Media.SolidColorBrush(
                     System.Windows.Media.Color.FromRgb(0x00, 0xFF, 0x88));
-                TxtRemoteStatus.Text = "Controller connected";
+                TxtRemoteStatus.Text = Loc.Get("label_controller_connected");
                 TxtRemoteStatus.Foreground = new System.Windows.Media.SolidColorBrush(
                     System.Windows.Media.Color.FromRgb(0x00, 0xFF, 0x88));
             }
@@ -6764,7 +8957,7 @@ namespace ConditioningControlPanel
             {
                 RemoteStatusDot.Fill = new System.Windows.Media.SolidColorBrush(
                     System.Windows.Media.Color.FromRgb(0xFF, 0xA5, 0x00));
-                TxtRemoteStatus.Text = "Waiting for controller...";
+                TxtRemoteStatus.Text = Loc.Get("label_waiting_for_controller");
                 TxtRemoteStatus.Foreground = new System.Windows.Media.SolidColorBrush(
                     System.Windows.Media.Color.FromRgb(0xA0, 0xA0, 0xA0));
             }
@@ -6773,9 +8966,13 @@ namespace ConditioningControlPanel
         private void ShowRemoteControlOverlay()
         {
             var code = App.RemoteControl?.SessionCode;
-            TxtOverlaySessionCode.Text = !string.IsNullOrEmpty(code)
+            var overlayPin = App.RemoteControl?.ConnectPin;
+            var sessionText = !string.IsNullOrEmpty(code)
                 ? $"Session: {string.Join(" ", code.ToCharArray())}"
                 : "";
+            if (!string.IsNullOrEmpty(overlayPin))
+                sessionText += $"  PIN: {overlayPin}";
+            TxtOverlaySessionCode.Text = sessionText;
 
             // Hide browser to avoid WebView2 airspace issue (renders on top of WPF overlays)
             BrowserContainer.Visibility = System.Windows.Visibility.Hidden;
@@ -6921,12 +9118,147 @@ namespace ConditioningControlPanel
         {
             if (SuppressedCommands.Contains(action)) return;
 
-            Dispatcher.Invoke(() => ShowCommandNotification(action));
+            Dispatcher.Invoke(() =>
+            {
+                ShowCommandNotification(action);
+                AppendRemoteCommandLog(action);
+            });
+        }
+
+        /// <summary>
+        /// Appends a command to the Remote Control tab's command log.
+        /// Caps the log at 50 entries (oldest dropped).
+        /// </summary>
+        private void AppendRemoteCommandLog(string action)
+        {
+            if (LstRemoteCommandLog == null) return;
+            try
+            {
+                var label = CommandLabels.TryGetValue(action, out var l) ? Loc.Get(l) : action.Replace("_", " ");
+                var entry = $"{DateTime.Now:HH:mm:ss}  {label}";
+                LstRemoteCommandLog.Items.Insert(0, entry);
+                while (LstRemoteCommandLog.Items.Count > 50)
+                    LstRemoteCommandLog.Items.RemoveAt(LstRemoteCommandLog.Items.Count - 1);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Refreshes the Remote Control tab UI: gating overlay, QR code (if a session
+        /// is active), tier card highlight. Called whenever the tab is shown.
+        /// </summary>
+        private void UpdateRemoteControlUI()
+        {
+            RefreshPremiumGate(RemoteControlGate);
+            RefreshTierCardHighlight();
+            // If a session is already running, refresh the QR code with the current code.
+            var code = App.RemoteControl?.SessionCode;
+            if (!string.IsNullOrEmpty(code))
+                RefreshRemoteQrCode(BuildRemotePairingUrl(code));
+            else if (ImgRemoteQrCode != null)
+                ImgRemoteQrCode.Source = null;
+        }
+
+        /// <summary>
+        /// Generates the pairing URL for the QR code from the current session code.
+        /// Uses a hash fragment so the PIN never appears in server access logs or
+        /// Referer headers. The web page parses the fragment and auto-connects.
+        /// </summary>
+        private string BuildRemotePairingUrl(string code)
+        {
+            var pin = App.RemoteControl?.ConnectPin;
+            if (!string.IsNullOrEmpty(pin))
+                return $"https://cclabs.app/remote/#code={code}&pin={pin}";
+            return $"https://cclabs.app/remote/#code={code}";
+        }
+
+        /// <summary>
+        /// Renders a QR code image into ImgRemoteQrCode for the given pairing URL.
+        /// </summary>
+        private void RefreshRemoteQrCode(string url)
+        {
+            if (ImgRemoteQrCode == null) return;
+            try
+            {
+                // Pull mod-themed colors. Use AccentDarkColor for foreground (max contrast on white).
+                byte[] fgRgb = new byte[] { 0xFF, 0x14, 0x93 };
+                byte[] bgRgb = new byte[] { 0xFF, 0xFF, 0xFF };
+                try
+                {
+                    var accentDarkHex = App.Mods?.GetAccentDarkColorHex();
+                    if (!string.IsNullOrEmpty(accentDarkHex))
+                    {
+                        var fgColor = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(accentDarkHex);
+                        fgRgb = new byte[] { fgColor.R, fgColor.G, fgColor.B };
+                    }
+                }
+                catch { /* fall back to default pink */ }
+
+                using var generator = new QRCoder.QRCodeGenerator();
+                using var data = generator.CreateQrCode(url, QRCoder.QRCodeGenerator.ECCLevel.M);
+                using var qr = new QRCoder.PngByteQRCode(data);
+                var bytes = qr.GetGraphic(10, fgRgb, bgRgb);
+                using var ms = new MemoryStream(bytes);
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.StreamSource = ms;
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                ImgRemoteQrCode.Source = bmp;
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Failed to render remote QR code");
+            }
+        }
+
+        /// <summary>
+        /// Highlights the active tier card based on CmbRemoteTier.SelectedIndex.
+        /// </summary>
+        private void RefreshTierCardHighlight()
+        {
+            if (TierCardLight == null || TierCardStandard == null || TierCardFull == null) return;
+            var dim = new SolidColorBrush(Color.FromRgb(0x2E, 0x2E, 0x48));
+            var active = new SolidColorBrush(Color.FromRgb(0xFF, 0x69, 0xB4));
+            TierCardLight.BorderBrush = dim;
+            TierCardLight.BorderThickness = new Thickness(1);
+            TierCardStandard.BorderBrush = dim;
+            TierCardStandard.BorderThickness = new Thickness(1);
+            TierCardFull.BorderBrush = dim;
+            TierCardFull.BorderThickness = new Thickness(1);
+
+            var idx = CmbRemoteTier?.SelectedIndex ?? 0;
+            Border? activeCard = idx switch
+            {
+                1 => TierCardStandard,
+                2 => TierCardFull,
+                _ => TierCardLight,
+            };
+            if (activeCard != null)
+            {
+                activeCard.BorderBrush = active;
+                activeCard.BorderThickness = new Thickness(2);
+            }
+        }
+
+        /// <summary>
+        /// Routes a tier card click to the legacy CmbRemoteTier handler so the
+        /// existing tier-change logic still fires.
+        /// </summary>
+        private void TierCard_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is FrameworkElement fe && fe.Tag is string tagStr && int.TryParse(tagStr, out var idx))
+            {
+                if (CmbRemoteTier != null && CmbRemoteTier.SelectedIndex != idx)
+                    CmbRemoteTier.SelectedIndex = idx;
+                RefreshTierCardHighlight();
+            }
         }
 
         private void ShowCommandNotification(string action)
         {
-            var label = CommandLabels.TryGetValue(action, out var l) ? l : action.Replace("_", " ");
+            var label = CommandLabels.TryGetValue(action, out var l) ? Loc.Get(l) : action.Replace("_", " ");
             TxtRemoteCommand.Text = label;
 
             var fadeIn = new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200));
@@ -6974,6 +9306,9 @@ namespace ConditioningControlPanel
                 {
                     _sessionEngine = new Services.SessionEngine(this);
                     _sessionEngine.SessionCompleted += OnSessionCompleted;
+                    _sessionEngine.ProgressUpdated += OnSessionProgressUpdated;
+                    _sessionEngine.PhaseChanged += OnSessionPhaseChanged;
+                    _sessionEngine.SessionStarted += OnSessionStarted;
                     _sessionEngine.SessionStopped += OnSessionStopped;
                 }
 
@@ -6983,6 +9318,12 @@ namespace ConditioningControlPanel
                 {
                     App.Logger?.Information("[RemoteControl] Starting main engine for remote session");
                     StartEngine();
+
+                    // Kill overlays that StartEngine activated from saved settings —
+                    // the session engine will control them based on session segments
+                    App.Overlay?.StopPinkFilter();
+                    App.Overlay?.StopSpiral();
+                    App.Logger?.Information("[RemoteControl] Cleared overlays — session engine will control them");
                 }
 
                 App.IsSessionRunning = true;
@@ -7101,6 +9442,33 @@ namespace ConditioningControlPanel
         {
             _trayIcon?.MinimizeToTray();
             _trayIcon?.ShowNotification("Remote Control", "Session active — minimized to tray.", System.Windows.Forms.ToolTipIcon.Info);
+        }
+
+        /// <summary>
+        /// Alerts the host that a remote controller just joined. Pops a tray
+        /// balloon and flashes the taskbar icon if minimized — does NOT restore
+        /// the window so the host stays in control of window state.
+        /// </summary>
+        private void NotifyRemoteControllerJoined()
+        {
+            // Always show a tray balloon — it's a useful cue even when visible.
+            try
+            {
+                _trayIcon?.ShowNotification(
+                    Loc.Get("title_remote_controller_joined"),
+                    Loc.Get("msg_remote_controller_joined"),
+                    System.Windows.Forms.ToolTipIcon.Info);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Debug("Failed to show remote controller tray balloon: {Error}", ex.Message);
+            }
+
+            // Flash the taskbar button so the host notices even with notifications off.
+            if (this.WindowState == WindowState.Minimized || !this.IsVisible)
+            {
+                try { Helpers.FlashWindowHelper.Flash(this); } catch { }
+            }
         }
 
         internal void RestoreFromTrayForRemote()
@@ -7257,7 +9625,7 @@ namespace ConditioningControlPanel
             if (App.Settings?.Current?.OfflineMode == true &&
                 !string.IsNullOrWhiteSpace(App.Settings?.Current?.OfflineUsername))
             {
-                TxtBannerSecondary.Text = $"Welcome back, {App.Settings.Current.OfflineUsername}! (Offline Mode)";
+                TxtBannerSecondary.Text = Loc.GetF("label_welcome_back_0_offline_mode", App.Settings.Current.OfflineUsername);
                 return;
             }
 
@@ -7267,12 +9635,12 @@ namespace ConditioningControlPanel
                            ?? App.Discord?.DisplayName;
             if (!string.IsNullOrEmpty(displayName))
             {
-                TxtBannerSecondary.Text = $"Welcome back, {displayName}!";
+                TxtBannerSecondary.Text = Loc.GetF("label_welcome_back_0", displayName);
             }
             else
             {
                 // Not logged in - show generic welcome
-                TxtBannerSecondary.Text = "Welcome! Consider logging in with Patreon for extra features.";
+                TxtBannerSecondary.Text = Loc.Get("label_welcome_consider_logging_in_with_patreon_for");
             }
         }
 
@@ -7285,7 +9653,7 @@ namespace ConditioningControlPanel
             {
                 var dialog = new Window
                 {
-                    Title = "Welcome Back!",
+                    Title = Loc.Get("title_welcome_back"),
                     Owner = this,
                     WindowStartupLocation = WindowStartupLocation.CenterOwner,
                     SizeToContent = SizeToContent.WidthAndHeight,
@@ -7515,9 +9883,12 @@ namespace ConditioningControlPanel
                 var isUnlocked = App.Achievements?.Progress.IsUnlocked(achievement.Id) ?? false;
                 
                 var border = new Border { Style = tileStyle };
+                var achName = App.Mods?.MakeModAware(achievement.Name) ?? achievement.Name;
+                var achFlavor = App.Mods?.MakeModAware(achievement.FlavorText) ?? achievement.FlavorText;
+                var achReq = App.Mods?.MakeModAware(achievement.Requirement) ?? achievement.Requirement;
                 border.ToolTip = isUnlocked
-                    ? $"{achievement.Name}\n\n\"{achievement.FlavorText}\""
-                    : $"???\n\nRequirement: {achievement.Requirement}";
+                    ? $"{achName}\n\n\"{achFlavor}\""
+                    : $"???\n\nRequirement: {achReq}";
 
                 var image = new Image
                 {
@@ -7548,8 +9919,8 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var uri = new Uri($"pack://application:,,,/Resources/achievements/{imageName}", UriKind.Absolute);
-                return new BitmapImage(uri);
+                var image = Services.ModResourceResolver.ResolveImage($"achievements/{imageName}");
+                return image as BitmapImage ?? new BitmapImage(new Uri($"pack://application:,,,/Resources/achievements/{imageName}", UriKind.Absolute));
             }
             catch (Exception ex)
             {
@@ -7573,9 +9944,12 @@ namespace ConditioningControlPanel
                 var parent = image.Parent as Border;
                 if (parent != null)
                 {
+                    var achName2 = App.Mods?.MakeModAware(achievement.Name) ?? achievement.Name;
+                    var achFlavor2 = App.Mods?.MakeModAware(achievement.FlavorText) ?? achievement.FlavorText;
+                    var achReq2 = App.Mods?.MakeModAware(achievement.Requirement) ?? achievement.Requirement;
                     parent.ToolTip = isUnlocked
-                        ? $"{achievement.Name}\n\n\"{achievement.FlavorText}\""
-                        : $"???\n\nRequirement: {achievement.Requirement}";
+                        ? $"{achName2}\n\n\"{achFlavor2}\""
+                        : $"???\n\nRequirement: {achReq2}";
                 }
             }
 
@@ -7636,13 +10010,10 @@ namespace ConditioningControlPanel
                 // Hide inline banner after 5 seconds
                 Task.Delay(5000).ContinueWith(_ =>
                 {
-                    if (Application.Current?.Dispatcher != null)
+                    DispatcherHelper.RunOnUISync(() =>
                     {
-                        Application.Current.Dispatcher.Invoke(() =>
-                        {
-                            QuestCompleteBanner.Visibility = Visibility.Collapsed;
-                        });
-                    }
+                        QuestCompleteBanner.Visibility = Visibility.Collapsed;
+                    });
                 });
 
                 App.Logger?.Information("Quest completed: {Name} (+{XP} XP)", e.QuestDefinition.Name, e.XPAwarded);
@@ -7689,9 +10060,6 @@ namespace ConditioningControlPanel
             var settings = App.Settings?.Current;
             if (settings == null) return;
 
-            // Scroll to the beginning to show the header
-            SkillTreeScroller?.ScrollToHorizontalOffset(0);
-
             // Update skill points display
             TxtSkillPoints.Text = settings.SkillPoints.ToString();
 
@@ -7724,6 +10092,7 @@ namespace ConditioningControlPanel
 
             // Add sparkle particles behind everything
             AddSkillTreeParticles();
+            _skillTreeAnimationsActive = true;
 
             // Add header section at the start of the canvas
             CreateSkillTreeHeader();
@@ -7808,14 +10177,14 @@ namespace ConditioningControlPanel
             var titleStack = new StackPanel { Margin = new Thickness(0, 0, 0, 15) };
             titleStack.Children.Add(new TextBlock
             {
-                Text = "✨ Bimbo Enhancement Tree",
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 105, 180)),
+                Text = "✨ " + (App.Mods?.GetEnhancementTreeTitle() ?? Loc.Get("label_enhancement_tree_title")),
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")),
                 FontSize = 22,
                 FontWeight = FontWeights.Bold
             });
             titleStack.Children.Add(new TextBlock
             {
-                Text = "you earn 1 sparkle point every time you level up — spend them wisely~",
+                Text = App.Mods?.GetEnhancementTreeSubtitle() ?? Loc.Get("label_enhancement_tree_subtitle"),
                 Foreground = new SolidColorBrush(Color.FromRgb(176, 176, 176)),
                 FontSize = 11,
                 FontStyle = FontStyles.Italic,
@@ -7823,7 +10192,7 @@ namespace ConditioningControlPanel
             });
             titleStack.Children.Add(new TextBlock
             {
-                Text = "once you pick a path, there's no going back~",
+                Text = App.Mods?.GetEnhancementTreeWarning() ?? Loc.Get("label_enhancement_tree_warning"),
                 Foreground = new SolidColorBrush(Color.FromRgb(136, 170, 204)),
                 FontSize = 10,
                 FontStyle = FontStyles.Italic,
@@ -7854,14 +10223,14 @@ namespace ConditioningControlPanel
             var pointsInfoStack = new StackPanel();
             pointsInfoStack.Children.Add(new TextBlock
             {
-                Text = "Sparkle Points",
+                Text = App.Mods?.GetPointsLabel() ?? Loc.Get("label_sparkle_points"),
                 Foreground = new SolidColorBrush(Color.FromRgb(176, 176, 176)),
                 FontSize = 10
             });
             pointsInfoStack.Children.Add(new TextBlock
             {
                 Text = settings.SkillPoints.ToString(),
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 105, 180)),
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")),
                 FontSize = 24,
                 FontWeight = FontWeights.Bold
             });
@@ -7878,7 +10247,7 @@ namespace ConditioningControlPanel
                 Padding = new Thickness(12, 8, 12, 8),
                 Margin = new Thickness(0, 0, 0, 10),
                 Cursor = Cursors.Hand,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(255, 105, 180)),
+                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")),
                 BorderThickness = new Thickness(1)
             };
             var ditzyButtonStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
@@ -7897,8 +10266,8 @@ namespace ConditioningControlPanel
             });
             ditzyButtonStack.Children.Add(new TextBlock
             {
-                Text = "Ditzy Data Stats",
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 182, 193)),
+                Text = App.Mods?.GetStatsTitle() ?? Loc.Get("label_ditzy_data_stats"),
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentLightColorHex() ?? "#FFB6C1")),
                 FontSize = 11,
                 FontWeight = FontWeights.Bold,
                 VerticalAlignment = VerticalAlignment.Center
@@ -7930,7 +10299,7 @@ namespace ConditioningControlPanel
             // Stats title
             detailedStatsStack.Children.Add(new TextBlock
             {
-                Text = "📊 Ditzy Data Stats",
+                Text = "📊 " + (App.Mods?.GetStatsTitle() ?? "Ditzy Data Stats"),
                 Foreground = new SolidColorBrush(Color.FromRgb(176, 176, 176)),
                 FontSize = 11,
                 FontWeight = FontWeights.Bold,
@@ -7970,55 +10339,55 @@ namespace ConditioningControlPanel
 
                 // Row 1: Session stats
                 statsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                AddStatRow("Sessions Started", achievements.TotalSessionsStarted.ToString("N0"), 0);
-                AddStatRow("Sessions Completed", achievements.CompletedSessions.Count.ToString("N0"), 1);
-                AddStatRow("Sessions Abandoned", achievements.TotalSessionsAbandoned.ToString("N0"), 2);
+                AddStatRow(Loc.Get("label_sessions_started"), achievements.TotalSessionsStarted.ToString("N0"), 0);
+                AddStatRow(Loc.Get("label_sessions_completed"), achievements.CompletedSessions.Count.ToString("N0"), 1);
+                AddStatRow(Loc.Get("label_sessions_abandoned"), achievements.TotalSessionsAbandoned.ToString("N0"), 2);
                 row++;
 
                 // Row 2: XP & Skill Points
                 statsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                AddStatRow("Total XP Earned", achievements.TotalXPEarned.ToString("N0"), 0);
-                AddStatRow("Skill Points Earned", achievements.TotalSkillPointsEarned.ToString("N0"), 1);
-                AddStatRow("Longest Session", $"{achievements.LongestSessionMinutes:F1} min", 2);
+                AddStatRow(Loc.Get("label_total_xp_earned_stat"), achievements.TotalXPEarned.ToString("N0"), 0);
+                AddStatRow(Loc.Get("label_skill_points_earned"), achievements.TotalSkillPointsEarned.ToString("N0"), 1);
+                AddStatRow(Loc.Get("label_longest_session"), $"{achievements.LongestSessionMinutes:F1} {Loc.Get("label_min_abbrev")}", 2);
                 row++;
 
                 // Row 3: Attention checks
                 statsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                AddStatRow("Attention Passes", achievements.TotalAttentionChecksPassed.ToString("N0"), 0);
-                AddStatRow("Video Att. Passed", achievements.VideoAttentionChecksPassed.ToString("N0"), 1);
-                AddStatRow("Video Att. Failed", achievements.VideoAttentionChecksFailed.ToString("N0"), 2);
+                AddStatRow(Loc.Get("label_attention_passes"), achievements.TotalAttentionChecksPassed.ToString("N0"), 0);
+                AddStatRow(Loc.Get("label_video_att_passed"), achievements.VideoAttentionChecksPassed.ToString("N0"), 1);
+                AddStatRow(Loc.Get("label_video_att_failed"), achievements.VideoAttentionChecksFailed.ToString("N0"), 2);
                 row++;
 
                 // Row 4: Bubble count
                 statsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                AddStatRow("Bubble Count Games", achievements.TotalBubbleCountGames.ToString("N0"), 0);
-                AddStatRow("BC Correct", achievements.TotalBubbleCountCorrect.ToString("N0"), 1);
-                AddStatRow("BC Best Streak", achievements.BubbleCountBestStreak.ToString("N0"), 2);
+                AddStatRow(Loc.Get("label_bubble_count_games"), achievements.TotalBubbleCountGames.ToString("N0"), 0);
+                AddStatRow(Loc.Get("label_bc_correct"), achievements.TotalBubbleCountCorrect.ToString("N0"), 1);
+                AddStatRow(Loc.Get("label_bc_best_streak"), achievements.BubbleCountBestStreak.ToString("N0"), 2);
                 row++;
 
                 // Row 5: Content consumption
                 statsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                AddStatRow("Total Flashes", achievements.TotalFlashImages.ToString("N0"), 0);
-                AddStatRow("Bubbles Popped", achievements.TotalBubblesPopped.ToString("N0"), 1);
-                AddStatRow("Lock Cards Done", achievements.TotalLockCardsCompleted.ToString("N0"), 2);
+                AddStatRow(Loc.Get("label_total_flashes_stat"), achievements.TotalFlashImages.ToString("N0"), 0);
+                AddStatRow(Loc.Get("label_bubbles_popped_stat"), achievements.TotalBubblesPopped.ToString("N0"), 1);
+                AddStatRow(Loc.Get("label_lock_cards_done"), achievements.TotalLockCardsCompleted.ToString("N0"), 2);
                 row++;
 
                 // Row 6: Time stats
                 statsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                 var videoMin = achievements.TotalVideoMinutes;
-                var videoTimeStr = videoMin >= 60 ? $"{videoMin / 60:F1} hrs" : $"{videoMin:F1} min";
-                AddStatRow("Video Time", videoTimeStr, 0);
+                var videoTimeStr = videoMin >= 60 ? $"{videoMin / 60:F1} {Loc.Get("label_hrs")}" : $"{videoMin:F1} {Loc.Get("label_min_abbrev")}";
+                AddStatRow(Loc.Get("label_video_time"), videoTimeStr, 0);
                 var pinkMin = achievements.TotalPinkFilterMinutes;
-                var pinkTimeStr = pinkMin >= 60 ? $"{pinkMin / 60:F1} hrs" : $"{pinkMin:F1} min";
-                AddStatRow("Pink Filter Time", pinkTimeStr, 1);
+                var pinkTimeStr = pinkMin >= 60 ? $"{pinkMin / 60:F1} {Loc.Get("label_hrs")}" : $"{pinkMin:F1} {Loc.Get("label_min_abbrev")}";
+                AddStatRow(Loc.Get("label_pink_filter_time"), pinkTimeStr, 1);
                 var spiralMin = achievements.TotalSpiralMinutes;
-                var spiralTimeStr = spiralMin >= 60 ? $"{spiralMin / 60:F1} hrs" : $"{spiralMin:F1} min";
-                AddStatRow("Spiral Time", spiralTimeStr, 2);
+                var spiralTimeStr = spiralMin >= 60 ? $"{spiralMin / 60:F1} {Loc.Get("label_hrs")}" : $"{spiralMin:F1} {Loc.Get("label_min_abbrev")}";
+                AddStatRow(Loc.Get("label_spiral_time"), spiralTimeStr, 2);
                 row++;
 
                 // Row 7: Misc stats
                 statsGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                AddStatRow("Consecutive Days", achievements.ConsecutiveDays.ToString("N0"), 0);
+                AddStatRow(Loc.Get("label_consecutive_days"), achievements.ConsecutiveDays.ToString("N0"), 0);
 
                 detailedStatsStack.Children.Add(statsGrid);
             }
@@ -8030,7 +10399,7 @@ namespace ConditioningControlPanel
             // Stats section
             var statsBorder = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(30, 30, 58)),
+                Background = Application.Current.Resources["SurfaceBgBrush"] as SolidColorBrush ?? new SolidColorBrush(Color.FromRgb(30, 30, 58)),
                 CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(12)
             };
@@ -8045,7 +10414,7 @@ namespace ConditioningControlPanel
             };
             xpStack.Children.Add(new TextBlock
             {
-                Text = "XP Mult: ",
+                Text = Loc.Get("label_xp_mult"),
                 Foreground = new SolidColorBrush(Color.FromRgb(176, 176, 176)),
                 FontSize = 12,
                 VerticalAlignment = VerticalAlignment.Center
@@ -8062,8 +10431,8 @@ namespace ConditioningControlPanel
             {
                 xpStack.Children.Add(new TextBlock
                 {
-                    Text = " 🔥 RUSH!",
-                    Foreground = new SolidColorBrush(Color.FromRgb(255, 20, 147)),
+                    Text = " " + Loc.Get("label_xp_rush"),
+                    Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentDarkColorHex() ?? "#FF1493")),
                     FontSize = 12,
                     FontWeight = FontWeights.Bold,
                     VerticalAlignment = VerticalAlignment.Center
@@ -8125,7 +10494,7 @@ namespace ConditioningControlPanel
                     chip.Child = new TextBlock
                     {
                         Text = $"{source}: +{value:P0}",
-                        Foreground = new SolidColorBrush(Color.FromRgb(255, 182, 193)),
+                        Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentLightColorHex() ?? "#FFB6C1")),
                         FontSize = 11
                     };
 
@@ -8231,7 +10600,6 @@ namespace ConditioningControlPanel
         /// </summary>
         private void AddSkillTreeParticles()
         {
-            var rng = new Random();
             var colors = new[]
             {
                 Color.FromArgb(90, 255, 105, 180),   // pink
@@ -8243,17 +10611,17 @@ namespace ConditioningControlPanel
 
             for (int i = 0; i < 35; i++)
             {
-                var size = 3.0 + rng.NextDouble() * 5.0; // 3-8px
+                var size = 3.0 + Random.Shared.NextDouble() * 5.0; // 3-8px
                 var ellipse = new System.Windows.Shapes.Ellipse
                 {
                     Width = size,
                     Height = size,
-                    Fill = new SolidColorBrush(colors[rng.Next(colors.Length)]),
+                    Fill = new SolidColorBrush(colors[Random.Shared.Next(colors.Length)]),
                     Opacity = 0
                 };
 
-                Canvas.SetLeft(ellipse, rng.NextDouble() * 2400);
-                Canvas.SetTop(ellipse, rng.NextDouble() * 460);
+                Canvas.SetLeft(ellipse, Random.Shared.NextDouble() * 2400);
+                Canvas.SetTop(ellipse, Random.Shared.NextDouble() * 460);
                 Canvas.SetZIndex(ellipse, -1);
 
                 // Pulsing opacity animation with random duration and start delay
@@ -8261,8 +10629,8 @@ namespace ConditioningControlPanel
                 {
                     From = 0,
                     To = 1,
-                    Duration = TimeSpan.FromSeconds(2 + rng.NextDouble() * 3), // 2-5s
-                    BeginTime = TimeSpan.FromSeconds(rng.NextDouble() * 5),     // 0-5s delay
+                    Duration = TimeSpan.FromSeconds(2 + Random.Shared.NextDouble() * 3), // 2-5s
+                    BeginTime = TimeSpan.FromSeconds(Random.Shared.NextDouble() * 5),     // 0-5s delay
                     AutoReverse = true,
                     RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
                     EasingFunction = new System.Windows.Media.Animation.SineEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }
@@ -8331,7 +10699,7 @@ namespace ConditioningControlPanel
 
                     // Line color based on unlock state
                     var lineColor = isChildUnlocked ? Color.FromRgb(100, 255, 150) :
-                                   isParentUnlocked ? Color.FromRgb(255, 105, 180) :
+                                   isParentUnlocked ? (Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4") :
                                    Color.FromRgb(60, 60, 80);
 
                     // HORIZONTAL LAYOUT: Connect right edge of parent to left edge of child
@@ -8380,7 +10748,7 @@ namespace ConditioningControlPanel
             if (isUnlocked)
                 borderColor = Color.FromRgb(100, 255, 150);
             else if (canPurchase)
-                borderColor = Color.FromRgb(255, 105, 180);
+                borderColor = (Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4");
             else
                 borderColor = Color.FromRgb(60, 50, 70);
 
@@ -8463,15 +10831,15 @@ namespace ConditioningControlPanel
             var tooltipStack = new StackPanel { MaxWidth = 280 };
             tooltipStack.Children.Add(new TextBlock
             {
-                Text = skill.FlavorText,
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 182, 193)),
+                Text = App.Mods?.MakeModAware(skill.FlavorText) ?? skill.LocalizedFlavorText,
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentLightColorHex() ?? "#FFB6C1")),
                 FontStyle = FontStyles.Italic,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 6)
             });
             tooltipStack.Children.Add(new TextBlock
             {
-                Text = skill.Description,
+                Text = App.Mods?.MakeModAware(skill.Description) ?? skill.LocalizedDescription,
                 Foreground = Brushes.White,
                 TextWrapping = TextWrapping.Wrap
             });
@@ -8480,7 +10848,7 @@ namespace ConditioningControlPanel
                 var prereqSkill = Models.SkillDefinition.All.FirstOrDefault(s => s.Id == skill.PrerequisiteId);
                 tooltipStack.Children.Add(new TextBlock
                 {
-                    Text = $"🔒 Requires: {prereqSkill?.Name ?? skill.PrerequisiteId}",
+                    Text = Loc.GetF("label_skill_requires", prereqSkill?.LocalizedName ?? skill.PrerequisiteId),
                     Foreground = new SolidColorBrush(Color.FromRgb(255, 100, 100)),
                     Margin = new Thickness(0, 6, 0, 0)
                 });
@@ -8491,7 +10859,7 @@ namespace ConditioningControlPanel
                 Content = tooltipStack,
                 Background = new SolidColorBrush(Color.FromRgb(30, 30, 50)),
                 Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(255, 105, 180)),
+                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")),
                 Padding = new Thickness(10)
             };
 
@@ -8508,10 +10876,10 @@ namespace ConditioningControlPanel
             // Try to load skill image (will support individual files like skills/hive_mind.png)
             try
             {
-                var imagePath = $"pack://application:,,,/Resources/skills/{skill.Id}.png";
+                var skillImageSource = Services.ModResourceResolver.ResolveImage($"skills/{skill.Id}.png");
                 var skillImage = new System.Windows.Controls.Image
                 {
-                    Source = new BitmapImage(new Uri(imagePath, UriKind.Absolute)),
+                    Source = skillImageSource,
                     Stretch = Stretch.UniformToFill
                 };
 
@@ -8556,7 +10924,7 @@ namespace ConditioningControlPanel
                 Background = new SolidColorBrush(Color.FromRgb(30, 28, 45)),
                 Child = new TextBlock
                 {
-                    Text = skill.Name,
+                    Text = App.Mods?.MakeModAware(skill.Name) ?? skill.LocalizedName,
                     Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 210)),
                     FontSize = 9.5,
                     FontWeight = FontWeights.SemiBold,
@@ -8570,10 +10938,10 @@ namespace ConditioningControlPanel
 
             // Row 3: Cost/Status Button
             var buttonBg = isUnlocked ? Color.FromRgb(100, 255, 150) :
-                          canPurchase ? Color.FromRgb(255, 105, 180) :
+                          canPurchase ? (Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4") :
                           Color.FromRgb(40, 35, 50);
 
-            var buttonText = isUnlocked ? $"💎{skill.Cost} ✓ OWNED" :
+            var buttonText = isUnlocked ? $"💎{skill.Cost} {Loc.Get("label_skill_owned")}" :
                             canPurchase ? $"💎 {skill.Cost}" :
                             $"🔒 {skill.Cost}";
 
@@ -8637,8 +11005,8 @@ namespace ConditioningControlPanel
         {
             try
             {
-                var uri = new Uri("pack://application:,,,/Resources/skills1.png", UriKind.Absolute);
-                var bitmap = new BitmapImage(uri);
+                var resolvedImg = Services.ModResourceResolver.ResolveImage("skills1.png");
+                var bitmap = resolvedImg as BitmapImage ?? new BitmapImage(new Uri("pack://application:,,,/Resources/skills1.png", UriKind.Absolute));
 
                 // Grid is 3 columns × 2 rows
                 int cellWidth = bitmap.PixelWidth / 3;
@@ -8855,7 +11223,7 @@ namespace ConditioningControlPanel
             var tooltipStack = new StackPanel { MaxWidth = 280 };
             tooltipStack.Children.Add(new TextBlock
             {
-                Text = skill.FlavorText,
+                Text = App.Mods?.MakeModAware(skill.FlavorText) ?? skill.LocalizedFlavorText,
                 Foreground = new SolidColorBrush(Color.FromRgb(200, 150, 255)),
                 FontStyle = FontStyles.Italic,
                 TextWrapping = TextWrapping.Wrap,
@@ -8863,7 +11231,7 @@ namespace ConditioningControlPanel
             });
             tooltipStack.Children.Add(new TextBlock
             {
-                Text = skill.Description,
+                Text = App.Mods?.MakeModAware(skill.Description) ?? skill.LocalizedDescription,
                 Foreground = Brushes.White,
                 TextWrapping = TextWrapping.Wrap
             });
@@ -8889,7 +11257,7 @@ namespace ConditioningControlPanel
 
             stack.Children.Add(new TextBlock
             {
-                Text = skill.Name,
+                Text = App.Mods?.MakeModAware(skill.Name) ?? skill.LocalizedName,
                 Foreground = new SolidColorBrush(isUnlocked ? Color.FromRgb(180, 130, 255) : Color.FromRgb(153, 50, 204)),
                 FontSize = 10,
                 FontWeight = FontWeights.Bold,
@@ -8932,7 +11300,7 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Handles clicking on a purchasable skill card
         /// </summary>
-        private void SkillCard_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private async void SkillCard_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
             if (sender is Border border && border.Tag is string skillId)
             {
@@ -8940,29 +11308,47 @@ namespace ConditioningControlPanel
                 if (skill == null) return;
 
                 // Show confirmation dialog
+                var skillName = App.Mods?.MakeModAware(skill.Name) ?? skill.LocalizedName;
+                var pointsLabel = (App.Mods?.GetPointsLabel() ?? Loc.Get("label_sparkle_points")).ToLower();
+                var flavorText = App.Mods?.MakeModAware(skill.FlavorText) ?? skill.LocalizedFlavorText;
+                var descText = App.Mods?.MakeModAware(skill.Description) ?? skill.LocalizedDescription;
                 var result = MessageBox.Show(
-                    $"Purchase '{skill.Name}' for {skill.Cost} sparkle points?\n\n{skill.FlavorText}\n\n{skill.Description}",
-                    "Purchase Enhancement",
+                    Loc.GetF("msg_purchase_skill", skillName, skill.Cost, pointsLabel, flavorText, descText),
+                    Loc.Get("dialog_purchase_enhancement"),
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Question);
 
                 if (result == MessageBoxResult.Yes)
                 {
-                    if (App.SkillTree?.PurchaseSkill(skillId) == true)
+                    // Disable the card during purchase to prevent double-clicks
+                    border.IsEnabled = false;
+                    try
                     {
-                        // Show celebration
-                        App.Flash?.PlayRandomSound();
+                        var (success, error) = await (App.SkillTree?.PurchaseSkillAsync(skillId)
+                            ?? Task.FromResult((false, (string?)"Skill tree unavailable")));
 
-                        // Refresh UI
-                        RefreshEnhancementsUI();
-
-                        // Update Trophy Case columns if trophy_case was purchased
-                        if (skillId == "trophy_case")
+                        if (success)
                         {
-                            UpdateTrophyCaseColumns();
-                        }
+                            // Show celebration
+                            App.Flash?.PlayRandomSound();
 
-                        App.Logger?.Information("Skill purchased via UI: {SkillId}", skillId);
+                            // Update Trophy Case columns if trophy_case was purchased
+                            if (skillId == "trophy_case")
+                            {
+                                UpdateTrophyCaseColumns();
+                            }
+
+                            App.Logger?.Information("Skill purchased via UI: {SkillId}", skillId);
+                        }
+                        else if (!string.IsNullOrEmpty(error))
+                        {
+                            MessageBox.Show(error, Loc.Get("dialog_purchase_failed"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                        }
+                    }
+                    finally
+                    {
+                        border.IsEnabled = true;
+                        RefreshEnhancementsUI();
                     }
                 }
             }
@@ -8999,7 +11385,7 @@ namespace ConditioningControlPanel
                 chip.Child = new TextBlock
                 {
                     Text = $"{source}: +{value:P0}",
-                    Foreground = new SolidColorBrush(Color.FromRgb(255, 182, 193)),
+                    Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentLightColorHex() ?? "#FFB6C1")),
                     FontSize = 11
                 };
 
@@ -9015,6 +11401,39 @@ namespace ConditioningControlPanel
             Dispatcher.Invoke(() =>
             {
                 TxtPinkRushIndicator.Visibility = Visibility.Visible;
+
+                // Full-screen pink flash effect
+                try
+                {
+                    var flashWindow = new Window
+                    {
+                        WindowStyle = WindowStyle.None,
+                        AllowsTransparency = true,
+                        Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(100, 0xFF, 0x14, 0x93)),
+                        Topmost = true,
+                        ShowInTaskbar = false,
+                        ShowActivated = false,
+                        Left = SystemParameters.VirtualScreenLeft,
+                        Top = SystemParameters.VirtualScreenTop,
+                        Width = SystemParameters.VirtualScreenWidth,
+                        Height = SystemParameters.VirtualScreenHeight,
+                        IsHitTestVisible = false,
+                        Focusable = false,
+                        Opacity = 0.6
+                    };
+                    flashWindow.Show();
+
+                    var fadeOut = new DoubleAnimation(0.6, 0, TimeSpan.FromMilliseconds(500));
+                    fadeOut.Completed += (s, args) =>
+                    {
+                        try { flashWindow.Close(); } catch { }
+                    };
+                    flashWindow.BeginAnimation(Window.OpacityProperty, fadeOut);
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Debug("Pink Rush flash effect failed: {Error}", ex.Message);
+                }
 
                 // Show toast notification popup
                 try
@@ -9041,6 +11460,118 @@ namespace ConditioningControlPanel
                 }
                 catch { }
                 _pinkRushPopup = null;
+            });
+        }
+
+        private void OnLuckyProc(object? sender, LuckyProcEventArgs e)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    // Close previous lucky popup if still showing
+                    try { _luckyProcPopup?.Close(); } catch { }
+
+                    var isGold = e.ProcType.Contains("Flash");
+                    var glowColor = isGold
+                        ? System.Windows.Media.Color.FromRgb(0xFF, 0xD7, 0x00)
+                        : System.Windows.Media.Color.FromRgb(0xFF, 0x69, 0xB4);
+
+                    var border = new Border
+                    {
+                        Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xE0, 0x15, 0x15, 0x30)),
+                        CornerRadius = new CornerRadius(12),
+                        BorderBrush = new SolidColorBrush(glowColor),
+                        BorderThickness = new Thickness(2),
+                        Padding = new Thickness(20, 12, 20, 12),
+                        Effect = new DropShadowEffect
+                        {
+                            Color = glowColor,
+                            BlurRadius = 30,
+                            ShadowDepth = 0,
+                            Opacity = 0.8
+                        }
+                    };
+
+                    var stack = new StackPanel { Orientation = Orientation.Vertical, HorizontalAlignment = System.Windows.HorizontalAlignment.Center };
+                    stack.Children.Add(new TextBlock
+                    {
+                        Text = "LUCKY!",
+                        Foreground = new SolidColorBrush(glowColor),
+                        FontWeight = FontWeights.Bold,
+                        FontSize = 22,
+                        HorizontalAlignment = System.Windows.HorizontalAlignment.Center
+                    });
+                    stack.Children.Add(new TextBlock
+                    {
+                        Text = $"{e.Multiplier}x XP!",
+                        Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xB6, 0xC1)),
+                        FontSize = 14,
+                        HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                        Margin = new Thickness(0, 4, 0, 0)
+                    });
+
+                    border.Child = stack;
+
+                    var popup = new Window
+                    {
+                        WindowStyle = WindowStyle.None,
+                        AllowsTransparency = true,
+                        Background = System.Windows.Media.Brushes.Transparent,
+                        Topmost = true,
+                        ShowInTaskbar = false,
+                        ShowActivated = false,
+                        SizeToContent = SizeToContent.WidthAndHeight,
+                        Content = border
+                    };
+
+                    // Position at top-center of primary screen
+                    popup.Loaded += (s, args) =>
+                    {
+                        try
+                        {
+                            var workArea = SystemParameters.WorkArea;
+                            popup.Left = workArea.Left + (workArea.Width - popup.ActualWidth) / 2;
+                            popup.Top = workArea.Top + 40;
+                        }
+                        catch { }
+                    };
+
+                    _luckyProcPopup = popup;
+
+                    // Fade in
+                    popup.Opacity = 0;
+                    popup.Show();
+
+                    var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200));
+                    popup.BeginAnimation(Window.OpacityProperty, fadeIn);
+
+                    // Auto-close after 3 seconds with fade-out
+                    var closeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+                    closeTimer.Tick += (s, args) =>
+                    {
+                        closeTimer.Stop();
+                        try
+                        {
+                            var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(300));
+                            fadeOut.Completed += (s2, args2) =>
+                            {
+                                try { popup.Close(); } catch { }
+                                if (_luckyProcPopup == popup) _luckyProcPopup = null;
+                            };
+                            popup.BeginAnimation(Window.OpacityProperty, fadeOut);
+                        }
+                        catch
+                        {
+                            try { popup.Close(); } catch { }
+                        }
+                    };
+                    closeTimer.Start();
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Debug("Lucky proc popup failed: {Error}", ex.Message);
+                }
             });
         }
 
@@ -9087,6 +11618,7 @@ namespace ConditioningControlPanel
             SetHelpContent(HelpBtnAssetBrowser, "AssetBrowser");
 
             // Lab tab
+            SetHelpContent(HelpBtnQuiz, "Quiz");
             SetHelpContent(HelpBtnKeywordTriggers, "KeywordTriggers");
             SetHelpContent(HelpBtnScreenOcr, "ScreenOcr");
             SetHelpContent(HelpBtnRemoteControl, "RemoteControl");
@@ -9109,137 +11641,7 @@ namespace ConditioningControlPanel
         private void SetHelpContent(Button helpButton, string sectionId)
         {
             var content = Services.HelpContentService.GetContent(sectionId);
-            helpButton.ToolTip = CreateHelpTooltip(content);
-        }
-
-        private ToolTip CreateHelpTooltip(Models.HelpContent content)
-        {
-            var tooltip = new ToolTip
-            {
-                Style = (Style)FindResource("HelpTooltipStyle"),
-                Content = BuildHelpContentPanel(content)
-            };
-            return tooltip;
-        }
-
-        private StackPanel BuildHelpContentPanel(Models.HelpContent content)
-        {
-            var panel = new StackPanel { MaxWidth = 360 };
-
-            // Header
-            var header = new Border
-            {
-                Background = new SolidColorBrush(Color.FromRgb(26, 26, 50)),
-                Padding = new Thickness(12, 10, 12, 10),
-                CornerRadius = new CornerRadius(8, 8, 0, 0)
-            };
-            var headerStack = new StackPanel { Orientation = Orientation.Horizontal };
-            headerStack.Children.Add(new TextBlock
-            {
-                Text = content.Icon,
-                FontSize = 18,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 10, 0)
-            });
-            headerStack.Children.Add(new TextBlock
-            {
-                Text = content.Title,
-                Foreground = (Brush)FindResource("PinkBrush"),
-                FontSize = 14,
-                FontWeight = FontWeights.Bold,
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            header.Child = headerStack;
-            panel.Children.Add(header);
-
-            // "What It Does" section
-            var whatSection = new StackPanel { Margin = new Thickness(12, 12, 12, 8) };
-            whatSection.Children.Add(new TextBlock
-            {
-                Text = "What It Does",
-                Foreground = (Brush)FindResource("PinkBrush"),
-                FontSize = 11,
-                FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 0, 0, 4)
-            });
-            whatSection.Children.Add(new TextBlock
-            {
-                Text = content.WhatItDoes,
-                Foreground = new SolidColorBrush(Color.FromRgb(208, 208, 208)),
-                FontSize = 12,
-                TextWrapping = TextWrapping.Wrap,
-                LineHeight = 18
-            });
-            panel.Children.Add(whatSection);
-
-            // Tips section (if any)
-            if (content.HasTips)
-            {
-                var tipsSection = new StackPanel { Margin = new Thickness(12, 0, 12, 8) };
-                tipsSection.Children.Add(new TextBlock
-                {
-                    Text = "\uD83D\uDCA1 Tips",
-                    Foreground = new SolidColorBrush(Color.FromRgb(255, 215, 0)),
-                    FontSize = 11,
-                    FontWeight = FontWeights.Bold,
-                    Margin = new Thickness(0, 0, 0, 4)
-                });
-                foreach (var tip in content.Tips)
-                {
-                    var tipRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 0) };
-                    tipRow.Children.Add(new TextBlock
-                    {
-                        Text = "\u2022",
-                        Foreground = new SolidColorBrush(Color.FromRgb(128, 128, 144)),
-                        Margin = new Thickness(0, 0, 6, 0),
-                        FontSize = 12
-                    });
-                    tipRow.Children.Add(new TextBlock
-                    {
-                        Text = tip,
-                        Foreground = new SolidColorBrush(Color.FromRgb(176, 176, 176)),
-                        FontSize = 11,
-                        TextWrapping = TextWrapping.Wrap,
-                        MaxWidth = 310
-                    });
-                    tipsSection.Children.Add(tipRow);
-                }
-                panel.Children.Add(tipsSection);
-            }
-
-            // "How It Works" section (if any)
-            if (content.HasHowItWorks)
-            {
-                var howBorder = new Border
-                {
-                    Background = new SolidColorBrush(Color.FromArgb(21, 255, 255, 255)),
-                    Margin = new Thickness(12, 4, 12, 12),
-                    Padding = new Thickness(10),
-                    CornerRadius = new CornerRadius(6)
-                };
-                var howStack = new StackPanel();
-                howStack.Children.Add(new TextBlock
-                {
-                    Text = "\u2699 How It Works",
-                    Foreground = new SolidColorBrush(Color.FromRgb(144, 144, 144)),
-                    FontSize = 10,
-                    FontWeight = FontWeights.Bold,
-                    Margin = new Thickness(0, 0, 0, 4)
-                });
-                howStack.Children.Add(new TextBlock
-                {
-                    Text = content.HowItWorks,
-                    Foreground = new SolidColorBrush(Color.FromRgb(136, 136, 136)),
-                    FontSize = 10,
-                    TextWrapping = TextWrapping.Wrap,
-                    LineHeight = 14,
-                    FontStyle = FontStyles.Italic
-                });
-                howBorder.Child = howStack;
-                panel.Children.Add(howBorder);
-            }
-
-            return panel;
+            helpButton.ToolTip = Services.HelpTooltipBuilder.Build(content, this);
         }
 
         #endregion
@@ -9269,7 +11671,7 @@ namespace ConditioningControlPanel
             {
                 CmbPresets.Items.Add(new ComboBoxItem
                 {
-                    Content = preset.Name,
+                    Content = App.Mods?.MakeModAware(preset.Name) ?? preset.Name,
                     Tag = preset.Id,
                     Foreground = new SolidColorBrush(Color.FromRgb(224, 224, 224)) // Light gray #E0E0E0
                 });
@@ -9281,7 +11683,7 @@ namespace ConditioningControlPanel
             {
                 Content = "➕ Save as New Preset...",
                 Tag = "new",
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 100, 180)) // Bright pink for visibility
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")) // Bright pink for visibility
             });
 
             // Select current preset
@@ -9356,7 +11758,7 @@ namespace ConditioningControlPanel
             var card = new Border
             {
                 Background = new SolidColorBrush(isSelected ? Color.FromRgb(60, 60, 100) : Color.FromRgb(42, 42, 74)),
-                BorderBrush = isSelected ? pinkBrush : new SolidColorBrush(Color.FromRgb(64, 64, 96)),
+                BorderBrush = isSelected ? pinkBrush : (Application.Current.Resources["PanelAccentBrush"] as SolidColorBrush ?? new SolidColorBrush(Color.FromRgb(64, 64, 96))),
                 BorderThickness = new Thickness(2),
                 CornerRadius = new CornerRadius(6),
                 Padding = new Thickness(8),
@@ -9374,7 +11776,7 @@ namespace ConditioningControlPanel
             };
             card.MouseLeave += (s, e) => {
                 if (_selectedPreset?.Id != preset.Id)
-                    card.BorderBrush = new SolidColorBrush(Color.FromRgb(64, 64, 96));
+                    card.BorderBrush = Application.Current.Resources["PanelAccentBrush"] as SolidColorBrush ?? new SolidColorBrush(Color.FromRgb(64, 64, 96));
             };
             
             var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Top };
@@ -9382,7 +11784,7 @@ namespace ConditioningControlPanel
             // Name
             var nameText = new TextBlock
             {
-                Text = preset.Name,
+                Text = App.Mods?.MakeModAware(preset.Name) ?? preset.Name,
                 Foreground = Brushes.White,
                 FontWeight = FontWeights.SemiBold,
                 FontSize = 10,
@@ -9452,11 +11854,11 @@ namespace ConditioningControlPanel
             SessionButtonsPanel.Visibility = Visibility.Collapsed;
             
             // Update detail panel
-            TxtDetailTitle.Text = preset.Name;
-            TxtDetailSubtitle.Text = preset.Description;
+            TxtDetailTitle.Text = App.Mods?.MakeModAware(preset.Name) ?? preset.Name;
+            TxtDetailSubtitle.Text = App.Mods?.MakeModAware(preset.Description) ?? preset.Description;
             
-            TxtDetailFlash.Text = preset.FlashEnabled 
-                ? $"Enabled | {preset.FlashFrequency}/hr | Opacity: {preset.FlashOpacity}%"
+            TxtDetailFlash.Text = preset.FlashEnabled
+                ? $"Enabled | {preset.FlashFrequency}/hr | ×{preset.SimultaneousImages} | Opacity: {preset.FlashOpacity}%"
                 : "Disabled";
                 
             TxtDetailVideo.Text = preset.MandatoryVideosEnabled 
@@ -9519,7 +11921,7 @@ namespace ConditioningControlPanel
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Title = "Select Corner GIF",
+                Title = Loc.Get("title_select_corner_gif"),
                 Filter = "GIF files (*.gif)|*.gif|All files (*.*)|*.*",
                 InitialDirectory = System.IO.Path.Combine(App.EffectiveAssetsPath, "images")
             };
@@ -9572,7 +11974,7 @@ namespace ConditioningControlPanel
             {
                 // Hide spoilers
                 SessionSpoilerPanel.Visibility = Visibility.Collapsed;
-                BtnRevealSpoilers.Content = "👁 Reveal Details";
+                BtnRevealSpoilers.Content = Loc.Get("btn_reveal_details");
                 return;
             }
             
@@ -9607,7 +12009,7 @@ namespace ConditioningControlPanel
             if (warning3)
             {
                 SessionSpoilerPanel.Visibility = Visibility.Visible;
-                BtnRevealSpoilers.Content = "😎 Hide Details";
+                BtnRevealSpoilers.Content = Loc.Get("btn_hide_details");
             }
         }
         
@@ -9630,7 +12032,7 @@ namespace ConditioningControlPanel
             
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(26, 26, 46)),
+                Background = Application.Current.Resources["DarkerBgBrush"] as SolidColorBrush ?? new SolidColorBrush(Color.FromRgb(26, 26, 46)),
                 BorderBrush = FindResource("PinkBrush") as SolidColorBrush,
                 BorderThickness = new Thickness(2),
                 CornerRadius = new CornerRadius(12),
@@ -9708,24 +12110,197 @@ namespace ConditioningControlPanel
             return result;
         }
         
+        // --- velvet-mosaic: highlight feature cards whose feature is enabled ---
+
+        private void RefreshFeatureCardActiveStates()
+        {
+            var s = App.Settings?.Current;
+            if (s == null) return;
+            if (CardFlash != null) CardFlash.IsActive = s.FlashEnabled;
+            if (CardVideo != null) CardVideo.IsActive = s.MandatoryVideosEnabled;
+            if (CardSubliminal != null) CardSubliminal.IsActive = s.SubliminalEnabled;
+            if (CardSpiral != null) CardSpiral.IsActive = s.SpiralEnabled;
+            if (CardPinkFilter != null) CardPinkFilter.IsActive = s.PinkFilterEnabled;
+            if (CardBubblePop != null) CardBubblePop.IsActive = s.BubblesEnabled;
+            if (CardLockCard != null) CardLockCard.IsActive = s.LockCardEnabled;
+            if (CardBubbleCount != null) CardBubbleCount.IsActive = s.BubbleCountEnabled;
+            if (CardBouncingText != null) CardBouncingText.IsActive = s.BouncingTextEnabled;
+            if (CardMindWipe != null) CardMindWipe.IsActive = s.MindWipeEnabled;
+            // Visuals and System cards have no single "enabled" toggle; they stay neutral.
+        }
+
+        private void OnSettingsPropertyChangedForCards(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(Models.AppSettings.FlashEnabled) ||
+                e.PropertyName == nameof(Models.AppSettings.MandatoryVideosEnabled) ||
+                e.PropertyName == nameof(Models.AppSettings.SubliminalEnabled) ||
+                e.PropertyName == nameof(Models.AppSettings.SpiralEnabled) ||
+                e.PropertyName == nameof(Models.AppSettings.PinkFilterEnabled) ||
+                e.PropertyName == nameof(Models.AppSettings.BubblesEnabled) ||
+                e.PropertyName == nameof(Models.AppSettings.LockCardEnabled) ||
+                e.PropertyName == nameof(Models.AppSettings.BubbleCountEnabled) ||
+                e.PropertyName == nameof(Models.AppSettings.BouncingTextEnabled) ||
+                e.PropertyName == nameof(Models.AppSettings.MindWipeEnabled))
+            {
+                Dispatcher.BeginInvoke(new Action(RefreshFeatureCardActiveStates));
+            }
+        }
+
+        // --- velvet-mosaic: dashboard feature card click dispatcher ----------
+
+        private Features.FeaturePopupWindow? _activeFeaturePopup;
+
+        private void ShowFeaturePopup(System.Windows.Controls.UserControl content, string title,
+                                      System.Windows.Media.ImageSource? icon = null, string? glyph = null)
+        {
+            // Close any existing popup before opening a new one
+            _activeFeaturePopup?.Close();
+
+            var popup = new Features.FeaturePopupWindow(content, title, icon, glyph)
+            {
+                Owner = this
+            };
+            popup.Closed += (_, __) =>
+            {
+                if (_activeFeaturePopup == popup)
+                    _activeFeaturePopup = null;
+            };
+            _activeFeaturePopup = popup;
+            popup.Show(); // Non-modal so bubbles and other interactions keep working
+        }
+
+        private void CardFlash_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.FlashFeatureControl(),
+                Localization.Loc.Get("section_flash_images"),
+                CardFlash.Icon);
+
+        private void CardVisuals_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.VisualsFeatureControl(),
+                Localization.Loc.Get("section_visuals"),
+                glyph: "👁");
+
+        private void CardVideo_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.VideoFeatureControl(),
+                Localization.Loc.Get("section_mandatory_video"),
+                CardVideo.Icon);
+
+        private void CardSubliminal_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.SubliminalFeatureControl(),
+                Localization.Loc.Get("section_subliminals_2"),
+                CardSubliminal.Icon);
+
+        private void CardSpiral_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.SpiralFeatureControl(),
+                Localization.Loc.Get("label_spiral_overlay"),
+                CardSpiral.Icon);
+
+        private void CardPinkFilter_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.PinkFilterFeatureControl(),
+                Localization.Loc.Get("label_pink_filter"),
+                CardPinkFilter.Icon);
+
+        private void CardBubblePop_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.BubblePopFeatureControl(),
+                Localization.Loc.Get("label_bubble_pop"),
+                CardBubblePop.Icon);
+
+        private void CardLockCard_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.LockCardFeatureControl(),
+                Localization.Loc.Get("label_lock_card"),
+                CardLockCard.Icon);
+
+        private void CardBubbleCount_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.BubbleCountFeatureControl(),
+                Localization.Loc.Get("label_bubble_count"),
+                CardBubbleCount.Icon);
+
+        private void CardBouncingText_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.BouncingTextFeatureControl(),
+                Localization.Loc.Get("label_bouncing_text"),
+                CardBouncingText.Icon);
+
+        private void CardMindWipe_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.MindWipeFeatureControl(),
+                Localization.Loc.Get("label_mind_wipe"),
+                CardMindWipe.Icon);
+
+        private void CardSystem_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.SystemFeatureControl(),
+                Localization.Loc.Get("section_system"),
+                glyph: "⚙");
+
+        private void VelvetBtnScheduler_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.SchedulerFeatureControl(),
+                Localization.Loc.Get("section_scheduler"),
+                glyph: "📅");
+
+        private void VelvetBtnAppInfo_Click(object sender, RoutedEventArgs e)
+        {
+            // Build the UserControl and immediately reparent the account/data
+            // sections (Patreon/Discord login, Cloud Backup, Data & Privacy,
+            // Support Development) into its host BEFORE showing the popup.
+            // Doing it pre-show avoids timing issues with the Loaded event.
+            var control = new Features.AppInfoFeatureControl();
+            try
+            {
+                DetachAccountSectionsInto(control.AccountSectionsHost);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "AppInfo: failed to attach account sections pre-show");
+            }
+
+            // Close any existing popup before opening a new one
+            _activeFeaturePopup?.Close();
+
+            var popup = new Features.FeaturePopupWindow(
+                control,
+                Localization.Loc.Get("label_app_info"),
+                glyph: "ℹ")
+            {
+                Owner = this
+            };
+
+            // When the popup closes, return the sections to PatreonTabContent
+            // so the next open can borrow them again and any MainWindow
+            // handlers that read their Text/Visibility keep working.
+            popup.Closed += (_, __) =>
+            {
+                if (_activeFeaturePopup == popup)
+                    _activeFeaturePopup = null;
+                try { ReattachAccountSections(); }
+                catch (Exception ex)
+                {
+                    App.Logger?.Warning(ex, "AppInfo: failed to return account sections");
+                }
+            };
+
+            _activeFeaturePopup = popup;
+            popup.Show();
+        }
+
+        private void VelvetBtnRamp_Click(object sender, RoutedEventArgs e) =>
+            ShowFeaturePopup(new Features.IntensityRampFeatureControl(),
+                Localization.Loc.Get("section_intensity_ramp"),
+                glyph: "📈");
+
         private void BtnStartSession_Click(object sender, RoutedEventArgs e)
         {
-            if (_selectedSession == null || !_selectedSession.IsAvailable) return;
-
-            // Check for locked features in this session
-            var lockedFeatures = GetLockedFeaturesForSession(_selectedSession);
-            string lockedFeaturesMsg = "";
-            if (lockedFeatures.Count > 0)
+            // The button doubles as Start/Stop — state dictates which path to run.
+            // This also makes us resilient to any stale/duplicate Click subscriptions.
+            if (_sessionEngine?.IsRunning == true)
             {
-                lockedFeaturesMsg = $"\n\n⚠️ Features you haven't unlocked yet:\n• {string.Join("\n• ", lockedFeatures)}\n\n(These will be skipped during the session)";
+                BtnStopSession_Click(sender, e);
+                return;
             }
+
+            if (_selectedSession == null || !_selectedSession.IsAvailable) return;
 
             var confirmed = ShowStyledDialog(
                 $"🌅 Start {_selectedSession.Name}?",
                 $"Duration: {_selectedSession.DurationMinutes} minutes\n\n" +
                 "Your current settings will be temporarily replaced.\n" +
                 "They will be restored when the session ends." +
-                lockedFeaturesMsg +
                 "\n\nReady to begin?",
                 "▶ Start Session", "Not yet");
 
@@ -9733,43 +12308,6 @@ namespace ConditioningControlPanel
             {
                 StartSession(_selectedSession);
             }
-        }
-
-        /// <summary>
-        /// Get a list of features used by a session that the player hasn't unlocked yet
-        /// </summary>
-        private List<string> GetLockedFeaturesForSession(Models.Session session)
-        {
-            var locked = new List<string>();
-            var s = App.Settings.Current;
-            var settings = session.Settings;
-
-            // Use IsLevelUnlocked which accounts for OG toggle + HighestLevelEver + current level
-            if (!s.IsLevelUnlocked(10))
-            {
-                if (settings.SpiralEnabled) locked.Add("Spiral Overlay (Lv.10)");
-                if (settings.PinkFilterEnabled) locked.Add("Pink Filter (Lv.10)");
-            }
-
-            if (!s.IsLevelUnlocked(20) && settings.BubblesEnabled)
-                locked.Add("Bubbles (Lv.20)");
-
-            if (!s.IsLevelUnlocked(35) && settings.LockCardEnabled)
-                locked.Add("Lock Cards (Lv.35)");
-
-            if (!s.IsLevelUnlocked(50) && settings.BubbleCountEnabled)
-                locked.Add("Bubble Count Game (Lv.50)");
-
-            if (!s.IsLevelUnlocked(60) && settings.BouncingTextEnabled)
-                locked.Add("Bouncing Text (Lv.60)");
-
-            if (!s.IsLevelUnlocked(70) && settings.BrainDrainEnabled)
-                locked.Add("Brain Drain (Lv.70)");
-
-            if (!s.IsLevelUnlocked(75) && settings.MindWipeEnabled)
-                locked.Add("Mind Wipe (Lv.75)");
-
-            return locked;
         }
         
         private async void StartSession(Models.Session session)
@@ -9813,7 +12351,7 @@ namespace ConditioningControlPanel
             catch (Exception ex)
             {
                 App.Logger?.Error(ex, "Failed to start session");
-                ShowStyledDialog("Error", $"Failed to start session:\n{ex.Message}", "OK", "");
+                ShowStyledDialog(Loc.Get("title_error"), Loc.GetF("msg_failed_to_start_session", ex.Message), Loc.Get("btn_ok"), "");
             }
         }
         
@@ -9850,15 +12388,15 @@ namespace ConditioningControlPanel
                     var session = _sessionEngine.CurrentSession;
 
                     // Update session button with remaining time
-                    BtnStartSession.Content = $"STOP SESSION ({remaining.Minutes:D2}:{remaining.Seconds:D2})";
+                    BtnStartSession.Content = Loc.GetF("btn_stop_session_0_1", $"{((int)remaining.TotalMinutes):D2}", $"{remaining.Seconds:D2}");
 
                     // Update Start button label with session name + timer
                     var mName = session.GetModeAwareName();
                     var name = mName.Length > 14
                         ? mName.Substring(0, 11) + "..."
                         : mName;
-                    var pauseIndicator = _sessionEngine.IsPaused ? " [PAUSED]" : "";
-                    TxtStartLabel.Text = $"{name} {remaining.Minutes:D2}:{remaining.Seconds:D2}{pauseIndicator}";
+                    var pauseIndicator = _sessionEngine.IsPaused ? $" [{Loc.Get("label_paused")}]" : "";
+                    TxtStartLabel.Text = Loc.GetF("label_0_1_2_3", name, $"{((int)remaining.TotalMinutes):D2}", $"{remaining.Seconds:D2}", pauseIndicator);
                 }
             });
         }
@@ -9876,9 +12414,10 @@ namespace ConditioningControlPanel
             App.IsSessionRunning = true;
             Dispatcher.Invoke(() =>
             {
-                BtnStartSession.Content = "STOP SESSION";
-                BtnStartSession.Click -= BtnStartSession_Click;
-                BtnStartSession.Click += BtnStopSession_Click;
+                BtnStartSession.Content = Loc.Get("btn_stop_session_2");
+                // Note: BtnStartSession_Click now dispatches to Stop when a session is running,
+                // so we no longer swap Click delegates (which caused duplicate-handler bugs
+                // when remote-started sessions skipped the Started event subscription).
 
                 // Update Start button to show session info
                 var session = _sessionEngine?.CurrentSession;
@@ -9912,13 +12451,13 @@ namespace ConditioningControlPanel
                 // Stop the engine when session stops
                 StopEngine();
 
-                BtnStartSession.Content = "▶ Start Session";
-                BtnStartSession.Click -= BtnStopSession_Click;
-                BtnStartSession.Click += BtnStartSession_Click;
+                BtnStartSession.Content = Loc.Get("btn_start_session");
+                // Click handler is unchanged — BtnStartSession_Click dispatches based on
+                // _sessionEngine.IsRunning, so no subscription swap is needed.
 
                 // Reset Start button to normal state
                 TxtStartIcon.Text = "▶";
-                TxtStartLabel.Text = "START";
+                TxtStartLabel.Text = Loc.Get("label_start");
 
                 // Restore pink color
                 BtnStart.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
@@ -9932,6 +12471,13 @@ namespace ConditioningControlPanel
         {
             if (_sessionEngine == null || !_sessionEngine.IsRunning) return;
 
+            if (App.Lockdown?.IsActive == true)
+            {
+                MessageBox.Show(Loc.Get("msg_you_are_in_lockdown_mode_nyou_cannot_end_a_se"), Loc.Get("title_lockdown"),
+                    MessageBoxButton.OK, MessageBoxImage.Stop);
+                return;
+            }
+
             var session = _sessionEngine.CurrentSession;
             var elapsed = _sessionEngine.ElapsedTime;
             var remaining = _sessionEngine.RemainingTime;
@@ -9942,18 +12488,16 @@ namespace ConditioningControlPanel
             var potentialXP = (int)Math.Round((session?.BonusXP ?? 0) * multiplier);
 
             var penaltyText = _sessionEngine.PauseCount > 0
-                ? $"\n(Plus {_sessionEngine.XPPenalty} XP pause penalty)"
+                ? Loc.GetF("msg_plus_pause_penalty_0", _sessionEngine.XPPenalty)
                 : "";
 
             var confirmed = ShowStyledDialog(
-                "⚠ Stop Session?",
-                $"You're currently in a session:\n" +
-                $"{session?.Icon} {session?.Name}\n\n" +
-                $"Time elapsed: {elapsed.Minutes:D2}:{elapsed.Seconds:D2}\n" +
-                $"Time remaining: {remaining.Minutes:D2}:{remaining.Seconds:D2}\n\n" +
-                $"If you stop now, you will lose ALL {potentialXP} XP.{penaltyText}\n\n" +
-                "Are you sure you want to quit?",
-                "Yes, stop session", "Keep going");
+                Loc.Get("title_stop_session_confirm"),
+                Loc.GetF("msg_stop_session_body", session?.Icon, session?.Name,
+                    $"{((int)elapsed.TotalMinutes):D2}:{elapsed.Seconds:D2}",
+                    $"{((int)remaining.TotalMinutes):D2}:{remaining.Seconds:D2}",
+                    potentialXP, penaltyText),
+                Loc.Get("btn_yes_stop_session"), Loc.Get("btn_keep_going"));
 
             if (confirmed)
             {
@@ -9965,29 +12509,33 @@ namespace ConditioningControlPanel
         {
             if (_sessionEngine == null || !_sessionEngine.IsRunning) return;
 
+            if (App.Lockdown?.IsActive == true)
+            {
+                MessageBox.Show(Loc.Get("msg_you_are_in_lockdown_mode_nyou_cannot_pause_du"), Loc.Get("title_lockdown"),
+                    MessageBoxButton.OK, MessageBoxImage.Stop);
+                return;
+            }
+
             if (_sessionEngine.IsPaused)
             {
                 // Resume
                 _sessionEngine.ResumeSession();
                 if (TxtPauseIcon != null) TxtPauseIcon.Text = "⏸";
-                BtnPauseSession.ToolTip = $"Pause session (-100 XP penalty per pause)\nPaused {_sessionEngine.PauseCount}x so far";
+                BtnPauseSession.ToolTip = Loc.GetF("tooltip_pause_session_100_xp_penalty_per_pause_npause", _sessionEngine.PauseCount);
             }
             else
             {
                 // Confirm pause (costs XP)
                 var confirmed = ShowStyledDialog(
-                    "⏸ Pause Session?",
-                    "Pausing will cost you 100 XP from your session reward.\n\n" +
-                    $"Current penalty: -{_sessionEngine.XPPenalty} XP\n" +
-                    $"After this pause: -{_sessionEngine.XPPenalty + 100} XP\n\n" +
-                    "Are you sure?",
-                    "Yes, pause", "Keep going");
+                    Loc.Get("title_pause_session_confirm"),
+                    Loc.GetF("msg_pause_session_body", _sessionEngine.XPPenalty, _sessionEngine.XPPenalty + 100),
+                    Loc.Get("btn_yes_pause"), Loc.Get("btn_keep_going"));
 
                 if (confirmed)
                 {
                     _sessionEngine.PauseSession();
                     if (TxtPauseIcon != null) TxtPauseIcon.Text = "▶";
-                    BtnPauseSession.ToolTip = "Resume session";
+                    BtnPauseSession.ToolTip = Loc.Get("tooltip_resume_session");
                 }
             }
         }
@@ -10152,7 +12700,7 @@ namespace ConditioningControlPanel
             RefreshPresetsDropdown();
             
             App.Logger?.Information("Loaded preset: {Name}", preset.Name);
-            MessageBox.Show($"Preset '{preset.Name}' loaded!", "Preset Loaded", 
+            MessageBox.Show(Loc.GetF("msg_preset_0_loaded", preset.Name), Loc.Get("title_preset_loaded"),
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
@@ -10161,8 +12709,8 @@ namespace ConditioningControlPanel
             if (_selectedPreset == null) return;
             
             var result = MessageBox.Show(
-                $"Load preset '{_selectedPreset.Name}'?\n\nThis will replace your current settings.",
-                "Load Preset",
+                Loc.GetF("msg_load_preset_confirm_0", _selectedPreset.Name),
+                Loc.Get("title_load_preset"),
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question);
                 
@@ -10179,7 +12727,7 @@ namespace ConditioningControlPanel
 
         private void PromptSaveNewPreset()
         {
-            var dialog = new InputDialog("New Preset", "Enter a name for your preset:", "My Custom Preset");
+            var dialog = new InputDialog(Loc.Get("title_new_preset"), Loc.Get("msg_enter_a_name_for_your_preset"), Loc.Get("label_my_custom_preset"));
             dialog.Owner = this;
             
             if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.ResultText))
@@ -10189,7 +12737,7 @@ namespace ConditioningControlPanel
                 // Check if name already exists
                 if (_allPresets.Any(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
                 {
-                    MessageBox.Show("A preset with this name already exists.", "Name Taken", 
+                    MessageBox.Show(Loc.Get("msg_a_preset_with_this_name_already_exists"), Loc.Get("title_name_taken"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
@@ -10204,7 +12752,7 @@ namespace ConditioningControlPanel
                 SelectPreset(preset);
                 
                 App.Logger?.Information("Created new preset: {Name}", name);
-                MessageBox.Show($"Preset '{name}' saved!", "Preset Saved", 
+                MessageBox.Show(Loc.GetF("msg_preset_0_saved", name), Loc.Get("title_preset_saved"),
                     MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
@@ -10214,8 +12762,8 @@ namespace ConditioningControlPanel
             if (_selectedPreset == null || _selectedPreset.IsDefault) return;
             
             var result = MessageBox.Show(
-                $"Save current settings over preset '{_selectedPreset.Name}'?",
-                "Overwrite Preset",
+                Loc.GetF("msg_overwrite_preset_confirm_0", _selectedPreset.Name),
+                Loc.Get("title_overwrite_preset"),
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question);
                 
@@ -10237,7 +12785,7 @@ namespace ConditioningControlPanel
                     SelectPreset(updated);
                     
                     App.Logger?.Information("Updated preset: {Name}", updated.Name);
-                    MessageBox.Show($"Preset '{updated.Name}' updated!", "Preset Updated", 
+                    MessageBox.Show(Loc.GetF("msg_preset_0_updated", updated.Name), Loc.Get("title_preset_updated"),
                         MessageBoxButton.OK, MessageBoxImage.Information);
                 }
             }
@@ -10246,10 +12794,10 @@ namespace ConditioningControlPanel
         private void BtnDeletePreset_Click(object sender, RoutedEventArgs e)
         {
             if (_selectedPreset == null || _selectedPreset.IsDefault) return;
-            
+
             var result = MessageBox.Show(
-                $"Delete preset '{_selectedPreset.Name}'?\n\nThis cannot be undone.",
-                "Delete Preset",
+                Loc.GetF("msg_delete_preset_confirm_0", _selectedPreset.Name),
+                Loc.Get("title_delete_preset"),
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
                 
@@ -10330,11 +12878,11 @@ namespace ConditioningControlPanel
             };
 
             // Style with border
-            border.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(64, 64, 96)));
+            border.SetValue(Border.BorderBrushProperty, Application.Current.Resources["PanelAccentBrush"] as SolidColorBrush ?? new SolidColorBrush(Color.FromRgb(64, 64, 96)));
             border.SetValue(Border.BorderThicknessProperty, new Thickness(2));
 
             border.MouseEnter += (s, e) => border.BorderBrush = FindResource("PinkBrush") as SolidColorBrush;
-            border.MouseLeave += (s, e) => border.BorderBrush = new SolidColorBrush(Color.FromRgb(64, 64, 96));
+            border.MouseLeave += (s, e) => border.BorderBrush = Application.Current.Resources["PanelAccentBrush"] as SolidColorBrush ?? new SolidColorBrush(Color.FromRgb(64, 64, 96));
             border.MouseLeftButtonUp += SessionCard_Click;
 
             var grid = new Grid();
@@ -10440,7 +12988,7 @@ namespace ConditioningControlPanel
             Grid.SetColumn(buttonPanel, 1);
 
             var editBtn = CreateSessionActionButton("✏", "Edit Session", session.Id, SessionBtn_Edit);
-            var exportBtn = CreateSessionActionButton("📤", "Export Session", session.Id, SessionBtn_Export);
+            var exportBtn = CreateSessionActionButton("📤", Loc.Get("tooltip_export_session"), session.Id, SessionBtn_Export);
             var deleteBtn = CreateSessionDeleteButton("🗑", "Delete Session", session.Id, SessionBtn_Delete);
 
             buttonPanel.Children.Add(editBtn);
@@ -10547,7 +13095,7 @@ namespace ConditioningControlPanel
             SessionDetailScroller.Visibility = Visibility.Visible;
             SessionButtonsPanel.Visibility = Visibility.Visible;
             SessionSpoilerPanel.Visibility = Visibility.Collapsed;
-            BtnRevealSpoilers.Content = "👁 Reveal Details";
+            BtnRevealSpoilers.Content = Loc.Get("btn_reveal_details");
 
             TxtDetailTitle.Text = $"{session.Icon} {session.GetModeAwareName()}";
             TxtDetailSubtitle.Text = GenerateSessionTimelineDescription(session);
@@ -10679,7 +13227,7 @@ namespace ConditioningControlPanel
 
         private void SessionDropZone_DragLeave(object sender, DragEventArgs e)
         {
-            SessionDropZone.BorderBrush = new SolidColorBrush(Color.FromRgb(64, 64, 96));
+            SessionDropZone.BorderBrush = Application.Current.Resources["PanelAccentBrush"] as SolidColorBrush ?? new SolidColorBrush(Color.FromRgb(64, 64, 96));
             DropZoneIcon.Text = "📂";
             DropZoneIcon.Foreground = new SolidColorBrush(Color.FromRgb(112, 112, 144));
             DropZoneStatus.Visibility = Visibility.Collapsed;
@@ -10813,13 +13361,13 @@ namespace ConditioningControlPanel
             {
                 case DropType.Session:
                     DropOverlayIcon.Text = "📋";
-                    DropOverlayTitle.Text = "Drop to Import Session";
+                    DropOverlayTitle.Text = Loc.Get("label_drop_to_import_session");
                     DropOverlaySubtitle.Text = Path.GetFileName(files[0]);
                     break;
 
                 case DropType.Zip:
                     DropOverlayIcon.Text = "📦";
-                    DropOverlayTitle.Text = "Drop to Extract Assets";
+                    DropOverlayTitle.Text = Loc.Get("label_drop_to_extract_assets");
                     var zipCount = files.Count(f => Path.GetExtension(f).Equals(".zip", StringComparison.OrdinalIgnoreCase));
                     DropOverlaySubtitle.Text = zipCount == 1
                         ? Path.GetFileName(files.First(f => f.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)))
@@ -10828,13 +13376,13 @@ namespace ConditioningControlPanel
 
                 case DropType.Folder:
                     DropOverlayIcon.Text = "📁";
-                    DropOverlayTitle.Text = "Drop to Import Folder";
+                    DropOverlayTitle.Text = Loc.Get("label_drop_to_import_folder");
                     DropOverlaySubtitle.Text = $"Scan for images & videos";
                     break;
 
                 case DropType.Assets:
                     DropOverlayIcon.Text = "🖼️";
-                    DropOverlayTitle.Text = "Drop to Import Assets";
+                    DropOverlayTitle.Text = Loc.Get("label_drop_to_import_assets");
                     DropOverlaySubtitle.Text = files.Length == 1
                         ? Path.GetFileName(files[0])
                         : $"{files.Length} files";
@@ -10904,13 +13452,13 @@ namespace ConditioningControlPanel
                 ShowTab("assets");
 
                 App.Logger?.Information("Asset import complete: {Summary}", result.GetSummary());
-                MessageBox.Show(result.GetSummary(), "Import Complete", MessageBoxButton.OK,
+                MessageBox.Show(result.GetSummary(), Loc.Get("title_import_complete"), MessageBoxButton.OK,
                     result.TotalImported > 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
             }
             catch (Exception ex)
             {
                 App.Logger?.Error(ex, "Asset import failed");
-                MessageBox.Show($"Import failed: {ex.Message}", "Import Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(Loc.GetF("msg_import_failed_0", ex.Message), Loc.Get("title_import_error"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -10953,7 +13501,7 @@ namespace ConditioningControlPanel
                         var dialog = new Microsoft.Win32.SaveFileDialog
                         {
                             Filter = "Session Files (*.session.json)|*.session.json",
-                            Title = "Save as New Custom Session",
+                            Title = Loc.Get("title_save_as_new_custom_session"),
                             InitialDirectory = SessionFileService.CustomSessionsFolder,
                             FileName = SessionFileService.GetExportFileName(editedSession)
                         };
@@ -10961,7 +13509,7 @@ namespace ConditioningControlPanel
                         if (dialog.ShowDialog() == true)
                         {
                             _sessionManager.AddNewSession(editedSession, dialog.FileName);
-                            MessageBox.Show("Built-in session saved as a new custom session!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+                            MessageBox.Show(Loc.Get("msg_built_in_session_saved_as_a_new_custom_sessio"), Loc.Get("title_success"), MessageBoxButton.OK, MessageBoxImage.Information);
                         }
                     }
                     else // Custom session
@@ -11002,9 +13550,9 @@ namespace ConditioningControlPanel
 
                 // Confirm deletion
                 var result = ShowStyledDialog(
-                    "Delete Session",
-                    $"Are you sure you want to delete '{session.Name}'?\n\nThis cannot be undone.",
-                    "Delete", "Cancel");
+                    Loc.Get("title_delete_session"),
+                    Loc.GetF("msg_delete_session_confirm_0", session.Name),
+                    Loc.Get("btn_delete"), Loc.Get("btn_cancel"));
 
                 if (result && _sessionManager != null)
                 {
@@ -11015,8 +13563,8 @@ namespace ConditioningControlPanel
                     if (_selectedSession?.Id == sessionId)
                     {
                         _selectedSession = null;
-                        TxtDetailTitle.Text = "Select a Session";
-                        TxtDetailSubtitle.Text = "Click on a session to see details";
+                        TxtDetailTitle.Text = Loc.Get("label_select_a_session");
+                        TxtDetailSubtitle.Text = Loc.Get("label_click_on_a_session_to_see_details");
                     }
                 }
             }
@@ -11042,7 +13590,7 @@ namespace ConditioningControlPanel
             e.Handled = true;
 
             // Reset visual state
-            SessionDropZone.BorderBrush = new SolidColorBrush(Color.FromRgb(64, 64, 96));
+            SessionDropZone.BorderBrush = Application.Current.Resources["PanelAccentBrush"] as SolidColorBrush ?? new SolidColorBrush(Color.FromRgb(64, 64, 96));
             DropZoneIcon.Text = "📂";
             DropZoneIcon.Foreground = new SolidColorBrush(Color.FromRgb(112, 112, 144));
 
@@ -11054,7 +13602,7 @@ namespace ConditioningControlPanel
             var filePath = files[0];
             if (!filePath.EndsWith(".session.json", StringComparison.OrdinalIgnoreCase))
             {
-                ShowDropZoneStatus("Only .session.json files allowed", isError: true);
+                ShowDropZoneStatus(Loc.Get("msg_only_session_json_files_allowed"), isError: true);
                 return;
             }
 
@@ -11130,7 +13678,7 @@ namespace ConditioningControlPanel
                 var dialog = new Microsoft.Win32.SaveFileDialog
                 {
                     Filter = "Session Files (*.session.json)|*.session.json",
-                    Title = "Save New Session",
+                    Title = Loc.Get("title_save_new_session"),
                     InitialDirectory = SessionFileService.CustomSessionsFolder,
                     FileName = SessionFileService.GetExportFileName(session)
                 };
@@ -11141,7 +13689,7 @@ namespace ConditioningControlPanel
                     _sessionManager.AddNewSession(session, dialog.FileName);
 
                     // The OnSessionAdded event will handle UI updates
-                    MessageBox.Show("New session saved!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+                    MessageBox.Show(Loc.Get("msg_new_session_saved"), Loc.Get("title_success"), MessageBoxButton.OK, MessageBoxImage.Information);
                     App.Logger?.Information("Session created: {Name} at {Path}", session.Name, dialog.FileName);
                 }
             }
@@ -11169,7 +13717,7 @@ namespace ConditioningControlPanel
 
             var dialog = new Microsoft.Win32.SaveFileDialog
             {
-                Title = "Export Session",
+                Title = Loc.Get("title_export_session"),
                 Filter = "Session files (*.session.json)|*.session.json",
                 FileName = Services.SessionFileService.GetExportFileName(session),
                 DefaultExt = ".session.json"
@@ -11180,12 +13728,12 @@ namespace ConditioningControlPanel
                 try
                 {
                     _sessionFileService.ExportSession(session, dialog.FileName);
-                    ShowStyledDialog("Export Complete", $"Session exported to:\n{dialog.FileName}", "OK", "");
+                    ShowStyledDialog(Loc.Get("title_export_complete"), Loc.GetF("msg_session_exported_to_0", dialog.FileName), "OK", "");
                     App.Logger?.Information("Session exported: {Name} to {Path}", session.Name, dialog.FileName);
                 }
                 catch (Exception ex)
                 {
-                    ShowStyledDialog("Export Failed", $"Failed to export session:\n{ex.Message}", "OK", "");
+                    ShowStyledDialog(Loc.Get("title_export_failed"), Loc.GetF("msg_failed_to_export_session_0", ex.Message), "OK", "");
                     App.Logger?.Error(ex, "Failed to export session");
                 }
             }
@@ -11201,9 +13749,9 @@ namespace ConditioningControlPanel
 
             try
             {
-                TxtBrowserStatus.Text = "● Loading...";
+                TxtBrowserStatus.Text = Loc.Get("label_loading");
                 TxtBrowserStatus.Foreground = FindResource("PinkBrush") as SolidColorBrush;
-                BrowserLoadingText.Text = "🌐 Initializing WebView2...";
+                BrowserLoadingText.Text = Loc.Get("label_initializing_webview2");
                 
                 _browser = new BrowserService();
                 
@@ -11211,7 +13759,7 @@ namespace ConditioningControlPanel
                 {
                     Dispatcher.Invoke(() =>
                     {
-                        TxtBrowserStatus.Text = "● Connected";
+                        TxtBrowserStatus.Text = Loc.Get("label_connected_2");
                         TxtBrowserStatus.Foreground = new SolidColorBrush(Color.FromRgb(0, 230, 118)); // Green
 
                         // Now that CoreWebView2 is ready, attach message handler for video end notifications
@@ -11227,7 +13775,7 @@ namespace ConditioningControlPanel
                 {
                     Dispatcher.Invoke(async () =>
                     {
-                        TxtBrowserStatus.Text = "● Connected";
+                        TxtBrowserStatus.Text = Loc.Get("label_connected_2");
                         TxtBrowserStatus.Foreground = new SolidColorBrush(Color.FromRgb(0, 230, 118)); // Green
 
                         // Inject audio sync script when navigating to video sites
@@ -11251,11 +13799,10 @@ namespace ConditioningControlPanel
                     Dispatcher.Invoke(() => HandleBrowserFullscreenChanged(isFullscreen));
                 };
 
-                BrowserLoadingText.Text = "🌐 Creating browser...";
+                BrowserLoadingText.Text = Loc.Get("label_creating_browser");
 
                 // Navigate to mode-appropriate site
-                var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-                var startUrl = Models.ContentModeConfig.GetDefaultBrowserUrl(mode);
+                var startUrl = App.Mods?.GetDefaultBrowserUrl() ?? "https://bambicloud.com/";
                 var webView = await _browser.CreateBrowserAsync(startUrl);
 
                 if (webView != null)
@@ -11271,49 +13818,72 @@ namespace ConditioningControlPanel
                 }
                 else
                 {
-                    var errorMsg = "WebView2 returned null - unknown error";
-                    BrowserLoadingText.Text = $"❌ {errorMsg}\n\nInstall WebView2 Runtime:\ngo.microsoft.com/fwlink/p/?LinkId=2124703";
-                    TxtBrowserStatus.Text = "● Error";
+                    var errorMsg = Loc.Get("msg_webview2_returned_null");
+                    BrowserLoadingText.Text = Loc.GetF("label_0_n_ninstall_webview2_runtime_ngo_microsoft_c", errorMsg);
+                    TxtBrowserStatus.Text = Loc.Get("label_error_2");
                     TxtBrowserStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 107, 107));
-                    MessageBox.Show(errorMsg, "Browser Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show(errorMsg, Loc.Get("title_browser_error"), MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
             catch (InvalidOperationException invEx)
             {
                 BrowserLoadingText.Text = $"❌ {invEx.Message}";
-                TxtBrowserStatus.Text = "● Not Installed";
+                TxtBrowserStatus.Text = Loc.Get("label_not_installed");
                 TxtBrowserStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 107, 107));
-                MessageBox.Show(invEx.Message, "WebView2 Not Installed", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(invEx.Message, Loc.Get("title_webview2_not_installed"), MessageBoxButton.OK, MessageBoxImage.Warning);
             }
             catch (System.Runtime.InteropServices.COMException comEx)
             {
-                var errorMsg = $"WebView2 COM Error:\n{comEx.Message}\n\nError Code: {comEx.HResult}";
-                BrowserLoadingText.Text = $"❌ COM Error\n\nInstall WebView2:\ngo.microsoft.com/fwlink/p/?LinkId=2124703";
-                TxtBrowserStatus.Text = "● COM Error";
+                var errorMsg = Loc.GetF("msg_webview2_com_error_0_1", comEx.Message, comEx.HResult);
+                BrowserLoadingText.Text = Loc.Get("label_com_error_install_webview2");
+                TxtBrowserStatus.Text = Loc.Get("label_com_error");
                 TxtBrowserStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 107, 107));
-                MessageBox.Show(errorMsg, "WebView2 Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(errorMsg, Loc.Get("title_webview2_error"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
             catch (System.DllNotFoundException dllEx)
             {
-                var errorMsg = $"WebView2 DLL not found:\n{dllEx.Message}";
-                BrowserLoadingText.Text = $"❌ Missing DLL\n\nInstall WebView2:\ngo.microsoft.com/fwlink/p/?LinkId=2124703";
-                TxtBrowserStatus.Text = "● Missing DLL";
+                var errorMsg = Loc.GetF("msg_webview2_dll_not_found_0", dllEx.Message);
+                BrowserLoadingText.Text = Loc.Get("label_missing_dll_install_webview2");
+                TxtBrowserStatus.Text = Loc.Get("label_missing_dll");
                 TxtBrowserStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 107, 107));
-                MessageBox.Show(errorMsg, "Missing DLL", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(errorMsg, Loc.Get("title_missing_dll"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
             catch (Exception ex)
             {
-                var errorMsg = $"Browser Error:\n\nType: {ex.GetType().Name}\n\nMessage: {ex.Message}\n\nStack: {ex.StackTrace?.Substring(0, Math.Min(500, ex.StackTrace?.Length ?? 0))}";
+                var stack = ex.StackTrace;
+                var errorMsg = $"Browser Error:\n\nType: {ex.GetType().Name}\n\nMessage: {ex.Message}\n\nStack: {(stack != null ? stack.Substring(0, Math.Min(500, stack.Length)) : "(none)")}";
                 BrowserLoadingText.Text = $"❌ {ex.GetType().Name}\n{ex.Message}";
-                TxtBrowserStatus.Text = "● Error";
+                TxtBrowserStatus.Text = Loc.Get("label_error_2");
                 TxtBrowserStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 107, 107));
-                MessageBox.Show(errorMsg, "Browser Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(errorMsg, Loc.Get("title_browser_error"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
-        private void BrowserSiteToggle_Changed(object sender, RoutedEventArgs e)
+        private async void BrowserLoadingText_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
-            if (_browser == null || !_browserInitialized) return;
+            await InitializeBrowserAsync();
+        }
+
+        private async System.Threading.Tasks.Task InitAndNavigateAsync(string url, bool autoPlayFullscreen)
+        {
+            await InitializeBrowserAsync();
+            if (_browserInitialized && _browser != null)
+            {
+                NavigateToUrlInBrowser(url, autoPlayFullscreen);
+            }
+        }
+
+        private async void BrowserSiteToggle_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return; // Don't auto-load browser during XAML init
+
+            // Lazy-load browser on first toggle interaction
+            if (!_browserInitialized)
+            {
+                await InitializeBrowserAsync();
+                return; // InitializeBrowserAsync navigates to the correct site already
+            }
+            if (_browser == null) return;
 
             // Block navigation in offline mode
             if (App.Settings?.Current?.OfflineMode == true) return;
@@ -11354,7 +13924,14 @@ namespace ConditioningControlPanel
                 return false;
             }
 
-            if (_browser == null || !_browserInitialized)
+            // Lazy-load browser if not yet initialized
+            if (!_browserInitialized)
+            {
+                _ = InitAndNavigateAsync(url, autoPlayFullscreen);
+                return true; // Navigation will happen after init completes
+            }
+
+            if (_browser == null)
             {
                 App.Logger?.Warning("Browser not available for navigation: {Url}", url);
                 return false;
@@ -11380,6 +13957,14 @@ namespace ConditioningControlPanel
                 {
                     _skipSiteToggleNavigation = true;
                     RbHypnoTube.IsChecked = true;
+                }
+                else if (!lowerUrl.Contains("bambicloud.com") && !lowerUrl.Contains("hypnotube.com"))
+                {
+                    // External URL — deselect both radio buttons so clicking either one
+                    // fires a Checked event to navigate back (RadioButton.Checked only fires
+                    // on false→true transitions, so re-clicking an already-checked button does nothing)
+                    RbBambiCloud.IsChecked = false;
+                    RbHypnoTube.IsChecked = false;
                 }
 
                 _browser.ZoomFactor = 0.5;
@@ -11438,9 +14023,17 @@ namespace ConditioningControlPanel
 
                 // JavaScript to find video, play it, request fullscreen, and add event handlers
                 // Posts message back to C# when video ends or fullscreen exits
+                // Retries up to 10 times (5s total) if video element isn't in the DOM yet
                 var script = @"
-                    (function() {
-                        const video = document.querySelector('video');
+                    (async function() {
+                        let video = document.querySelector('video');
+                        if (!video) {
+                            for (let i = 0; i < 10; i++) {
+                                await new Promise(r => setTimeout(r, 500));
+                                video = document.querySelector('video');
+                                if (video) break;
+                            }
+                        }
                         if (video) {
                             let notified = false;
 
@@ -11499,6 +14092,9 @@ namespace ConditioningControlPanel
                                     video.msRequestFullscreen();
                                 }
                             }).catch(e => console.log('Autoplay blocked:', e));
+                        } else {
+                            console.log('No video element found after retries');
+                            window.chrome.webview.postMessage({ type: 'videoEnded', reason: 'noVideoElement' });
                         }
                     })();
                 ";
@@ -11766,7 +14362,7 @@ namespace ConditioningControlPanel
                 {
                     // Link Discord to existing account
                     BtnDiscordTabLogin.IsEnabled = false;
-                    BtnDiscordTabLogin.Content = "Connecting...";
+                    BtnDiscordTabLogin.Content = Loc.Get("login_connecting");
 
                     try
                     {
@@ -11819,20 +14415,20 @@ namespace ConditioningControlPanel
             {
                 if (isLoggedIn)
                 {
-                    TxtDiscordTabStatus.Text = $"Connected as {App.Discord.Username}";
-                    TxtDiscordTabInfo.Text = "Discord account linked";
-                    BtnDiscordTabLogin.Content = "Logout";
+                    TxtDiscordTabStatus.Text = Loc.GetF("label_connected_as_0", App.Discord.Username);
+                    TxtDiscordTabInfo.Text = Loc.Get("label_discord_account_linked");
+                    BtnDiscordTabLogin.Content = Loc.Get("btn_logout");
                 }
                 else
                 {
                     // Check if user is logged in with another provider (has unified_id)
                     var hasUnifiedId = !string.IsNullOrEmpty(App.Settings?.Current?.UnifiedId);
 
-                    TxtDiscordTabStatus.Text = "Not Connected";
-                    TxtDiscordTabInfo.Text = "Link Discord for community features";
+                    TxtDiscordTabStatus.Text = Loc.Get("label_not_connected");
+                    TxtDiscordTabInfo.Text = Loc.Get("label_link_discord_for_community_features");
 
                     // Show "Link Discord" if logged in via Patreon, otherwise "Login"
-                    BtnDiscordTabLogin.Content = hasUnifiedId ? "Link Discord" : "Login";
+                    BtnDiscordTabLogin.Content = hasUnifiedId ? Loc.Get("btn_link_discord_2") : Loc.Get("btn_login");
                 }
             }
 
@@ -11936,9 +14532,10 @@ namespace ConditioningControlPanel
                     System.Windows.Clipboard.SetText(discordId);
                     // Show brief feedback
                     var originalText = TxtProfileDiscordId.Text;
-                    TxtProfileDiscordId.Text = "Copied!";
+                    TxtProfileDiscordId.Text = Loc.Get("btn_copied");
                     Task.Delay(1000).ContinueWith(_ =>
                     {
+                        if (Application.Current?.Dispatcher?.HasShutdownStarted == true) return;
                         Dispatcher.Invoke(() =>
                         {
                             if (TxtProfileDiscordId != null)
@@ -11989,9 +14586,10 @@ namespace ConditioningControlPanel
                         if (TxtProfileDiscordId != null)
                         {
                             var originalText = TxtProfileDiscordId.Text;
-                            TxtProfileDiscordId.Text = "ID Copied!";
+                            TxtProfileDiscordId.Text = Loc.Get("label_id_copied");
                             Task.Delay(1500).ContinueWith(_ =>
                             {
+                                if (Application.Current?.Dispatcher?.HasShutdownStarted == true) return;
                                 Dispatcher.Invoke(() =>
                                 {
                                     if (TxtProfileDiscordId != null)
@@ -12038,8 +14636,8 @@ namespace ConditioningControlPanel
                 else
                 {
                     MessageBox.Show(
-                        error ?? "Failed to change display name",
-                        "Name Change Failed",
+                        error ?? Loc.Get("msg_failed_to_change_display_name"),
+                        Loc.Get("title_name_change_failed"),
                         MessageBoxButton.OK,
                         MessageBoxImage.Warning);
                 }
@@ -12048,8 +14646,8 @@ namespace ConditioningControlPanel
             {
                 App.Logger?.Warning(ex, "Error changing display name");
                 MessageBox.Show(
-                    "An error occurred while changing your name. Please try again.",
-                    "Error",
+                    Loc.Get("msg_error_changing_name"),
+                    Loc.Get("label_error"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
             }
@@ -12083,16 +14681,16 @@ namespace ConditioningControlPanel
                     ClearAccountData();
 
                     MessageBox.Show(
-                        "Your profile has been deleted.",
-                        "Profile Deleted",
+                        Loc.Get("msg_profile_deleted"),
+                        Loc.Get("title_profile_deleted"),
                         MessageBoxButton.OK,
                         MessageBoxImage.Information);
                 }
                 else
                 {
                     MessageBox.Show(
-                        error ?? "Failed to delete profile",
-                        "Deletion Failed",
+                        error ?? Loc.Get("msg_failed_to_delete_profile"),
+                        Loc.Get("title_deletion_failed"),
                         MessageBoxButton.OK,
                         MessageBoxImage.Warning);
                 }
@@ -12101,8 +14699,8 @@ namespace ConditioningControlPanel
             {
                 App.Logger?.Warning(ex, "Error deleting profile");
                 MessageBox.Show(
-                    "An error occurred while deleting your profile. Please try again.",
-                    "Error",
+                    Loc.Get("msg_error_deleting_profile"),
+                    Loc.Get("label_error"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
             }
@@ -12294,7 +14892,7 @@ namespace ConditioningControlPanel
             // Online status
             if (TxtProfileViewerOnline != null)
             {
-                TxtProfileViewerOnline.Text = "Online";
+                TxtProfileViewerOnline.Text = Loc.Get("label_online");
                 TxtProfileViewerOnline.Foreground = new System.Windows.Media.SolidColorBrush(
                     (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#43B581"));
             }
@@ -12321,7 +14919,8 @@ namespace ConditioningControlPanel
 
             // Stats from local data
             var level = App.Settings?.Current?.PlayerLevel ?? 1;
-            var xp = App.Settings?.Current?.PlayerXP ?? 0;
+            var localXp = App.Settings?.Current?.PlayerXP ?? 0;
+            var xp = App.Progression?.GetTotalXP(level, localXp) ?? localXp;
             var progress = App.Achievements?.Progress;
 
             if (TxtProfileViewerLevel != null) TxtProfileViewerLevel.Text = level.ToString();
@@ -12329,21 +14928,30 @@ namespace ConditioningControlPanel
             // Rank (own rank from leaderboard, if available)
             if (TxtProfileViewerRank != null)
             {
-                // Try to find own rank: unified_id first, then display name fallback
-                var unifiedId = App.UnifiedUserId;
-                var displayName = App.Settings?.Current?.UserDisplayName;
+                // Prefer server-provided rank (works even beyond top 200)
+                var serverRank = App.Leaderboard?.YourRank;
+                if (serverRank.HasValue && serverRank.Value > 0)
+                {
+                    TxtProfileViewerRank.Text = $"#{serverRank.Value}";
+                }
+                else
+                {
+                    // Fallback: scan local entries by unified_id or display name
+                    var unifiedId = App.UnifiedUserId;
+                    var displayName = App.Settings?.Current?.UserDisplayName;
 
-                var ownEntry = !string.IsNullOrEmpty(unifiedId)
-                    ? App.Leaderboard?.Entries?.FirstOrDefault(e =>
-                        e.UnifiedId == unifiedId)
-                    : null;
+                    var ownEntry = !string.IsNullOrEmpty(unifiedId)
+                        ? App.Leaderboard?.Entries?.FirstOrDefault(e =>
+                            e.UnifiedId == unifiedId)
+                        : null;
 
-                ownEntry ??= !string.IsNullOrEmpty(displayName)
-                    ? App.Leaderboard?.Entries?.FirstOrDefault(e =>
-                        e.DisplayName?.Equals(displayName, StringComparison.OrdinalIgnoreCase) == true)
-                    : null;
+                    ownEntry ??= !string.IsNullOrEmpty(displayName)
+                        ? App.Leaderboard?.Entries?.FirstOrDefault(e =>
+                            e.DisplayName?.Equals(displayName, StringComparison.OrdinalIgnoreCase) == true)
+                        : null;
 
-                TxtProfileViewerRank.Text = ownEntry?.Rank > 0 ? $"#{ownEntry.Rank}" : "#-";
+                    TxtProfileViewerRank.Text = ownEntry?.Rank > 0 ? $"#{ownEntry.Rank}" : "#-";
+                }
             }
             if (TxtProfileViewerXp != null) TxtProfileViewerXp.Text = FormatNumber(xp);
             if (TxtProfileViewerBubbles != null) TxtProfileViewerBubbles.Text = FormatNumber(progress?.TotalBubblesPopped ?? 0);
@@ -12358,7 +14966,7 @@ namespace ConditioningControlPanel
             {
                 var unlocked = App.Achievements?.GetUnlockedCount() ?? 0;
                 var total = Models.Achievement.All.Values.Count;
-                TxtProfileViewerAchievements.Text = $"{unlocked}/{total}";
+                TxtProfileViewerAchievements.Text = $"{unlocked} / {total}";
             }
 
             // Patreon badge - use settings tier (works for Discord-only login with linked Patreon)
@@ -12429,7 +15037,7 @@ namespace ConditioningControlPanel
                 if (ProfileAchievementGrid != null) ProfileAchievementGrid.ItemsSource = null;
                 if (TxtNoAchievements != null)
                 {
-                    TxtNoAchievements.Text = "No achievements yet";
+                    TxtNoAchievements.Text = Loc.Get("label_no_achievements_yet");
                     TxtNoAchievements.Visibility = Visibility.Visible;
                 }
             }
@@ -12779,7 +15387,7 @@ namespace ConditioningControlPanel
                     var image = LoadAchievementImage(achievement.ImageName);
                     if (image != null)
                     {
-                        achievementItems.Add(new { Name = achievement.Name, Image = image });
+                        achievementItems.Add(new { Name = App.Mods?.MakeModAware(achievement.Name) ?? achievement.Name, Image = image });
                     }
                 }
             }
@@ -12796,10 +15404,16 @@ namespace ConditioningControlPanel
 
         #endregion
 
-        private void BtnPopOutBrowser_Click(object sender, RoutedEventArgs e)
+        private async void BtnPopOutBrowser_Click(object sender, RoutedEventArgs e)
         {
             // Block in offline mode
             if (App.Settings?.Current?.OfflineMode == true) return;
+
+            // Lazy-load browser on first pop-out
+            if (!_browserInitialized)
+            {
+                await InitializeBrowserAsync();
+            }
 
             if (_browser?.WebView == null) return;
 
@@ -12819,13 +15433,13 @@ namespace ConditioningControlPanel
                 }
 
                 // Show placeholder in the embedded container
-                BrowserLoadingText.Text = "🌐 Browser popped out\nClick ⧉ to focus window";
+                BrowserLoadingText.Text = Loc.Get("label_browser_popped_out_nclick_to_focus_window");
                 BrowserLoadingText.Visibility = Visibility.Visible;
 
                 // Create popup window
                 _browserPopoutWindow = new Window
                 {
-                    Title = "Conditioning Control Panel - Browser",
+                    Title = Loc.Get("title_browser_window"),
                     Width = 1024,
                     Height = 768,
                     MinWidth = 400,
@@ -12868,13 +15482,13 @@ namespace ConditioningControlPanel
                         BrowserLoadingText.Visibility = Visibility.Collapsed;
                     }
                     _browserPopoutWindow = null;
-                    BtnPopOutBrowser.Content = "⧉ Pop Out";
-                    BtnPopOutBrowser.ToolTip = "Pop out browser to resizable window";
+                    BtnPopOutBrowser.Content = Loc.Get("btn_pop_out");
+                    BtnPopOutBrowser.ToolTip = Loc.Get("tooltip_pop_out_browser_to_resizable_window");
                 };
 
                 // Update button to show it's popped out
-                BtnPopOutBrowser.Content = "◱ Focus";
-                BtnPopOutBrowser.ToolTip = "Browser is popped out - click to focus";
+                BtnPopOutBrowser.Content = Loc.Get("btn_focus");
+                BtnPopOutBrowser.ToolTip = Loc.Get("tooltip_browser_is_popped_out_click_to_focus");
 
                 _browserPopoutWindow.Show();
                 App.Logger?.Information("Browser popped out to separate window");
@@ -13127,6 +15741,13 @@ namespace ConditioningControlPanel
             // Don't allow manual start/stop while remote controller is connected
             if (App.RemoteControl?.ControllerConnected == true) return;
 
+            if (_isRunning && App.Lockdown?.IsActive == true)
+            {
+                MessageBox.Show(Loc.Get("msg_you_are_in_lockdown_mode_nyou_cannot_stop_dur"), Loc.Get("title_lockdown"),
+                    MessageBoxButton.OK, MessageBoxImage.Stop);
+                return;
+            }
+
             if (_isRunning)
             {
                 // Check if a session is running
@@ -13152,8 +15773,8 @@ namespace ConditioningControlPanel
                         "⚠ Stop Session?",
                         $"You're currently in a session:\n" +
                         $"{session?.Icon} {session?.Name}\n\n" +
-                        $"Time elapsed: {elapsed.Minutes:D2}:{elapsed.Seconds:D2}\n" +
-                        $"Time remaining: {remaining.Minutes:D2}:{remaining.Seconds:D2}\n\n" +
+                        $"Time elapsed: {((int)elapsed.TotalMinutes):D2}:{elapsed.Seconds:D2}\n" +
+                        $"Time remaining: {((int)remaining.TotalMinutes):D2}:{remaining.Seconds:D2}\n\n" +
                         $"If you stop now, you will lose ALL {potentialXP} XP.{penaltyText}\n\n" +
                         "Are you sure you want to quit?",
                         "Yes, stop session", "Keep going");
@@ -13219,20 +15840,20 @@ namespace ConditioningControlPanel
                 App.Bubbles.Start();
             }
 
-            // Start lock card service (requires level 35)
-            if (settings.IsLevelUnlocked(35) && settings.LockCardEnabled)
+            // Start lock card service
+            if (settings.LockCardEnabled)
             {
                 App.LockCard.Start();
             }
 
-            // Start bubble count game service (requires level 50)
-            if (settings.IsLevelUnlocked(50) && settings.BubbleCountEnabled)
+            // Start bubble count game service
+            if (settings.BubbleCountEnabled)
             {
                 App.BubbleCount.Start();
             }
 
-            // Start bouncing text service (requires level 60)
-            if (settings.IsLevelUnlocked(60) && settings.BouncingTextEnabled)
+            // Start bouncing text service
+            if (settings.BouncingTextEnabled)
             {
                 App.BouncingText.Start();
             }
@@ -13242,8 +15863,8 @@ namespace ConditioningControlPanel
                 App.BouncingText.Stop();
             }
 
-            // Start mind wipe service (requires level 75)
-            if (settings.IsLevelUnlocked(75) && settings.MindWipeEnabled)
+            // Start mind wipe service
+            if (settings.MindWipeEnabled)
             {
                 App.MindWipe.Start(settings.MindWipeFrequency, settings.MindWipeVolume / 100.0);
 
@@ -13254,17 +15875,29 @@ namespace ConditioningControlPanel
                 }
             }
 
-            // Start brain drain service (requires level 70)
-            if (settings.IsLevelUnlocked(70) && settings.BrainDrainEnabled)
+            // Start brain drain service (still gated internally by Brain Drain rework flag)
+            if (settings.BrainDrainEnabled)
             {
                 App.BrainDrain.Start();
             }
 
-            // Start autonomy service (requires Patreon + level 100)
+            // Start autonomy service (requires Patreon)
             var hasPatreonAccess = settings.PatreonTier >= 1 || App.Patreon?.IsWhitelisted == true;
-            if (hasPatreonAccess && settings.IsLevelUnlocked(100) && settings.AutonomyModeEnabled && settings.AutonomyConsentGiven)
+            if (hasPatreonAccess && settings.AutonomyModeEnabled && settings.AutonomyConsentGiven)
             {
                 App.Autonomy?.Start();
+            }
+
+            // Start pop quiz if enabled
+            if (settings.PopQuizEnabled)
+            {
+                App.PopQuiz?.Start();
+            }
+
+            // Start pop quiz service
+            if (settings.PopQuizEnabled)
+            {
+                App.PopQuiz?.Start();
             }
 
             // Start ramp timer if enabled
@@ -13272,7 +15905,7 @@ namespace ConditioningControlPanel
             {
                 StartRampTimer();
             }
-            
+
             // Browser audio serves as background - no need to play separate music
 
             _isRunning = true;
@@ -13305,21 +15938,24 @@ namespace ConditioningControlPanel
             App.BubbleCount.Stop();
             App.MindWipe.Stop();
             App.BrainDrain.Stop();
+            App.PopQuiz?.Stop();
             // Only stop autonomy if it was started by the session engine (i.e., user didn't enable it independently).
             // If the user has autonomy enabled in settings, let it keep running after session ends.
             var s = App.Settings?.Current;
             var hasPatreon = (s?.PatreonTier ?? 0) >= 1 || App.Patreon?.IsWhitelisted == true;
-            if (!(hasPatreon && s != null && s.IsLevelUnlocked(100) && s.AutonomyModeEnabled && s.AutonomyConsentGiven))
+            if (!(hasPatreon && s != null && s.AutonomyModeEnabled && s.AutonomyConsentGiven))
             {
                 App.Autonomy?.Stop();
             }
             App.SkillTree?.Stop();
             App.Audio.ForceUnduck();
 
-            // Force close any open lock card windows (panic button should close them immediately)
+            // Force close any open lock card / quiz windows (panic button should close them immediately)
             LockCardWindow.ForceCloseAll();
             BubbleCountWindow.ForceCloseAll();
             BubbleCountResultWindow.ForceCloseAll();
+            QuizWindow.ForceCloseAll();
+            PopQuizWindow.ForceCloseAll();
 
             // Stop ramp timer and reset sliders
             StopRampTimer();
@@ -13332,6 +15968,13 @@ namespace ConditioningControlPanel
 
             // Fire event for avatar reaction
             EngineStopped?.Invoke(this, EventArgs.Empty);
+
+            // Release cached images and compact the Large Object Heap.
+            // Flash/overlay BitmapSources are large allocations (>85 KB) that fragment
+            // the LOH during sessions. Compacting here returns memory to the OS.
+            App.Flash.ClearImageCache();
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Optimized, blocking: false);
 
             App.Logger?.Information("Engine stopped");
         }
@@ -13645,6 +16288,8 @@ namespace ConditioningControlPanel
             s.FlashEnabled = ChkFlashEnabled.IsChecked ?? true;
             s.FlashClickable = ChkClickable.IsChecked ?? true;
             s.CorruptionMode = ChkCorruption.IsChecked ?? false;
+            s.HydraLinkedTiming = ChkHydraLinked.IsChecked ?? true;
+            s.FlashGlowEnabled = ChkFlashGlow.IsChecked ?? true;
             s.FlashFrequency = (int)SliderPerMin.Value;
             s.SimultaneousImages = (int)SliderImages.Value;
             s.HydraLimit = (int)SliderMaxOnScreen.Value;
@@ -13749,7 +16394,7 @@ namespace ConditioningControlPanel
                 // Also update Presets tab button using direct reference
                 if (TxtPresetsStatus != null)
                 {
-                    TxtPresetsStatus.Text = "Running...";
+                    TxtPresetsStatus.Text = Loc.Get("label_running");
                 }
             }
             else
@@ -13860,6 +16505,8 @@ namespace ConditioningControlPanel
             ChkFlashEnabled.IsChecked = s.FlashEnabled;
             ChkClickable.IsChecked = s.FlashClickable;
             ChkCorruption.IsChecked = s.CorruptionMode;
+            ChkHydraLinked.IsChecked = s.HydraLinkedTiming;
+            ChkFlashGlow.IsChecked = s.FlashGlowEnabled;
             SliderPerMin.Value = s.FlashFrequency;
             SliderImages.Value = s.SimultaneousImages;
             SliderMaxOnScreen.Value = s.HydraLimit;
@@ -13904,6 +16551,7 @@ namespace ConditioningControlPanel
             ChkStartHidden.IsChecked = s.StartMinimized;
             ChkNoPanic.IsChecked = !s.PanicKeyEnabled;
             ChkOfflineMode.IsChecked = s.OfflineMode;
+            ChkStopEffectsOnRemoteDisconnect.IsChecked = s.StopEffectsOnRemoteDisconnect;
 
             // Update UI for offline mode state (disable login buttons, browser, etc.)
             if (s.OfflineMode)
@@ -13918,7 +16566,7 @@ namespace ConditioningControlPanel
             }
             else
             {
-                TxtStartupVideo.Text = "(Random)";
+                TxtStartupVideo.Text = Loc.Get("label_random");
             }
 
             // Audio
@@ -13941,7 +16589,12 @@ namespace ConditioningControlPanel
             SliderLockCardRepeats.Value = s.LockCardRepeats;
             ChkLockCardStrict.IsChecked = s.LockCardStrict;
             ChkBubbleCountEnabled.IsChecked = s.BubbleCountEnabled;
+            ChkBubbleCountStrict.IsChecked = s.BubbleCountStrictLock;
+            SliderBubbleCountFreq.Value = s.BubbleCountFrequency;
+            TxtBubbleCountFreq.Text = s.BubbleCountFrequency.ToString();
+            CmbBubbleCountDifficulty.SelectedIndex = s.BubbleCountDifficulty;
             ChkBouncingTextEnabled.IsChecked = s.BouncingTextEnabled;
+            ChkBouncingTextAlwaysOnTop.IsChecked = s.BouncingTextAlwaysOnTop;
 
             // Mind Wipe
             ChkMindWipeEnabled.IsChecked = s.MindWipeEnabled;
@@ -14122,7 +16775,7 @@ namespace ConditioningControlPanel
 
             // Start autonomy service if it was enabled (works independently of engine)
             var hasPatreonAccess = s.PatreonTier >= 1 || App.Patreon?.IsWhitelisted == true;
-            if (hasPatreonAccess && s.IsLevelUnlocked(100) && s.AutonomyModeEnabled && s.AutonomyConsentGiven)
+            if (hasPatreonAccess && s.AutonomyModeEnabled && s.AutonomyConsentGiven)
             {
                 App.Autonomy?.Start();
                 App.Logger?.Debug("MainWindow: Started autonomy service on settings load");
@@ -14190,12 +16843,25 @@ namespace ConditioningControlPanel
 
         private void SaveSettings()
         {
+            // velvet-mosaic: feature popups write to App.Settings.Current on every edit,
+            // so the settings object is already the source of truth. The legacy dashboard
+            // controls (now inside LegacyDashboardHost, Collapsed) can be stale. Re-sync
+            // them from settings before this method reads them, otherwise stale control
+            // values would clobber the popup changes.
+            var wasLoading = _isLoading;
+            _isLoading = true;
+            try { LoadSettings(); }
+            catch (Exception ex) { App.Logger?.Warning(ex, "SaveSettings: legacy control refresh failed"); }
+            finally { _isLoading = wasLoading; }
+
             var s = App.Settings.Current;
 
             // Flash
             s.FlashEnabled = ChkFlashEnabled.IsChecked ?? true;
             s.FlashClickable = ChkClickable.IsChecked ?? true;
             s.CorruptionMode = ChkCorruption.IsChecked ?? false;
+            s.HydraLinkedTiming = ChkHydraLinked.IsChecked ?? true;
+            s.FlashGlowEnabled = ChkFlashGlow.IsChecked ?? true;
             s.FlashFrequency = (int)SliderPerMin.Value;
             s.SimultaneousImages = (int)SliderImages.Value;
             s.HydraLimit = (int)SliderMaxOnScreen.Value;
@@ -14317,7 +16983,7 @@ namespace ConditioningControlPanel
                 }
                 else
                 {
-                    MessageBox.Show("Settings saved!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+                    MessageBox.Show(Loc.Get("msg_settings_saved"), Loc.Get("title_success"), MessageBoxButton.OK, MessageBoxImage.Information);
                 }
             }
             else
@@ -14345,7 +17011,7 @@ namespace ConditioningControlPanel
                         RefreshPresetsList();
 
                         App.Logger?.Information("Overwritten preset: {Name}", updated.Name);
-                        MessageBox.Show($"Preset '{updated.Name}' updated!", "Preset Saved",
+                        MessageBox.Show(Loc.GetF("msg_preset_0_updated", updated.Name), Loc.Get("title_preset_saved"),
                             MessageBoxButton.OK, MessageBoxImage.Information);
                     }
                 }
@@ -14357,7 +17023,7 @@ namespace ConditioningControlPanel
                 else
                 {
                     // Cancel - just show settings saved message
-                    MessageBox.Show("Settings saved!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+                    MessageBox.Show(Loc.Get("msg_settings_saved"), Loc.Get("title_success"), MessageBoxButton.OK, MessageBoxImage.Information);
                 }
             }
         }
@@ -14366,14 +17032,14 @@ namespace ConditioningControlPanel
         {
             if (App.Lockdown?.IsActive == true)
             {
-                MessageBox.Show("YOU ARE IN LOCKDOWN MODE.\nTHERE IS NO ESCAPE!", "LOCKDOWN",
+                MessageBox.Show(Loc.Get("msg_you_are_in_lockdown_mode_nthere_is_no_escape"), Loc.Get("title_lockdown"),
                     MessageBoxButton.OK, MessageBoxImage.Stop);
                 return;
             }
 
             if (_isRunning)
             {
-                var result = MessageBox.Show("Engine is running. Stop and exit?", "Confirm Exit",
+                var result = MessageBox.Show(Loc.Get("msg_engine_is_running_stop_and_exit"), Loc.Get("title_confirm_exit"),
                     MessageBoxButton.YesNo, MessageBoxImage.Question);
                 if (result != MessageBoxResult.Yes)
                     return;
@@ -14389,6 +17055,34 @@ namespace ConditioningControlPanel
             // Hide browser (WebView2 doesn't respect WPF z-order)
             if (BrowserContainer != null) BrowserContainer.Visibility = Visibility.Hidden;
             MainTutorialOverlay.Visibility = Visibility.Visible;
+        }
+
+        private void BtnReportBug_Click(object sender, RoutedEventArgs e)
+        {
+            OpenBugReportWindow();
+        }
+
+        private void BtnTutorialReportBug_Click(object sender, RoutedEventArgs e)
+        {
+            // Close the tutorial overlay first, then open the bug report dialog
+            MainTutorialOverlay.Visibility = Visibility.Collapsed;
+            if (BrowserContainer != null) BrowserContainer.Visibility = Visibility.Visible;
+            OpenBugReportWindow();
+        }
+
+        private void OpenBugReportWindow()
+        {
+            try
+            {
+                var dialog = new BugReportWindow { Owner = this };
+                dialog.ShowDialog();
+            }
+            catch (System.Exception ex)
+            {
+                App.Logger?.Error(ex, "Failed to open BugReportWindow");
+                MessageBox.Show(this, Loc.Get("bug_report_error_toast") + "\n\n" + ex.Message,
+                    Loc.Get("bug_report_title"), MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private void MainTutorial_Close(object sender, RoutedEventArgs e)
@@ -14431,7 +17125,9 @@ namespace ConditioningControlPanel
                 showProgression: () => ShowTab("progression"),
                 showAchievements: () => ShowTab("achievements"),
                 showCompanion: () => ShowTab("companion"),
-                showPatreon: () => ShowTab("patreon")
+                // Exclusives tab eliminated — route tutorial's "patreon" step to the
+                // App Info & Data popup which hosts the login/data sections.
+                showPatreon: () => ShowAppInfoPopup()
             );
 
             App.Tutorial.Start(type);
@@ -14502,6 +17198,14 @@ namespace ConditioningControlPanel
             StartTutorial(TutorialType.Avatar);
         }
 
+        private void BtnTutorialModding_Click(object sender, RoutedEventArgs e)
+        {
+            MainTutorialOverlay.Visibility = Visibility.Collapsed;
+            if (BrowserContainer != null) BrowserContainer.Visibility = Visibility.Visible;
+            var modCreator = new ModCreatorWindow(startWithTutorial: true) { Owner = this };
+            modCreator.Show();
+        }
+
         #endregion
 
         private void OpenLinktree()
@@ -14563,13 +17267,14 @@ namespace ConditioningControlPanel
             XPBar.Width = progress * (XPBar.Parent as Border)?.ActualWidth ?? 100;
 
             // Update title based on level
-            TxtPlayerTitle.Text = level switch
+            var rankTitle = level switch
             {
                 < 20 => "BASIC BIMBO",
                 < 50 => "DUMB AIRHEAD",
                 < 100 => "SYNTHETIC BLOWDOLL",
                 _ => "PERFECT FUCKPUPPET"
             };
+            TxtPlayerTitle.Text = App.Mods?.MakeModAware(rankTitle) ?? rankTitle;
 
             // Update unlockables visibility based on level
             UpdateUnlockablesVisibility(level);
@@ -14582,12 +17287,91 @@ namespace ConditioningControlPanel
         }
 
         /// <summary>
+        /// Applies mod text replacements to all hardcoded feature/section labels in the XAML.
+        /// Called on startup and when the active mod changes.
+        /// </summary>
+        private void ApplyModFeatureNames()
+        {
+            // If a mod is active, use mod-aware text; otherwise use localized text
+            string ML(string englishText, string locKey) => App.Mods?.MakeModAware(englishText) is string modText && modText != englishText
+                ? modText : Loc.Get(locKey);
+
+            // Main section headers
+            if (TxtFeatureFlash != null) TxtFeatureFlash.Text = ML("⚡ Flash Images", "section_flash_images");
+            if (TxtFeatureVideo != null) TxtFeatureVideo.Text = ML("🎬 Mandatory Video", "section_mandatory_video");
+            if (TxtFeatureSubliminal != null) TxtFeatureSubliminal.Text = ML("💭 Subliminals", "section_subliminals");
+            if (TxtFeatureWhispers != null) TxtFeatureWhispers.Text = ML("📊 Audio Whispers", "label_audio_whispers");
+
+            // Enhancement locked/unlocked pairs
+            if (TxtFeatureSpiralLocked != null) TxtFeatureSpiralLocked.Text = ML("🌀 Spiral Overlay", "label_spiral_overlay");
+            if (TxtFeatureSpiral != null) TxtFeatureSpiral.Text = ML("🌀 Spiral Overlay", "label_spiral_overlay");
+            if (TxtFeaturePinkFilterLocked != null) TxtFeaturePinkFilterLocked.Text = ML("💗 Pink Filter", "label_pink_filter");
+            if (TxtFeaturePinkFilter != null) TxtFeaturePinkFilter.Text = ML("💗 Pink Filter", "label_pink_filter");
+            if (TxtFeatureBubblePopLocked != null) TxtFeatureBubblePopLocked.Text = ML("🫧 Bubble Pop", "label_bubble_pop");
+            if (TxtFeatureBubblePop != null) TxtFeatureBubblePop.Text = ML("🫧 Bubble Pop", "label_bubble_pop");
+            if (TxtFeatureLockCardLocked != null) TxtFeatureLockCardLocked.Text = ML("📐 Lock Card", "label_lock_card");
+            if (TxtFeatureLockCard != null) TxtFeatureLockCard.Text = ML("📐 Lock Card", "label_lock_card");
+            if (TxtFeatureBubbleCountLocked != null) TxtFeatureBubbleCountLocked.Text = ML("🫧 Bubble Count", "label_bubble_count");
+            if (TxtFeatureBubbleCount != null) TxtFeatureBubbleCount.Text = ML("🫧 Bubble Count", "label_bubble_count");
+            if (TxtFeatureBouncingLocked != null) TxtFeatureBouncingLocked.Text = ML("📺 Bouncing Text", "label_bouncing_text");
+            if (TxtFeatureBouncing != null) TxtFeatureBouncing.Text = ML("📺 Bouncing Text", "label_bouncing_text");
+            if (TxtFeatureBrainDrain != null) TxtFeatureBrainDrain.Text = ML("💧 Brain Drain", "label_brain_drain");
+            if (TxtFeatureMindWipeLocked != null) TxtFeatureMindWipeLocked.Text = ML("🧠 Mind Wipe", "label_mind_wipe");
+            if (TxtFeatureMindWipe != null) TxtFeatureMindWipe.Text = ML("🧠 Mind Wipe", "label_mind_wipe");
+            if (TxtFeatureCornerGif != null) TxtFeatureCornerGif.Text = ML("🖼 Corner GIF", "label_corner_gif");
+
+            // Preset/session detail labels
+            if (TxtDetailFlashLabel != null) TxtDetailFlashLabel.Text = ML("⚡ Flash Images", "section_flash_images");
+            if (TxtDetailVideoLabel != null) TxtDetailVideoLabel.Text = ML("🎬 Mandatory Videos", "label_mandatory_videos");
+            if (TxtDetailSubLabel != null) TxtDetailSubLabel.Text = ML("💭 Subliminals", "section_subliminals");
+            if (TxtSessionFlashLabel != null) TxtSessionFlashLabel.Text = ML("⚡ Flash Images", "section_flash_images");
+            if (TxtSessionSubLabel != null) TxtSessionSubLabel.Text = ML("💭 Subliminals", "section_subliminals");
+
+            // Autonomy toggle labels
+            if (TxtAutoFlash != null) TxtAutoFlash.Text = ML("Flashes", "tab_flashes");
+            if (TxtAutoVideo != null) TxtAutoVideo.Text = ML("Videos", "tab_videos");
+            if (TxtAutoSubliminal != null) TxtAutoSubliminal.Text = ML("Subliminals", "tab_subliminals");
+            if (TxtAutoBubbles != null) TxtAutoBubbles.Text = ML("Bubbles", "label_haptic_bubbles");
+            if (TxtAutoPinkFilter != null) TxtAutoPinkFilter.Text = ML("Pink Filter", "label_pink_filter");
+            if (TxtAutoLockCards != null) TxtAutoLockCards.Text = ML("Lock Cards", "label_lock_card");
+            if (TxtAutoBouncing != null) TxtAutoBouncing.Text = ML("Bouncing", "label_bouncing_text");
+            if (TxtAutoMindwipe != null) TxtAutoMindwipe.Text = ML("Mindwipe", "label_mind_wipe");
+
+            // Enhancement tab tooltip
+            if (BtnEnhancements != null)
+                BtnEnhancements.ToolTip = App.Mods?.GetTabTooltip() ?? Loc.Get("tooltip_enhancement_tree");
+
+            // Stat pill tooltips
+            if (PillConditioningTime != null)
+                PillConditioningTime.ToolTip = App.Mods?.GetStatPillTooltip("pink_hours")
+                    ?? ML("Total conditioning time (Pink Hours skill)", "tooltip_total_conditioning_time_pink_hours_skill");
+            if (PillOnlineUsers != null)
+                PillOnlineUsers.ToolTip = App.Mods?.GetStatPillTooltip("hive_mind")
+                    ?? ML("Bimbos online now (Hive Mind skill)", "tooltip_bimbos_online_now_hive_mind_skill");
+            if (PillRankPercentile != null)
+                PillRankPercentile.ToolTip = App.Mods?.GetStatPillTooltip("popular_girl")
+                    ?? ML("Your rank percentile (Popular Girl skill)", "tooltip_your_rank_percentile_popular_girl_skill");
+
+            // Mod-aware Bambi Takeover header + side-nav button label
+            // (Drone mod → "Drone Takeover", SissyHypno → "Sissy Takeover", etc.)
+            var takeoverLabel = App.Mods?.GetTakeoverLabel() ?? Loc.Get("tab_bambi_takeover");
+            if (TxtBambiTakeoverHeader != null) TxtBambiTakeoverHeader.Text = takeoverLabel;
+            if (TxtSubBambiTakeover != null) TxtSubBambiTakeover.Text = takeoverLabel;
+
+            // Refresh bonus chips with updated names
+            RefreshXPBarBonuses();
+
+            // Also refresh rank title
+            UpdateLevelDisplay();
+        }
+
+        /// <summary>
         /// Updates the XP bar visibility based on login status.
         /// Shows a login prompt overlay when user is not logged in.
         /// </summary>
         private void UpdateXPBarLoginState()
         {
-            var isLoggedIn = (App.Discord?.IsAuthenticated == true) || (App.Patreon?.IsAuthenticated == true);
+            var isLoggedIn = App.IsLoggedIn;
 
             if (XPBarLoginOverlay != null && XPBarContent != null)
             {
@@ -14678,12 +17462,12 @@ namespace ConditioningControlPanel
                     else if (App.Leaderboard?.Entries?.Count > 0)
                     {
                         // Leaderboard loaded but player not found - might be unranked or need to sync
-                        TxtPillRankPercentile.Text = "Unranked";
+                        TxtPillRankPercentile.Text = Loc.Get("label_unranked");
                     }
                     else
                     {
                         // Leaderboard not loaded yet
-                        TxtPillRankPercentile.Text = "Loading...";
+                        TxtPillRankPercentile.Text = Loc.Get("label_loading_2");
                     }
                 }
             }
@@ -14728,6 +17512,7 @@ namespace ConditioningControlPanel
             {
                 if (source == "Base") continue;
 
+                var displaySource = App.Mods?.MakeModAware(source) ?? source;
                 var chip = new Border
                 {
                     Background = new SolidColorBrush(Color.FromRgb(42, 42, 74)), // #2A2A4A - matches stat pills
@@ -14739,8 +17524,8 @@ namespace ConditioningControlPanel
 
                 chip.Child = new TextBlock
                 {
-                    Text = $"+{value:P0} {source}",
-                    Foreground = new SolidColorBrush(Color.FromRgb(255, 182, 193)), // #FFB6C1
+                    Text = $"+{value:P0} {displaySource}",
+                    Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentLightColorHex() ?? "#FFB6C1")),
                     FontSize = 10,
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -14751,15 +17536,39 @@ namespace ConditioningControlPanel
 
         private static string? GetBonusChipTooltip(string source)
         {
-            if (source.StartsWith("Streak Power")) return "Skill tree bonus: +0.5% XP per day of consecutive use (max 15%)";
+            string M(string text) => App.Mods?.MakeModAware(text) ?? text;
+
+            // Check for explicit mod override first
+            string? modTip = null;
+            if (source.StartsWith("Streak Power"))
+                modTip = App.Mods?.GetBoostTooltip("streak_power");
+            else
+            {
+                var skillId = source switch
+                {
+                    "Sparkle Boost" => "sparkle_boost_1",
+                    "Extra Sparkly" => "sparkle_boost_2",
+                    "Maximum Sparkle" => "sparkle_boost_3",
+                    "Night Shift" => "night_shift",
+                    "Early Bird Bimbo" => "early_bird_bimbo",
+                    "PINK RUSH ACTIVE!" => "pink_rush",
+                    _ => null
+                };
+                if (skillId != null)
+                    modTip = App.Mods?.GetBoostTooltip(skillId);
+            }
+            if (modTip != null) return modTip;
+
+            // Fall back to defaults with MakeModAware
+            if (source.StartsWith("Streak Power")) return M("Skill tree bonus: +0.5% XP per day of consecutive use (max 15%)");
             return source switch
             {
-                "Sparkle Boost" => "Skill tree bonus: +10% XP from Sparkle Boost",
-                "Extra Sparkly" => "Skill tree bonus: +15% XP from Extra Sparkly (stacks with Sparkle Boost)",
-                "Maximum Sparkle" => "Skill tree bonus: +20% XP from Maximum Sparkle (stacks with other Sparkle skills)",
-                "Night Shift" => "Skill tree bonus: +50% XP for conditioning between 11 PM and 5 AM",
-                "Early Bird Bimbo" => "Skill tree bonus: +50% XP for conditioning between 5 AM and 8 AM",
-                "PINK RUSH ACTIVE!" => "Skill tree bonus: 3x XP multiplier! Random 60-second windows of boosted XP",
+                "Sparkle Boost" => M("Skill tree bonus: +10% XP from Sparkle Boost"),
+                "Extra Sparkly" => M("Skill tree bonus: +15% XP from Extra Sparkly (stacks with Sparkle Boost)"),
+                "Maximum Sparkle" => M("Skill tree bonus: +20% XP from Maximum Sparkle (stacks with other Sparkle skills)"),
+                "Night Shift" => M("Skill tree bonus: +50% XP for conditioning between 11 PM and 5 AM"),
+                "Early Bird Bimbo" => M("Skill tree bonus: +50% XP for conditioning between 5 AM and 8 AM"),
+                "PINK RUSH ACTIVE!" => M("Skill tree bonus: 3x XP multiplier! Random 60-second windows of boosted XP"),
                 _ => null
             };
         }
@@ -14944,56 +17753,52 @@ namespace ConditioningControlPanel
         {
             try
             {
-                App.Logger?.Debug("UpdateUnlockablesVisibility: Updating visibility for level {Level}", level);
+                // Feature level gating has been removed — every feature is available from level 1.
+                // The legacy Locked/Unlocked panels below live inside the collapsed LegacyDashboardHost,
+                // but we still flip them to the unlocked state so nothing appears locked if anything
+                // ever ends up rendering them.
+                if (SpiralLocked != null) SpiralLocked.Visibility = Visibility.Collapsed;
+                if (SpiralUnlocked != null) SpiralUnlocked.Visibility = Visibility.Visible;
+                if (PinkFilterLocked != null) PinkFilterLocked.Visibility = Visibility.Collapsed;
+                if (PinkFilterUnlocked != null) PinkFilterUnlocked.Visibility = Visibility.Visible;
+                if (SpiralFeatureImage != null) SetFeatureImageBlur(SpiralFeatureImage, false);
+                if (PinkFilterFeatureImage != null) SetFeatureImageBlur(PinkFilterFeatureImage, false);
 
-                // Level 10 unlocks: Spiral Overlay, Pink Filter
-                var level10Unlocked = App.Settings?.Current?.IsLevelUnlocked(10) ?? false;
-                if (SpiralLocked != null) SpiralLocked.Visibility = level10Unlocked ? Visibility.Collapsed : Visibility.Visible;
-                if (SpiralUnlocked != null) SpiralUnlocked.Visibility = level10Unlocked ? Visibility.Visible : Visibility.Collapsed;
-                if (PinkFilterLocked != null) PinkFilterLocked.Visibility = level10Unlocked ? Visibility.Collapsed : Visibility.Visible;
-                if (PinkFilterUnlocked != null) PinkFilterUnlocked.Visibility = level10Unlocked ? Visibility.Visible : Visibility.Collapsed;
+                if (BubblesLocked != null) BubblesLocked.Visibility = Visibility.Collapsed;
+                if (BubblesUnlocked != null) BubblesUnlocked.Visibility = Visibility.Visible;
+                if (BubblePopFeatureImage != null) SetFeatureImageBlur(BubblePopFeatureImage, false);
 
-                if (SpiralFeatureImage != null) SetFeatureImageBlur(SpiralFeatureImage, !level10Unlocked);
-                if (PinkFilterFeatureImage != null) SetFeatureImageBlur(PinkFilterFeatureImage, !level10Unlocked);
+                if (LockCardLocked != null) LockCardLocked.Visibility = Visibility.Collapsed;
+                if (LockCardUnlocked != null) LockCardUnlocked.Visibility = Visibility.Visible;
+                if (LockCardFeatureImage != null) SetFeatureImageBlur(LockCardFeatureImage, false);
 
-                // Level 20 unlocks: Bubbles
-                var level20Unlocked = App.Settings?.Current?.IsLevelUnlocked(20) ?? false;
-                if (BubblesLocked != null) BubblesLocked.Visibility = level20Unlocked ? Visibility.Collapsed : Visibility.Visible;
-                if (BubblesUnlocked != null) BubblesUnlocked.Visibility = level20Unlocked ? Visibility.Visible : Visibility.Collapsed;
-                if (BubblePopFeatureImage != null) SetFeatureImageBlur(BubblePopFeatureImage, !level20Unlocked);
+                if (Level50Locked != null) Level50Locked.Visibility = Visibility.Collapsed;
+                if (Level50Unlocked != null) Level50Unlocked.Visibility = Visibility.Visible;
+                if (BubbleCountFeatureImage != null) SetFeatureImageBlur(BubbleCountFeatureImage, false);
 
-                // Level 35 unlocks: Lock Card
-                var level35Unlocked = App.Settings?.Current?.IsLevelUnlocked(35) ?? false;
-                if (LockCardLocked != null) LockCardLocked.Visibility = level35Unlocked ? Visibility.Collapsed : Visibility.Visible;
-                if (LockCardUnlocked != null) LockCardUnlocked.Visibility = level35Unlocked ? Visibility.Visible : Visibility.Collapsed;
-                if (LockCardFeatureImage != null) SetFeatureImageBlur(LockCardFeatureImage, !level35Unlocked);
+                if (Level60Locked != null) Level60Locked.Visibility = Visibility.Collapsed;
+                if (Level60Unlocked != null) Level60Unlocked.Visibility = Visibility.Visible;
+                if (BouncingTextFeatureImage != null) SetFeatureImageBlur(BouncingTextFeatureImage, false);
 
-                // Level 50 unlocks: Bubble Count Game
-                var level50Unlocked = App.Settings?.Current?.IsLevelUnlocked(50) ?? false;
-                if (Level50Locked != null) Level50Locked.Visibility = level50Unlocked ? Visibility.Collapsed : Visibility.Visible;
-                if (Level50Unlocked != null) Level50Unlocked.Visibility = level50Unlocked ? Visibility.Visible : Visibility.Collapsed;
-                if (BubbleCountFeatureImage != null) SetFeatureImageBlur(BubbleCountFeatureImage, !level50Unlocked);
+                if (MindWipeLocked != null) MindWipeLocked.Visibility = Visibility.Collapsed;
+                if (MindWipeUnlocked != null) MindWipeUnlocked.Visibility = Visibility.Visible;
+                if (MindWipeFeatureImage != null) SetFeatureImageBlur(MindWipeFeatureImage, false);
 
-                // Level 60 unlocks: Bouncing Text
-                var level60Unlocked = App.Settings?.Current?.IsLevelUnlocked(60) ?? false;
-                if (Level60Locked != null) Level60Locked.Visibility = level60Unlocked ? Visibility.Collapsed : Visibility.Visible;
-                if (Level60Unlocked != null) Level60Unlocked.Visibility = level60Unlocked ? Visibility.Visible : Visibility.Collapsed;
-                if (BouncingTextFeatureImage != null) SetFeatureImageBlur(BouncingTextFeatureImage, !level60Unlocked);
+                if (BrainDrainLocked != null) BrainDrainLocked.Visibility = Visibility.Collapsed;
+                if (BrainDrainUnlocked != null) BrainDrainUnlocked.Visibility = Visibility.Visible;
+                if (BrainDrainFeatureImage != null) SetFeatureImageBlur(BrainDrainFeatureImage, false);
 
-                // Level 75 unlocks: Mind Wipe
-                var level75Unlocked = App.Settings?.Current?.IsLevelUnlocked(75) ?? false;
-                if (MindWipeLocked != null) MindWipeLocked.Visibility = level75Unlocked ? Visibility.Collapsed : Visibility.Visible;
-                if (MindWipeUnlocked != null) MindWipeUnlocked.Visibility = level75Unlocked ? Visibility.Visible : Visibility.Collapsed;
-                if (MindWipeFeatureImage != null) SetFeatureImageBlur(MindWipeFeatureImage, !level75Unlocked);
-
-                // Level 70 unlocks: Brain Drain
-                var level70Unlocked = App.Settings?.Current?.IsLevelUnlocked(70) ?? false;
-                if (BrainDrainLocked != null) BrainDrainLocked.Visibility = level70Unlocked ? Visibility.Collapsed : Visibility.Visible;
-                if (BrainDrainUnlocked != null) BrainDrainUnlocked.Visibility = level70Unlocked ? Visibility.Visible : Visibility.Collapsed;
-                if (BrainDrainFeatureImage != null) SetFeatureImageBlur(BrainDrainFeatureImage, !level70Unlocked);
+                // velvet-mosaic dashboard cards are never locked anymore.
+                if (CardSpiral != null) CardSpiral.IsLocked = false;
+                if (CardPinkFilter != null) CardPinkFilter.IsLocked = false;
+                if (CardBubblePop != null) CardBubblePop.IsLocked = false;
+                if (CardLockCard != null) CardLockCard.IsLocked = false;
+                if (CardBubbleCount != null) CardBubbleCount.IsLocked = false;
+                if (CardBouncingText != null) CardBouncingText.IsLocked = false;
+                if (CardMindWipe != null) CardMindWipe.IsLocked = false;
 
                 // Lab Tab: Requires Patreon T2 / whitelist
-                var labUnlocked = App.Patreon?.CurrentTier >= PatreonTier.Level2;
+                var labUnlocked = App.Patreon?.CurrentTier >= PatreonTier.Level2 || (App.Settings?.Current?.PatreonTier ?? 0) >= 2;
                 if (LabSmokescreen != null) LabSmokescreen.Visibility = labUnlocked ? Visibility.Collapsed : Visibility.Visible;
 
                 // Bambi Takeover: Requires Patreon (any tier)
@@ -15004,11 +17809,9 @@ namespace ConditioningControlPanel
                 // Update lock message
                 if (TxtAutonomyLockStatus != null && TxtAutonomyLockMessage != null)
                 {
-                    TxtAutonomyLockStatus.Text = "🔒 Patreon Only";
-                    TxtAutonomyLockMessage.Text = "Support on Patreon to unlock";
+                    TxtAutonomyLockStatus.Text = Loc.Get("label_patreon_only");
+                    TxtAutonomyLockMessage.Text = Loc.Get("label_support_on_patreon_to_unlock");
                 }
-
-                App.Logger?.Debug("UpdateUnlockablesVisibility: Completed successfully.");
             }
             catch (Exception ex)
             {
@@ -15130,12 +17933,12 @@ namespace ConditioningControlPanel
                 SliderFlashDuration.IsEnabled = true;
                 SliderFlashDuration.Opacity = 1.0;
                 TxtAudioWarning.Visibility = Visibility.Visible;
-                TxtAudioWarning.Text = "⚠ Audio off >60/h";
+                TxtAudioWarning.Text = Loc.Get("label_audio_off_60_h");
             }
             else
             {
                 ChkFlashAudio.IsEnabled = true;
-                TxtAudioWarning.Text = "⚠ Max 60/h";
+                TxtAudioWarning.Text = Loc.Get("label_max_60_h");
                 TxtAudioWarning.Visibility = (ChkFlashAudio.IsChecked ?? true) ? Visibility.Collapsed : Visibility.Visible;
             }
         }
@@ -15248,6 +18051,13 @@ namespace ConditioningControlPanel
             ApplySettingsLive();
         }
 
+        private void BtnTestAudio_Click(object sender, RoutedEventArgs e)
+        {
+            var result = App.Audio?.TestAudioPlayback() ?? "Audio service not initialized";
+            App.Logger?.Information("[AudioDiag] Test requested:\n{Result}", result);
+            System.Windows.MessageBox.Show(result, "Audio Diagnostics", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
         private void SliderSpiralOpacity_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (_isLoading || TxtSpiralOpacity == null) return;
@@ -15352,7 +18162,7 @@ namespace ConditioningControlPanel
             // Immediately update lock card service if engine is running
             if (_isRunning)
             {
-                if (isEnabled && App.Settings.Current.IsLevelUnlocked(35))
+                if (isEnabled)
                 {
                     App.LockCard.Start();
                 }
@@ -15407,6 +18217,31 @@ namespace ConditioningControlPanel
             var isEnabled = ChkCorruption.IsChecked ?? false;
             App.Settings.Current.CorruptionMode = isEnabled;
             App.Logger?.Information("Hydra mode toggled: {Enabled}", isEnabled);
+            App.Settings.Save();
+        }
+
+        private void ChkFlashGlow_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+
+            var isEnabled = ChkFlashGlow.IsChecked ?? true;
+            App.Settings.Current.FlashGlowEnabled = isEnabled;
+            App.Logger?.Information("Flash glow toggled: {Enabled}", isEnabled);
+            App.Settings.Save();
+        }
+
+        /// <summary>
+        /// Toggles linked vs independent timing for hydra spawns~ 🔗✨
+        /// Linked = hydra children share the parent's remaining timer.
+        /// Independent = each hydra spawn gets a fresh full-duration lifetime.
+        /// </summary>
+        private void ChkHydraLinked_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+
+            var isLinked = ChkHydraLinked.IsChecked ?? true;
+            App.Settings.Current.HydraLinkedTiming = isLinked;
+            App.Logger?.Information("Hydra linked timing toggled: {Linked}", isLinked);
             App.Settings.Save();
         }
 
@@ -15506,7 +18341,7 @@ namespace ConditioningControlPanel
             // Immediately update service if engine is running
             if (_isRunning)
             {
-                if (isEnabled && App.Settings.Current.IsLevelUnlocked(50))
+                if (isEnabled)
                 {
                     App.BubbleCount.Start();
                 }
@@ -15565,9 +18400,13 @@ namespace ConditioningControlPanel
 
                 if (!confirmed)
                 {
-                    _isLoading = true;
+                    // Detach handlers before reverting to avoid re-entrancy
+                    // (_isLoading can be clobbered by other methods during the dialog's message pump)
+                    ChkBubbleCountStrict.Checked -= ChkBubbleCountStrict_Changed;
+                    ChkBubbleCountStrict.Unchecked -= ChkBubbleCountStrict_Changed;
                     ChkBubbleCountStrict.IsChecked = false;
-                    _isLoading = false;
+                    ChkBubbleCountStrict.Checked += ChkBubbleCountStrict_Changed;
+                    ChkBubbleCountStrict.Unchecked += ChkBubbleCountStrict_Changed;
                     return;
                 }
             }
@@ -15595,7 +18434,7 @@ namespace ConditioningControlPanel
             // Immediately update service if engine is running
             if (_isRunning)
             {
-                if (isEnabled && App.Settings.Current.IsLevelUnlocked(60))
+                if (isEnabled)
                 {
                     App.BouncingText.Start();
                 }
@@ -15639,13 +18478,20 @@ namespace ConditioningControlPanel
         {
             var editor = new TextEditorDialog("Bouncing Text Phrases", App.Settings.Current.BouncingTextPool);
             editor.Owner = this;
-            
+
             if (editor.ShowDialog() == true && editor.ResultData != null)
             {
                 App.Settings.Current.BouncingTextPool = editor.ResultData;
                 App.Logger?.Information("Bouncing text phrases updated: {Count} items", editor.ResultData.Count);
                 App.Settings.Save();
             }
+        }
+
+        private void ChkBouncingTextAlwaysOnTop_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoading) return;
+            App.Settings.Current.BouncingTextAlwaysOnTop = ChkBouncingTextAlwaysOnTop.IsChecked ?? false;
+            App.Settings.Save();
         }
 
         #endregion
@@ -15662,7 +18508,7 @@ namespace ConditioningControlPanel
             // Immediately update service if engine is running (non-session mode)
             if (_isRunning && _sessionEngine?.CurrentSession == null)
             {
-                if (isEnabled && App.Settings.Current.IsLevelUnlocked(75))
+                if (isEnabled)
                 {
                     App.MindWipe.Start(App.Settings.Current.MindWipeFrequency, App.Settings.Current.MindWipeVolume / 100.0);
                 }
@@ -15740,7 +18586,7 @@ namespace ConditioningControlPanel
 
             if (_isRunning)
             {
-                if (isEnabled && App.Settings.Current.IsLevelUnlocked(70))
+                if (isEnabled)
                 {
                     App.BrainDrain.Start();
                 }
@@ -15923,12 +18769,12 @@ namespace ConditioningControlPanel
 
             if (isEnabled)
             {
-                BtnAutonomyStartStop.Content = "■ Stop";
-                BtnAutonomyStartStop.Foreground = new SolidColorBrush(Color.FromRgb(255, 105, 180)); // Pink
+                BtnAutonomyStartStop.Content = Loc.Get("btn_stop_2");
+                BtnAutonomyStartStop.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")); // Pink
             }
             else
             {
-                BtnAutonomyStartStop.Content = "▶ Start";
+                BtnAutonomyStartStop.Content = Loc.Get("btn_start_2");
                 BtnAutonomyStartStop.Foreground = new SolidColorBrush(Color.FromRgb(144, 238, 144)); // Light green
             }
         }
@@ -16157,19 +19003,31 @@ namespace ConditioningControlPanel
                 // Fetch from server on startup (with short delay)
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    _ = Task.Delay(3000).ContinueWith(_ => Dispatcher.Invoke(RefreshMarqueeFromSettings));
+                    _ = Task.Delay(3000).ContinueWith(_ =>
+                    {
+                        if (Application.Current?.Dispatcher?.HasShutdownStarted == true) return;
+                        Dispatcher.Invoke(RefreshMarqueeFromSettings);
+                    });
                 }));
 
                 // Check for server-controlled update banner (fallback for when auto-update fails)
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    _ = Task.Delay(5000).ContinueWith(_ => Dispatcher.Invoke(CheckServerUpdateBanner));
+                    _ = Task.Delay(5000).ContinueWith(_ =>
+                    {
+                        if (Application.Current?.Dispatcher?.HasShutdownStarted == true) return;
+                        Dispatcher.Invoke(CheckServerUpdateBanner);
+                    });
                 }));
 
                 // Check for server-triggered announcement popup
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    _ = Task.Delay(7000).ContinueWith(_ => Dispatcher.Invoke(CheckServerAnnouncement));
+                    _ = Task.Delay(7000).ContinueWith(_ =>
+                    {
+                        if (Application.Current?.Dispatcher?.HasShutdownStarted == true) return;
+                        Dispatcher.Invoke(CheckServerAnnouncement);
+                    });
                 }));
 
                 // Start 5-minute refresh timer to check for server-side message updates
@@ -16306,6 +19164,8 @@ namespace ConditioningControlPanel
             public string? title { get; set; }
             public string? message { get; set; }
             public string? image_url { get; set; }
+            public string? link_url { get; set; }
+            public string? theme { get; set; }
         }
 
         /// <summary>
@@ -16346,7 +19206,9 @@ namespace ConditioningControlPanel
                                 result.id!,
                                 result.title!,
                                 result.message ?? "",
-                                result.image_url);
+                                result.image_url,
+                                result.link_url,
+                                result.theme);
                             popup.Show();
                         });
                     }
@@ -16460,9 +19322,23 @@ namespace ConditioningControlPanel
 
         #endregion
 
-        private void ShowEasterEgg()
+        private async void ShowEasterEgg()
         {
-            var easterEggWindow = new EasterEggWindow();
+            int readerCount = -1;
+            try
+            {
+                if (App.ProfileSync != null)
+                    readerCount = await App.ProfileSync.RecordEasterEggReadAsync();
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "Failed to fetch easter egg reader count");
+            }
+
+            if (Application.Current?.Dispatcher == null || Application.Current.Dispatcher.HasShutdownStarted)
+                return;
+
+            var easterEggWindow = new EasterEggWindow(readerCount);
             easterEggWindow.Owner = this;
             easterEggWindow.ShowDialog();
         }
@@ -16546,7 +19422,7 @@ namespace ConditioningControlPanel
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Title = "Select Startup Video",
+                Title = Loc.Get("title_select_startup_video"),
                 Filter = "Video Files|*.mp4;*.mov;*.avi;*.wmv;*.mkv;*.webm|All Files|*.*",
                 InitialDirectory = System.IO.Path.Combine(App.EffectiveAssetsPath, "videos")
             };
@@ -16563,7 +19439,7 @@ namespace ConditioningControlPanel
         private void BtnClearStartupVideo_Click(object sender, RoutedEventArgs e)
         {
             App.Settings.Current.StartupVideoPath = null;
-            TxtStartupVideo.Text = "(Random)";
+            TxtStartupVideo.Text = Loc.Get("label_random");
             App.Settings.Save();
             App.Logger?.Information("Startup video cleared - will use random");
         }
@@ -16597,11 +19473,28 @@ namespace ConditioningControlPanel
 
         private void BtnManageMessages_Click(object sender, RoutedEventArgs e)
         {
+            var oldKeys = new HashSet<string>(App.Settings.Current.SubliminalPool.Keys);
+            var defaults = App.Mods?.GetDefaultSubliminalPool() ?? Models.BuiltInMods.BambiSleep.SubliminalPool ?? new Dictionary<string, bool>();
+
             var dialog = new TextEditorDialog("Subliminal Messages", App.Settings.Current.SubliminalPool);
             dialog.Owner = this;
 
             if (dialog.ShowDialog() == true && dialog.ResultData != null)
             {
+                // Track default triggers the user explicitly removed
+                var newKeys = new HashSet<string>(dialog.ResultData.Keys);
+                foreach (var key in oldKeys)
+                {
+                    if (!newKeys.Contains(key) && defaults.ContainsKey(key))
+                        App.Settings.Current.RemovedDefaultSubliminals.Add(key);
+                }
+
+                // If user re-adds a previously removed default, un-track it
+                foreach (var key in newKeys)
+                {
+                    App.Settings.Current.RemovedDefaultSubliminals.Remove(key);
+                }
+
                 App.Settings.Current.SubliminalPool = dialog.ResultData;
                 App.Settings.Save();
                 App.Logger?.Information("Subliminal pool updated: {Count} items", dialog.ResultData.Count);
@@ -16628,7 +19521,7 @@ namespace ConditioningControlPanel
             
             if (enabledPhrases.Count == 0)
             {
-                MessageBox.Show("No phrases enabled! Add some phrases first.", "No Phrases", 
+                MessageBox.Show(Loc.Get("msg_no_phrases_enabled_add_some_phrases_first"), "No Phrases", 
                     MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
@@ -16644,32 +19537,34 @@ namespace ConditioningControlPanel
             dialog.ShowDialog();
         }
 
-        private void ChkLockCardStrict_Checked(object sender, RoutedEventArgs e)
+        private void ChkLockCardStrict_Changed(object sender, RoutedEventArgs e)
         {
             if (_isLoading) return;
 
-            // Show warning
-            var confirmed = WarningDialog.ShowDoubleWarning(this,
-                "Strict Lock Card",
-                "• You will NOT be able to escape lock cards with ESC\n" +
-                "• You MUST type the phrase the required number of times\n" +
-                "• This can be very restrictive!");
+            var isEnabled = ChkLockCardStrict.IsChecked ?? false;
 
-            if (!confirmed)
+            // Show warning when enabling strict mode
+            if (isEnabled)
             {
-                ChkLockCardStrict.IsChecked = false;
-            }
-            else
-            {
-                App.Settings.Current.LockCardStrict = true;
-                App.Settings?.Save();
-            }
-        }
+                var confirmed = WarningDialog.ShowDoubleWarning(this,
+                    "Strict Lock Card",
+                    "• You will NOT be able to escape lock cards with ESC\n" +
+                    "• You MUST type the phrase the required number of times\n" +
+                    "• This can be very restrictive!");
 
-        private void ChkLockCardStrict_Unchecked(object sender, RoutedEventArgs e)
-        {
-            if (_isLoading) return;
-            App.Settings.Current.LockCardStrict = false;
+                if (!confirmed)
+                {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        _isLoading = true;
+                        ChkLockCardStrict.IsChecked = false;
+                        _isLoading = false;
+                    }));
+                    return;
+                }
+            }
+
+            App.Settings.Current.LockCardStrict = isEnabled;
             App.Settings?.Save();
         }
 
@@ -16678,7 +19573,7 @@ namespace ConditioningControlPanel
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
                 Filter = "GIF Files (*.gif)|*.gif|All Image Files|*.gif;*.png;*.jpg;*.jpeg",
-                Title = "Select Spiral GIF"
+                Title = Loc.Get("title_select_spiral_gif")
             };
             
             // Start in last used directory if available
@@ -16734,15 +19629,13 @@ namespace ConditioningControlPanel
             var installedIds = App.Settings?.Current?.InstalledPackIds;
             if (installedIds == null || installedIds.Count == 0)
             {
-                MessageBox.Show("No downloaded packs to delete.", "Delete Packs", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(Loc.Get("msg_no_downloaded_packs_to_delete"), Loc.Get("title_delete_downloaded_packs"), MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
             var confirm = MessageBox.Show(
-                $"Delete {installedIds.Count} downloaded content pack(s)?\n\n"
-                + "This only removes downloaded pack data.\n"
-                + "Your own images and videos in the assets folder will NOT be affected.",
-                "Delete Downloaded Packs", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                Loc.GetF("msg_delete_downloaded_packs_confirm_0", installedIds.Count),
+                Loc.Get("title_delete_downloaded_packs"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
 
             if (confirm != MessageBoxResult.Yes) return;
 
@@ -16753,7 +19646,7 @@ namespace ConditioningControlPanel
             App.Flash?.LoadAssets();
             App.Video?.ReloadAssets();
             App.BubbleCount?.ReloadAssets();
-            MessageBox.Show("All downloaded packs have been deleted.\nYour local files were not affected.", "Done", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(Loc.Get("msg_all_downloaded_packs_have_been_deleted_nyour"), Loc.Get("btn_done"), MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private async Task RefreshPacksAsync()
@@ -16984,6 +19877,10 @@ namespace ConditioningControlPanel
                 }
 
                 RefreshAssetTree();
+
+                // Refresh pack list so button states update (the event's pack instance
+                // may differ from the one in _availablePacks)
+                await RefreshPacksAsync();
             });
         }
 
@@ -16991,17 +19888,14 @@ namespace ConditioningControlPanel
         {
             Dispatcher.Invoke(() =>
             {
-                // Show login prompt
-                var result = MessageBox.Show(
-                    $"{message}\n\nWould you like to log in with Patreon now?",
-                    "Patreon Login Required (Free Account Works!)",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Information);
-
-                if (result == MessageBoxResult.Yes)
+                // Show login prompt — direct to appropriate login method
+                if (App.HasCloudIdentity)
                 {
-                    // Trigger Patreon login
-                    _ = App.Patreon?.StartOAuthFlowAsync();
+                    MessageBox.Show(message, Loc.Get("title_authentication_required"), MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    MessageBox.Show(Loc.GetF("msg_0_n_nplease_log_in_from_the_settings_tab", message), Loc.Get("title_login_required"), MessageBoxButton.OK, MessageBoxImage.Information);
                 }
             });
         }
@@ -17016,12 +19910,12 @@ namespace ConditioningControlPanel
                 // Calculate time until reset
                 var timeUntilReset = e.ResetTime - DateTime.UtcNow;
                 var hoursText = timeUntilReset.TotalHours > 1
-                    ? $"{(int)timeUntilReset.TotalHours} hours"
-                    : $"{(int)timeUntilReset.TotalMinutes} minutes";
+                    ? Loc.GetF("label_0_hours", (int)timeUntilReset.TotalHours)
+                    : Loc.GetF("label_0_minutes", (int)timeUntilReset.TotalMinutes);
 
                 MessageBox.Show(
-                    $"{e.Message}\n\nYou can download again in approximately {hoursText}.",
-                    "Download Limit Reached",
+                    Loc.GetF("msg_download_limit_reached_0_1", e.Message, hoursText),
+                    Loc.Get("title_download_limit_reached"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
             });
@@ -17285,7 +20179,7 @@ namespace ConditioningControlPanel
                 {
                     // Parent pack folder or root - show empty
                     _currentFolderFiles.Clear();
-                    TxtThumbnailsEmpty.Text = "Select a subfolder to view files";
+                    TxtThumbnailsEmpty.Text = Loc.Get("label_select_a_subfolder_to_view_files");
                     TxtThumbnailsEmpty.Visibility = Visibility.Visible;
                     ThumbnailsItemsControl.ItemsSource = _currentFolderFiles;
                 }
@@ -17357,7 +20251,7 @@ namespace ConditioningControlPanel
             var packFiles = App.ContentPacks?.GetPackFiles(packId, fileType);
             if (packFiles == null || packFiles.Count == 0)
             {
-                TxtThumbnailsEmpty.Text = "No files in this pack folder";
+                TxtThumbnailsEmpty.Text = Loc.Get("label_no_files_in_this_pack_folder");
                 TxtThumbnailsEmpty.Visibility = Visibility.Visible;
                 ThumbnailsItemsControl.ItemsSource = _currentFolderFiles;
                 return;
@@ -17391,8 +20285,14 @@ namespace ConditioningControlPanel
             ThumbnailsItemsControl.ItemsSource = _currentFolderFiles;
         }
 
-        // Thumbnail cache for pack files (keyed by packId + obfuscatedName)
+        // Thumbnail cache for pack files (keyed by packId + obfuscatedName) with LRU eviction
+        private const int MaxThumbnailCacheEntries = 50;
+        private const long MaxThumbnailCacheBytes = 50 * 1024 * 1024; // 50 MB
         private static readonly Dictionary<string, ImageSource> _packThumbnailCache = new();
+        private static readonly Dictionary<string, long> _packThumbnailLastAccess = new();
+        private static readonly Dictionary<string, long> _packThumbnailSizes = new();
+        private static long _packThumbnailCacheBytes;
+        private static long _packThumbnailAccessCounter;
         private static readonly SemaphoreSlim _thumbnailSemaphore = new(4); // Limit concurrent loads
 
         private async Task LoadPackThumbnailAsync(AssetFileItem item, string packId, Services.PackFileEntry file)
@@ -17404,6 +20304,7 @@ namespace ConditioningControlPanel
                 var cacheKey = $"{packId}:{file.ObfuscatedName}";
                 if (_packThumbnailCache.TryGetValue(cacheKey, out var cached))
                 {
+                    _packThumbnailLastAccess[cacheKey] = Interlocked.Increment(ref _packThumbnailAccessCounter);
                     Dispatcher.Invoke(() => item.Thumbnail = cached);
                     return;
                 }
@@ -17415,6 +20316,7 @@ namespace ConditioningControlPanel
                     // Double-check cache after acquiring semaphore
                     if (_packThumbnailCache.TryGetValue(cacheKey, out cached))
                     {
+                        _packThumbnailLastAccess[cacheKey] = Interlocked.Increment(ref _packThumbnailAccessCounter);
                         Dispatcher.Invoke(() => item.Thumbnail = cached);
                         return;
                     }
@@ -17444,7 +20346,31 @@ namespace ConditioningControlPanel
 
                             if (thumbnail != null)
                             {
+                                // Estimate size: width * height * 4 bytes (BGRA)
+                                long estimatedBytes = 0;
+                                if (thumbnail is System.Windows.Media.Imaging.BitmapSource bmp)
+                                    estimatedBytes = (long)bmp.PixelWidth * bmp.PixelHeight * 4;
+
+                                // Evict LRU entries if cache is full
+                                while ((_packThumbnailCache.Count >= MaxThumbnailCacheEntries ||
+                                        _packThumbnailCacheBytes + estimatedBytes > MaxThumbnailCacheBytes) &&
+                                       _packThumbnailCache.Count > 0)
+                                {
+                                    var lruKey = _packThumbnailLastAccess.MinBy(kv => kv.Value).Key;
+                                    _packThumbnailCache.Remove(lruKey);
+                                    _packThumbnailLastAccess.Remove(lruKey);
+                                    if (_packThumbnailSizes.TryGetValue(lruKey, out var evictedSize))
+                                    {
+                                        _packThumbnailCacheBytes -= evictedSize;
+                                        _packThumbnailSizes.Remove(lruKey);
+                                    }
+                                }
+
                                 _packThumbnailCache[cacheKey] = thumbnail;
+                                _packThumbnailLastAccess[cacheKey] = Interlocked.Increment(ref _packThumbnailAccessCounter);
+                                _packThumbnailSizes[cacheKey] = estimatedBytes;
+                                _packThumbnailCacheBytes += estimatedBytes;
+
                                 Dispatcher.Invoke(() => item.Thumbnail = thumbnail);
                             }
                         }
@@ -17472,7 +20398,7 @@ namespace ConditioningControlPanel
 
             if (!Directory.Exists(folderPath))
             {
-                TxtThumbnailsEmpty.Text = "Folder does not exist";
+                TxtThumbnailsEmpty.Text = Loc.Get("label_folder_does_not_exist");
                 TxtThumbnailsEmpty.Visibility = Visibility.Visible;
                 ThumbnailsItemsControl.ItemsSource = _currentFolderFiles;
                 return;
@@ -17486,7 +20412,7 @@ namespace ConditioningControlPanel
 
             if (files.Count == 0)
             {
-                TxtThumbnailsEmpty.Text = "No media files in this folder";
+                TxtThumbnailsEmpty.Text = Loc.Get("label_no_media_files_in_this_folder");
                 TxtThumbnailsEmpty.Visibility = Visibility.Visible;
                 return;
             }
@@ -18093,13 +21019,13 @@ namespace ConditioningControlPanel
             // Simple input dialog using WPF
             var dialog = new System.Windows.Window
             {
-                Title = "Save Asset Preset",
+                Title = Loc.Get("title_save_asset_preset"),
                 Width = 350,
                 Height = 150,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = this,
                 ResizeMode = ResizeMode.NoResize,
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A1A2E")),
+                Background = (SolidColorBrush)Application.Current.Resources["DarkerBgBrush"],
                 WindowStyle = WindowStyle.ToolWindow
             };
 
@@ -18120,9 +21046,9 @@ namespace ConditioningControlPanel
             var textBox = new TextBox
             {
                 Text = $"Preset {App.Settings.Current.AssetPresets.Count}",
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#252542")),
+                Background = (SolidColorBrush)Application.Current.Resources["PanelBgBrush"],
                 Foreground = new SolidColorBrush(Colors.White),
-                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4")),
+                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")),
                 Padding = new Thickness(8, 5, 8, 5),
                 Margin = new Thickness(0, 0, 0, 15)
             };
@@ -18137,7 +21063,7 @@ namespace ConditioningControlPanel
                 Width = 80,
                 Padding = new Thickness(8, 5, 8, 5),
                 Margin = new Thickness(0, 0, 8, 0),
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4")),
+                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")),
                 Foreground = new SolidColorBrush(Colors.White),
                 BorderThickness = new Thickness(0)
             };
@@ -18146,7 +21072,7 @@ namespace ConditioningControlPanel
                 Content = "Cancel",
                 Width = 80,
                 Padding = new Thickness(8, 5, 8, 5),
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#404060")),
+                Background = (SolidColorBrush)Application.Current.Resources["PanelAccentBrush"],
                 Foreground = new SolidColorBrush(Colors.White),
                 BorderThickness = new Thickness(0)
             };
@@ -18188,13 +21114,13 @@ namespace ConditioningControlPanel
         {
             if (CmbAssetPresets.SelectedItem is not Models.AssetPreset preset)
             {
-                MessageBox.Show("Please select a preset to update.", "No Preset Selected", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(Loc.Get("msg_please_select_a_preset_to_update"), "No Preset Selected", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
             if (preset.IsDefault)
             {
-                MessageBox.Show("Cannot update the default 'All Assets' preset.\nUse 'Save As' to create a new preset.", "Cannot Update Default", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(Loc.Get("msg_cannot_update_the_default_all_assets_preset_n"), "Cannot Update Default", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
@@ -18230,13 +21156,13 @@ namespace ConditioningControlPanel
         {
             if (CmbAssetPresets.SelectedItem is not Models.AssetPreset preset)
             {
-                MessageBox.Show("Please select a preset to delete.", "No Preset Selected", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(Loc.Get("msg_please_select_a_preset_to_delete"), "No Preset Selected", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
             if (preset.IsDefault)
             {
-                MessageBox.Show("Cannot delete the default 'All Assets' preset.", "Cannot Delete Default", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(Loc.Get("msg_cannot_delete_the_default_all_assets_preset"), "Cannot Delete Default", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
@@ -18319,18 +21245,17 @@ namespace ConditioningControlPanel
 
         private void BtnSavePhrasePreset_Click(object sender, RoutedEventArgs e)
         {
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var activePhraseCount = App.CompanionPhrases?.GetActivePhraseCount(mode) ?? 0;
+            var activePhraseCount = App.CompanionPhrases?.GetActivePhraseCount() ?? 0;
 
             var dialog = new System.Windows.Window
             {
-                Title = "Save Phrase Preset",
+                Title = Loc.Get("title_save_phrase_preset"),
                 Width = 350,
                 Height = 150,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = this,
                 ResizeMode = ResizeMode.NoResize,
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A1A2E")),
+                Background = (SolidColorBrush)Application.Current.Resources["DarkerBgBrush"],
                 WindowStyle = WindowStyle.ToolWindow
             };
 
@@ -18351,9 +21276,9 @@ namespace ConditioningControlPanel
             var textBox = new TextBox
             {
                 Text = $"Preset {App.Settings.Current.PhrasePresets.Count + 1}",
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#252542")),
+                Background = (SolidColorBrush)Application.Current.Resources["PanelBgBrush"],
                 Foreground = new SolidColorBrush(Colors.White),
-                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4")),
+                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")),
                 Padding = new Thickness(8, 5, 8, 5),
                 Margin = new Thickness(0, 0, 0, 15)
             };
@@ -18368,7 +21293,7 @@ namespace ConditioningControlPanel
                 Width = 80,
                 Padding = new Thickness(8, 5, 8, 5),
                 Margin = new Thickness(0, 0, 8, 0),
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF69B4")),
+                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4")),
                 Foreground = new SolidColorBrush(Colors.White),
                 BorderThickness = new Thickness(0)
             };
@@ -18377,7 +21302,7 @@ namespace ConditioningControlPanel
                 Content = "Cancel",
                 Width = 80,
                 Padding = new Thickness(8, 5, 8, 5),
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#404060")),
+                Background = (SolidColorBrush)Application.Current.Resources["PanelAccentBrush"],
                 Foreground = new SolidColorBrush(Colors.White),
                 BorderThickness = new Thickness(0)
             };
@@ -18412,7 +21337,7 @@ namespace ConditioningControlPanel
         {
             if (CmbPhrasePresets.SelectedItem is not Models.PhrasePreset preset)
             {
-                MessageBox.Show("Please select a preset to delete.", "No Preset Selected", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(Loc.Get("msg_please_select_a_preset_to_delete"), "No Preset Selected", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
@@ -18549,10 +21474,23 @@ namespace ConditioningControlPanel
                 }
                 else
                 {
-                    // External packs open in browser (e.g. MEGA link)
+                    // External packs: fetch URL via authenticated endpoint, then open in browser
                     if (pack.IsExternal)
                     {
-                        Process.Start(new ProcessStartInfo(pack.ExternalUrl!) { UseShellExecute = true });
+                        try
+                        {
+                            var externalUrl = pack.ExternalUrl ?? await App.ContentPacks!.GetExternalPackDownloadUrlAsync(pack.Id);
+                            if (!string.IsNullOrEmpty(externalUrl) && Uri.TryCreate(externalUrl, UriKind.Absolute, out var extUri)
+                                && extUri.Scheme == Uri.UriSchemeHttps)
+                            {
+                                Process.Start(new ProcessStartInfo(externalUrl) { UseShellExecute = true });
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            App.Logger?.Error(ex, "Failed to get external pack URL for {PackId}", pack.Id);
+                            MessageBox.Show($"Failed to get download link: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                        }
                         return;
                     }
 
@@ -18583,7 +21521,7 @@ namespace ConditioningControlPanel
                         App.Flash?.LoadAssets();
                         App.Video?.ReloadAssets();
                         App.BubbleCount?.ReloadAssets();
-                        MessageBox.Show($"'{pack.Name}' installed successfully!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+                        MessageBox.Show(Loc.GetF("msg_0_installed_successfully", pack.Name), Loc.Get("title_success"), MessageBoxButton.OK, MessageBoxImage.Information);
                     }
                     catch (UnauthorizedAccessException)
                     {
@@ -18645,7 +21583,8 @@ namespace ConditioningControlPanel
 
         private void BtnPackUpgrade_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is Button btn && btn.Tag is ContentPack pack && !string.IsNullOrEmpty(pack.UpgradeUrl))
+            if (sender is Button btn && btn.Tag is ContentPack pack && !string.IsNullOrEmpty(pack.UpgradeUrl)
+                && Uri.TryCreate(pack.UpgradeUrl, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps)
             {
                 Process.Start(new ProcessStartInfo(pack.UpgradeUrl) { UseShellExecute = true });
             }
@@ -18653,7 +21592,8 @@ namespace ConditioningControlPanel
 
         private void BtnPackPatreon_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is Button btn && btn.Tag is ContentPack pack && !string.IsNullOrEmpty(pack.PatreonUrl))
+            if (sender is Button btn && btn.Tag is ContentPack pack && !string.IsNullOrEmpty(pack.PatreonUrl)
+                && Uri.TryCreate(pack.PatreonUrl, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps)
             {
                 Process.Start(new ProcessStartInfo(pack.PatreonUrl) { UseShellExecute = true });
             }
@@ -18682,7 +21622,9 @@ namespace ConditioningControlPanel
                 dialog.SelectedPath = App.UserAssetsPath;
             }
 
-            if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+            // Pass MainWindow handle so the dialog appears in front (fixes silent fail from popup context)
+            var owner = new Win32WindowWrapper(new System.Windows.Interop.WindowInteropHelper(this).Handle);
+            if (dialog.ShowDialog(owner) == System.Windows.Forms.DialogResult.OK)
             {
                 var selectedPath = dialog.SelectedPath;
                 var newPacksFolder = Path.Combine(selectedPath, ".packs");
@@ -18750,13 +21692,9 @@ namespace ConditioningControlPanel
                     var packNames = string.Join("\n• ", packFoldersToMove.Select(p => p.PackName));
 
                     var moveResult = MessageBox.Show(
-                        $"Found {packFoldersToMove.Count} downloaded content pack(s) ({sizeText}):\n\n" +
-                        $"• {packNames}\n\n" +
-                        "Do you want to move them to the new folder?\n\n" +
-                        "• Yes - Move packs to new location (recommended)\n" +
-                        "• No - Leave packs where they are (you may need to re-download)\n\n" +
-                        (totalBytes > 500_000_000 ? "⚠️ This may take a moment due to the file size." : ""),
-                        "Move Downloaded Packs?",
+                        Loc.GetF("msg_move_packs_confirm", packFoldersToMove.Count, sizeText, packNames,
+                            totalBytes > 500_000_000 ? Loc.Get("msg_may_take_a_moment") : ""),
+                        Loc.Get("title_move_downloaded_packs"),
                         MessageBoxButton.YesNo,
                         MessageBoxImage.Question);
                     shouldMovePacks = moveResult == MessageBoxResult.Yes;
@@ -18786,7 +21724,10 @@ namespace ConditioningControlPanel
                             var destDir = Path.Combine(newPacksFolder, guid);
                             if (!Directory.Exists(destDir))
                             {
-                                Directory.Move(sourceFolder, destDir);
+                                // Use copy+delete instead of Directory.Move to support
+                                // moving packs across different drive volumes
+                                CopyDirectoryRecursive(sourceFolder, destDir);
+                                Directory.Delete(sourceFolder, recursive: true);
                                 movedCount++;
                                 App.Logger?.Information("Moved pack '{PackName}' from {Source} to {Dest}", packName, sourceFolder, destDir);
                             }
@@ -18845,8 +21786,8 @@ namespace ConditioningControlPanel
                     {
                         App.Logger?.Error(ex, "Failed to move packs to new location");
                         MessageBox.Show(
-                            $"Could not move packs to new location: {ex.Message}\n\nYou may need to re-download them.",
-                            "Warning",
+                            Loc.GetF("msg_could_not_move_packs_0", ex.Message),
+                            Loc.Get("label_warning"),
                             MessageBoxButton.OK,
                             MessageBoxImage.Warning);
                     }
@@ -18866,13 +21807,29 @@ namespace ConditioningControlPanel
                 RefreshAssetTree();
 
                 MessageBox.Show(
-                    $"Custom assets folder set to:\n{selectedPath}\n\nSubfolders 'images' and 'videos' have been created." +
-                    (shouldMovePacks ? "\n\nYour downloaded packs have been moved." : ""),
-                    "Assets Folder Set",
+                    Loc.GetF("msg_custom_assets_folder_set_0", selectedPath) +
+                    (shouldMovePacks ? "\n\n" + Loc.Get("msg_packs_have_been_moved") : ""),
+                    Loc.Get("title_assets_folder_set"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
 
                 App.Logger?.Information("Custom assets path set to: {Path}", selectedPath);
+            }
+        }
+
+        /// <summary>
+        /// Recursively copies a directory. Works across drive volumes unlike Directory.Move.
+        /// </summary>
+        private static void CopyDirectoryRecursive(string sourceDir, string destinationDir)
+        {
+            Directory.CreateDirectory(destinationDir);
+            foreach (var file in Directory.GetFiles(sourceDir))
+            {
+                File.Copy(file, Path.Combine(destinationDir, Path.GetFileName(file)), overwrite: true);
+            }
+            foreach (var dir in Directory.GetDirectories(sourceDir))
+            {
+                CopyDirectoryRecursive(dir, Path.Combine(destinationDir, Path.GetFileName(dir)));
             }
         }
 
@@ -18890,7 +21847,7 @@ namespace ConditioningControlPanel
         private void BtnRefreshAssets_Click(object sender, RoutedEventArgs e)
         {
             App.Flash.LoadAssets();
-            MessageBox.Show("Assets refreshed!", "Success");
+            MessageBox.Show(Loc.Get("msg_assets_refreshed"), Loc.Get("title_success"));
         }
 
         private void BtnViewLog_Click(object sender, RoutedEventArgs e)
@@ -18902,7 +21859,7 @@ namespace ConditioningControlPanel
             }
             else
             {
-                MessageBox.Show("No logs found.", "Info");
+                MessageBox.Show(Loc.Get("msg_no_logs_found"), "Info");
             }
         }
 
@@ -18910,58 +21867,73 @@ namespace ConditioningControlPanel
         {
             _isCapturingPanicKey = true;
             UpdatePanicKeyButton();
-            MessageBox.Show("Press any key to set as the new panic key...", "Change Panic Key", 
+            MessageBox.Show(Loc.Get("msg_press_any_key_to_set_as_the_new_panic_key"), "Change Panic Key", 
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
-        private void ChkStrictLock_Checked(object sender, RoutedEventArgs e)
+        private void ChkStrictLock_Changed(object sender, RoutedEventArgs e)
         {
             if (_isLoading) return;
 
-            // Show double warning
-            var confirmed = WarningDialog.ShowDoubleWarning(this,
-                "Strict Lock",
-                "• You will NOT be able to skip or close videos\n" +
-                "• Videos MUST be watched to completion\n" +
-                "• The only way out is the panic key (if enabled)\n" +
-                "• This can be very intense and restrictive");
+            var isEnabled = ChkStrictLock.IsChecked ?? false;
 
-            if (!confirmed)
+            // Show warning when enabling strict mode
+            if (isEnabled)
             {
-                ChkStrictLock.IsChecked = false;
-            }
-            else
-            {
-                App.Settings.Current.StrictLockEnabled = true;
-                App.Settings?.Save();
-            }
-        }
+                var confirmed = WarningDialog.ShowDoubleWarning(this,
+                    "Strict Lock",
+                    "• You will NOT be able to skip or close videos\n" +
+                    "• Videos MUST be watched to completion\n" +
+                    "• The only way out is the panic key (if enabled)\n" +
+                    "• This can be very intense and restrictive");
 
-        private void ChkStrictLock_Unchecked(object sender, RoutedEventArgs e)
-        {
-            if (_isLoading) return;
-            App.Settings.Current.StrictLockEnabled = false;
+                if (!confirmed)
+                {
+                    // Defer revert so it runs after the dialog's event stack fully unwinds,
+                    // preventing WPF toggle animation from getting stuck in the ON position.
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        _isLoading = true;
+                        ChkStrictLock.IsChecked = false;
+                        _isLoading = false;
+                    }));
+                    return;
+                }
+            }
+
+            App.Settings.Current.StrictLockEnabled = isEnabled;
             App.Settings?.Save();
         }
 
-        private void ChkNoPanic_Checked(object sender, RoutedEventArgs e)
+        private void ChkNoPanic_Changed(object sender, RoutedEventArgs e)
         {
             if (_isLoading) return;
 
-            // Show double warning
-            var confirmed = WarningDialog.ShowDoubleWarning(this,
-                "Disable Panic Key",
-                "• You will have NO emergency escape option\n" +
-                "• The ONLY way to exit will be the Exit button\n" +
-                "• Combined with Strict Lock, this is VERY restrictive\n" +
-                "• Make sure you know what you're doing!");
+            var isNoPanic = ChkNoPanic.IsChecked ?? false;
 
-            if (!confirmed)
+            // Show warning when enabling no-panic mode
+            if (isNoPanic)
             {
-                ChkNoPanic.IsChecked = false;
-            }
-            else
-            {
+                var confirmed = WarningDialog.ShowDoubleWarning(this,
+                    "Disable Panic Key",
+                    "• You will have NO emergency escape option\n" +
+                    "• The ONLY way to exit will be the Exit button\n" +
+                    "• Combined with Strict Lock, this is VERY restrictive\n" +
+                    "• Make sure you know what you're doing!");
+
+                if (!confirmed)
+                {
+                    // Defer revert so it runs after the dialog's event stack fully unwinds,
+                    // preventing WPF toggle animation from getting stuck in the ON position.
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        _isLoading = true;
+                        ChkNoPanic.IsChecked = false;
+                        _isLoading = false;
+                    }));
+                    return;
+                }
+
                 // Stop keyboard hook when panic key is disabled (privacy improvement)
                 // But keep it running if keyword triggers need it
                 if (App.Settings.Current.KeywordTriggersEnabled != true)
@@ -18970,17 +21942,14 @@ namespace ConditioningControlPanel
                 App.Settings?.Save();
                 App.Logger?.Information("Keyboard hook stopped - panic key disabled");
             }
-        }
-
-        private void ChkNoPanic_Unchecked(object sender, RoutedEventArgs e)
-        {
-            if (_isLoading) return;
-
-            // Start keyboard hook when panic key is re-enabled
-            _keyboardHook?.Start();
-            App.Settings.Current.PanicKeyEnabled = true;
-            App.Settings?.Save();
-            App.Logger?.Information("Keyboard hook started - panic key enabled");
+            else
+            {
+                // Start keyboard hook when panic key is re-enabled
+                _keyboardHook?.Start();
+                App.Settings.Current.PanicKeyEnabled = true;
+                App.Settings?.Save();
+                App.Logger?.Information("Keyboard hook started - panic key enabled");
+            }
         }
 
         private void ChkOfflineMode_Changed(object sender, RoutedEventArgs e)
@@ -19047,7 +22016,7 @@ namespace ConditioningControlPanel
                     BtnPatreonLogin.IsEnabled = !isOffline;
                     BtnPatreonLogin.Opacity = isOffline ? 0.5 : 1.0;
                     if (isOffline)
-                        BtnPatreonLogin.ToolTip = "Disabled in offline mode";
+                        BtnPatreonLogin.ToolTip = Loc.Get("tooltip_disabled_in_offline_mode");
                     else
                         BtnPatreonLogin.ToolTip = null;
                 }
@@ -19058,7 +22027,7 @@ namespace ConditioningControlPanel
                     BtnDiscordLogin.IsEnabled = !isOffline;
                     BtnDiscordLogin.Opacity = isOffline ? 0.5 : 1.0;
                     if (isOffline)
-                        BtnDiscordLogin.ToolTip = "Disabled in offline mode";
+                        BtnDiscordLogin.ToolTip = Loc.Get("tooltip_disabled_in_offline_mode");
                     else
                         BtnDiscordLogin.ToolTip = null;
                 }
@@ -19069,7 +22038,7 @@ namespace ConditioningControlPanel
                     BtnUnifiedLogin.IsEnabled = !isOffline;
                     BtnUnifiedLogin.Opacity = isOffline ? 0.5 : 1.0;
                     if (isOffline)
-                        BtnUnifiedLogin.ToolTip = "Disabled in offline mode";
+                        BtnUnifiedLogin.ToolTip = Loc.Get("tooltip_disabled_in_offline_mode");
                 }
 
                 // Discord tab login button (in Profile/Discord tab)
@@ -19078,7 +22047,7 @@ namespace ConditioningControlPanel
                     BtnDiscordTabLogin.IsEnabled = !isOffline;
                     BtnDiscordTabLogin.Opacity = isOffline ? 0.5 : 1.0;
                     if (isOffline)
-                        BtnDiscordTabLogin.ToolTip = "Disabled in offline mode";
+                        BtnDiscordTabLogin.ToolTip = Loc.Get("tooltip_disabled_in_offline_mode");
                 }
 
                 // === BROWSER SECTION ===
@@ -19127,7 +22096,7 @@ namespace ConditioningControlPanel
                     if (BrowserLoadingText != null)
                     {
                         BrowserLoadingText.Visibility = Visibility.Visible;
-                        BrowserLoadingText.Text = "🔌 Browser disabled in Offline Mode";
+                        BrowserLoadingText.Text = Loc.Get("label_browser_disabled_in_offline_mode");
                     }
                     if (BrowserContainer != null)
                     {
@@ -19216,7 +22185,7 @@ namespace ConditioningControlPanel
 
                 // Bouncing text needs restart
                 App.BouncingText.Stop();
-                if (App.Settings.Current.BouncingTextEnabled && App.Settings.Current.IsLevelUnlocked(60))
+                if (App.Settings.Current.BouncingTextEnabled)
                 {
                     App.BouncingText.Start();
                 }
@@ -19238,10 +22207,8 @@ namespace ConditioningControlPanel
             {
                 // Show warning when both startup and hidden are enabled
                 var result = MessageBox.Show(this,
-                    "The app will launch minimized to system tray on startup.\n\n" +
-                    "You will need to click the tray icon to show the main window.\n\n" +
-                    "Are you sure you want to enable this?",
-                    "Startup Warning",
+                    Loc.Get("msg_startup_hidden_warning"),
+                    Loc.Get("title_startup_warning"),
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Warning);
 
@@ -19256,8 +22223,8 @@ namespace ConditioningControlPanel
             if (!StartupManager.SetStartupState(isEnabled))
             {
                 MessageBox.Show(this,
-                    "Failed to update Windows startup setting.\nPlease check your permissions.",
-                    "Startup Error",
+                    Loc.Get("msg_failed_to_update_startup"),
+                    Loc.Get("title_startup_error"),
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
                 ChkWinStart.IsChecked = StartupManager.IsRegistered();
@@ -19275,10 +22242,8 @@ namespace ConditioningControlPanel
             {
                 // Show warning when enabling hidden while startup is already enabled
                 var result = MessageBox.Show(this,
-                    "The app will launch minimized to system tray on startup.\n\n" +
-                    "You will need to click the tray icon to show the main window.\n\n" +
-                    "Are you sure you want to enable this?",
-                    "Startup Warning",
+                    Loc.Get("msg_startup_hidden_warning"),
+                    Loc.Get("title_startup_warning"),
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Warning);
 
@@ -19320,13 +22285,71 @@ namespace ConditioningControlPanel
 
                 // Actually closing - clean up
                 SaveSettings();
+
+                // Stop ALL timers to prevent post-close dispatcher crashes
                 _schedulerTimer?.Stop();
                 _rampTimer?.Stop();
                 _packPreviewTimer?.Stop();
+                _remoteNotificationTimer?.Stop();
+                _remoteSessionInfoTimer?.Stop();
+                _bannerRotationTimer?.Stop();
+                _marqueeRefreshTimer?.Stop();
+                _statPillUpdateTimer?.Stop();
+                _conditioningTimeTimer?.Stop();
+                _conditioningTimeSyncTimer?.Stop();
+
+                // Unsubscribe service events to allow GC of this window
+                if (App.Progression != null)
+                {
+                    App.Progression.XPChanged -= OnXPChanged;
+                    App.Progression.LevelUp -= OnLevelUp;
+                }
+                if (App.Companion != null)
+                {
+                    App.Companion.XPAwarded -= OnCompanionXPAwarded;
+                    App.Companion.CompanionLevelUp -= OnCompanionLevelUp;
+                    App.Companion.XPDrained -= OnCompanionXPDrained;
+                    App.Companion.CompanionSwitched -= OnCompanionSwitched;
+                }
+                if (App.ProfileSync != null)
+                {
+                    App.ProfileSync.ProfileLoaded -= OnProfileLoaded;
+                    App.ProfileSync.SyncHealthChanged -= OnSyncHealthChanged;
+                }
+                if (App.Achievements != null)
+                {
+                    App.Achievements.AchievementUnlocked -= OnAchievementUnlockedInMainWindow;
+                }
+                if (App.Quests != null)
+                {
+                    App.Quests.QuestCompleted -= OnQuestCompleted;
+                    App.Quests.QuestProgressChanged -= OnQuestProgressChanged;
+                }
+                if (App.SkillTree != null)
+                {
+                    App.SkillTree.PinkRushStarted -= OnPinkRushStarted;
+                    App.SkillTree.PinkRushEnded -= OnPinkRushEnded;
+                }
+                if (App.Roadmap != null)
+                {
+                    App.Roadmap.StepCompleted -= OnRoadmapStepCompleted;
+                    App.Roadmap.TrackUnlocked -= OnRoadmapTrackUnlocked;
+                }
+
                 _keyboardHook?.Dispose();
                 _trayIcon?.Dispose();
                 _browser?.Dispose();
                 _avatarTubeWindow?.Close();
+
+                // Close any quiz windows (topmost/fullscreen, would keep app alive)
+                try
+                {
+                    foreach (var quiz in Application.Current.Windows.OfType<PopQuizWindow>().ToList())
+                        quiz.Close();
+                    foreach (var quiz in Application.Current.Windows.OfType<QuizWindow>().ToList())
+                        quiz.Close();
+                }
+                catch { }
 
                 // Stop and dispose session engine (closes corner GIF window)
                 try
@@ -19349,6 +22372,17 @@ namespace ConditioningControlPanel
             {
                 // Always minimize to tray instead of closing
                 e.Cancel = true;
+
+                // Close any quiz windows (topmost/fullscreen, would stay visible while app is in tray)
+                try
+                {
+                    foreach (var quiz in Application.Current.Windows.OfType<PopQuizWindow>().ToList())
+                        quiz.Close();
+                    foreach (var quiz in Application.Current.Windows.OfType<QuizWindow>().ToList())
+                        quiz.Close();
+                }
+                catch { }
+
                 _trayIcon?.MinimizeToTray();
                 HideAvatarTube();
 
@@ -19436,5 +22470,12 @@ namespace ConditioningControlPanel
         }
 
         #endregion
+    }
+
+    /// <summary>Thin IWin32Window wrapper so WinForms dialogs get a proper owner handle.</summary>
+    internal sealed class Win32WindowWrapper : System.Windows.Forms.IWin32Window
+    {
+        public IntPtr Handle { get; }
+        public Win32WindowWrapper(IntPtr handle) => Handle = handle;
     }
 }

@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using ConditioningControlPanel.Services;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel
 {
@@ -32,8 +35,24 @@ namespace ConditioningControlPanel
         private static int _totalErrors = 0;
         private static int _totalCharsTyped = 0;
 
-        // Debounced focus reclaim — prevents rapid focus flickering that leaks keystrokes
-        private DispatcherTimer? _focusReclaimTimer;
+        // Test mode — no XP or achievements
+        private static bool _isTest = false;
+
+        // Win32 focus-stealing support
+        private static readonly IntPtr HWND_TOPMOST = new(-1);
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_SHOWWINDOW = 0x0040;
+
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        private IntPtr _hwnd;
+
+
 
         /// <summary>
         /// Check if any lock card window is currently open
@@ -67,12 +86,12 @@ namespace ConditioningControlPanel
             // Handle strict mode
             if (_strictMode)
             {
-                TxtStrict.Text = "🔒 STRICT";
+                TxtStrict.Text = Loc.Get("label_strict");
                 TxtEscHint.Visibility = Visibility.Collapsed;
             }
             else
             {
-                TxtEscHint.Text = "Press ESC to close";
+                TxtEscHint.Text = Loc.Get("label_press_esc_to_close");
             }
             
             // Position on screen
@@ -91,7 +110,7 @@ namespace ConditioningControlPanel
             {
                 TxtInput.IsReadOnly = true;
                 TxtInput.Focusable = false;
-                TxtHint.Text = "Input synced from primary monitor";
+                TxtHint.Text = Loc.Get("label_input_synced_from_primary_monitor");
             }
             
             // Apply custom colors from settings
@@ -100,30 +119,25 @@ namespace ConditioningControlPanel
             // Register this window
             _allWindows.Add(this);
 
-            // Reclaim focus when lost — debounced to prevent rapid focus flickering
-            // that causes keystrokes to leak into other apps (e.g., Discord)
+            // When focus is lost, immediately reclaim it using Win32 to prevent
+            // keystrokes from leaking into other apps (e.g., Discord)
             if (_isPrimary)
             {
                 Deactivated += (s, e) =>
                 {
                     if (_isCompleted) return;
-
-                    // Stop any pending reclaim and restart the timer (debounce)
-                    _focusReclaimTimer?.Stop();
-                    _focusReclaimTimer = new DispatcherTimer
+                    Dispatcher.BeginInvoke(new Action(() =>
                     {
-                        Interval = TimeSpan.FromMilliseconds(500)
-                    };
-                    _focusReclaimTimer.Tick += (_, _) =>
-                    {
-                        _focusReclaimTimer?.Stop();
-                        if (!_isCompleted)
+                        if (_isCompleted || !IsVisible) return;
+                        if (_hwnd != IntPtr.Zero)
                         {
-                            Activate();
-                            TxtInput.Focus();
+                            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                            SetForegroundWindow(_hwnd);
                         }
-                    };
-                    _focusReclaimTimer.Start();
+                        Activate();
+                        TxtInput.Focus();
+                    }), DispatcherPriority.Input);
                 };
             }
         }
@@ -157,7 +171,7 @@ namespace ConditioningControlPanel
                 BackgroundBrush.Color = outerBg;
                 
                 // Phrase text color
-                var textColor = ParseColor(settings.LockCardTextColor, Color.FromRgb(255, 105, 180));
+                var textColor = ParseColor(settings.LockCardTextColor, (Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4"));
                 PhraseBrush.Color = textColor;
                 AccentBrush.Color = textColor;
                 
@@ -169,7 +183,7 @@ namespace ConditioningControlPanel
                 InputTextBrush.Color = inputTextColor;
                 
                 // Accent color
-                var accentColor = ParseColor(settings.LockCardAccentColor, Color.FromRgb(255, 105, 180));
+                var accentColor = ParseColor(settings.LockCardAccentColor, (Color)ColorConverter.ConvertFromString(App.Mods?.GetAccentColorHex() ?? "#FF69B4"));
                 InputBorderBrush.Color = accentColor;
                 ProgressBar.Background = new SolidColorBrush(accentColor);
                 
@@ -201,11 +215,20 @@ namespace ConditioningControlPanel
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
-            // Focus the input field only on primary
+            _hwnd = new WindowInteropHelper(this).Handle;
+
+            // Force this window to foreground via Win32 on primary
             if (_isPrimary)
             {
+                if (_hwnd != IntPtr.Zero)
+                {
+                    SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                    SetForegroundWindow(_hwnd);
+                }
+                Activate();
                 TxtInput.Focus();
-                
+
                 App.Logger?.Information("Lock Card shown - Phrase: {Phrase}, Repeats: {Repeats}, Strict: {Strict}, Monitors: {Count}",
                     _phrase, _requiredRepeats, _strictMode, _allWindows.Count);
             }
@@ -328,25 +351,35 @@ namespace ConditioningControlPanel
             // Calculate completion time
             var completionTime = (DateTime.Now - _startTime).TotalSeconds;
             
-            // Award XP (only once)
-            try
+            // Award XP (only once, skip for test lock cards)
+            if (!_isTest)
             {
-                var xpAmount = (50 * _requiredRepeats) + 200;
-                if (_strictMode) xpAmount = (int)(xpAmount * 1.5);
-                App.Progression?.AddXP(xpAmount, XPSource.LockCard);
+                try
+                {
+                    var xpAmount = (50 * _requiredRepeats) + 200;
+                    if (_strictMode) xpAmount = (int)(xpAmount * 1.5);
+                    App.Progression?.AddXP(xpAmount, XPSource.LockCard);
+                }
+                catch { }
+
+                // Track achievement
+                App.Achievements?.TrackLockCardCompletion(completionTime, _totalCharsTyped, _totalErrors, _requiredRepeats);
             }
-            catch { }
-            
-            App.Logger?.Information("Lock Card completed - {Repeats} repeats in {Time:F1}s with {Errors} errors", 
-                _requiredRepeats, completionTime, _totalErrors);
-            
-            // Track achievement
-            App.Achievements?.TrackLockCardCompletion(completionTime, _totalCharsTyped, _totalErrors, _requiredRepeats);
-            
+
+            App.Logger?.Information("Lock Card completed - {Repeats} repeats in {Time:F1}s with {Errors} errors{Test}",
+                _requiredRepeats, completionTime, _totalErrors, _isTest ? " (TEST)" : "");
+            // Get AI reaction in background and show if available
+            Task.Run(async () =>
+            {
+                var reaction = await App.Ai.GetLockScreenReaction(_phrase, _totalErrors, _requiredRepeats);
+                if (!string.IsNullOrEmpty(reaction))
+                {
+                    AvatarTubeWindow.ShowAvatarLine(reaction);
+                }
+            });
             foreach (var window in _allWindows)
             {
                 window._isCompleted = true;
-                window._focusReclaimTimer?.Stop();
                 window.TxtInput.IsEnabled = false;
                 window.TxtHint.Visibility = Visibility.Collapsed;
                 window.CompletionPanel.Visibility = Visibility.Visible;
@@ -367,7 +400,7 @@ namespace ConditioningControlPanel
 
         private void UpdateProgress()
         {
-            TxtProgress.Text = $"{_completedRepeats} / {_requiredRepeats}";
+            TxtProgress.Text = Loc.GetF("lockcard_progress", _completedRepeats, _requiredRepeats);
 
             // Update progress bar width based on actual container width
             var progressPercent = (double)_completedRepeats / _requiredRepeats;
@@ -398,11 +431,11 @@ namespace ConditioningControlPanel
             var remaining = _requiredRepeats - _completedRepeats;
             var messages = new[]
             {
-                $"Good! {remaining} more to go...",
-                $"That's it! {remaining} left...",
-                $"Keep going! {remaining} more...",
-                $"Perfect! {remaining} remaining...",
-                $"Yes! Only {remaining} more..."
+                Loc.GetF("lockcard_encourage_1", remaining),
+                Loc.GetF("lockcard_encourage_2", remaining),
+                Loc.GetF("lockcard_encourage_3", remaining),
+                Loc.GetF("lockcard_encourage_4", remaining),
+                Loc.GetF("lockcard_encourage_5", remaining)
             };
             
             return messages[_completedRepeats % messages.Length];
@@ -446,7 +479,6 @@ namespace ConditioningControlPanel
                 return;
             }
             
-            _focusReclaimTimer?.Stop();
             _closeTimer?.Stop();
             _allWindows.Remove(this);
             base.OnClosing(e);
@@ -476,16 +508,17 @@ namespace ConditioningControlPanel
         /// <summary>
         /// Create lock card windows for all monitors
         /// </summary>
-        public static void ShowOnAllMonitors(string phrase, int repeats, bool strictMode)
+        public static void ShowOnAllMonitors(string phrase, int repeats, bool strictMode, bool isTest = false)
         {
             // Clear any existing windows
             _allWindows.Clear();
             _sharedInput = "";
-            
+
             // Reset achievement tracking
             _startTime = DateTime.Now;
             _totalErrors = 0;
             _totalCharsTyped = 0;
+            _isTest = isTest;
             
             var screens = App.GetAllScreensCached();
             if (screens.Length == 0)

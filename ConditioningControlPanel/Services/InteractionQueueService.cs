@@ -1,6 +1,5 @@
-using System;
-using System.Collections.Generic;
 using System.Windows.Threading;
+using ConditioningControlPanel.Helpers;
 
 namespace ConditioningControlPanel.Services;
 
@@ -14,7 +13,8 @@ public class InteractionQueueService
     {
         Video,
         BubbleCount,
-        LockCard
+        LockCard,
+        PopQuiz
     }
 
     private readonly Queue<(InteractionType Type, Action Trigger)> _queue = new();
@@ -143,7 +143,7 @@ public class InteractionQueueService
                     next.Type, _queue.Count);
 
                 // Use dispatcher to avoid stack overflow from nested calls
-                System.Windows.Application.Current?.Dispatcher.BeginInvoke(next.Trigger);
+                DispatcherHelper.RunOnUI(next.Trigger);
             }
         }
     }
@@ -207,7 +207,7 @@ public class InteractionQueueService
         try
         {
             var interval = timeout ?? TimeSpan.FromMinutes(DefaultMaxInteractionMinutes);
-            System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+            DispatcherHelper.RunOnUISync(() =>
             {
                 StopStuckDetectionTimer();
 
@@ -229,7 +229,7 @@ public class InteractionQueueService
     {
         try
         {
-            System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+            DispatcherHelper.RunOnUISync(() =>
             {
                 _stuckDetectionTimer?.Stop();
                 _stuckDetectionTimer = null;
@@ -252,9 +252,31 @@ public class InteractionQueueService
                 return; // Not stuck anymore
             }
 
+            var stuckType = CurrentInteraction.Value;
             var activeDuration = DateTime.Now - _interactionStartTime;
             App.Logger?.Warning("InteractionQueue: STUCK INTERACTION DETECTED! {Type} has been active for {Duration:F1} minutes. Auto-recovering...",
-                CurrentInteraction, activeDuration.TotalMinutes);
+                stuckType, activeDuration.TotalMinutes);
+
+            // Force-cleanup the stuck service so its windows don't linger on screen
+            try
+            {
+                DispatcherHelper.RunOnUI(() =>
+                {
+                    switch (stuckType)
+                    {
+                        case InteractionType.Video:
+                            App.Video?.ForceCleanup();
+                            break;
+                        case InteractionType.BubbleCount:
+                            App.BubbleCount?.ForceCleanup();
+                            break;
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Debug("InteractionQueue: Failed to force-cleanup stuck {Type}: {Error}", stuckType, ex.Message);
+            }
 
             // Force reset to recover
             CurrentInteraction = null;
@@ -269,7 +291,7 @@ public class InteractionQueueService
                 App.Logger?.Information("InteractionQueue: Auto-recovery starting queued {Type} (remaining: {Count})",
                     next.Type, _queue.Count);
 
-                System.Windows.Application.Current?.Dispatcher.BeginInvoke(next.Trigger);
+                DispatcherHelper.RunOnUI(next.Trigger);
             }
             else
             {

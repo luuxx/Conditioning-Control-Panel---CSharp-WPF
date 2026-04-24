@@ -1,10 +1,7 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using ConditioningControlPanel.Services;
+using ConditioningControlPanel.Localization;
 
 namespace ConditioningControlPanel
 {
@@ -38,10 +35,11 @@ namespace ConditioningControlPanel
             _screen = screen ?? System.Windows.Forms.Screen.PrimaryScreen!;
             _isPrimary = isPrimary;
             
-            // Position on screen
+            // Position on screen — convert physical pixels to WPF DIPs using per-screen DPI
+            var dpiScale = BubbleCountWindow.GetDpiForScreen(_screen);
             WindowStartupLocation = WindowStartupLocation.Manual;
-            Left = _screen.Bounds.X + 100;
-            Top = _screen.Bounds.Y + 100;
+            Left = (_screen.Bounds.X + 100) / dpiScale;
+            Top = (_screen.Bounds.Y + 100) / dpiScale;
             Width = 400;
             Height = 300;
             
@@ -285,12 +283,10 @@ namespace ConditioningControlPanel
                 window.Hide();
             }
             
-            // Mode-aware mercy phrases (no answer included!)
-            var mode = App.Settings?.Current?.ContentMode ?? Models.ContentMode.BambiSleep;
-            var mercyPhrases = Models.ContentModeConfig.GetBubbleCountMercyPhrases(mode);
+            // Mod-aware mercy phrases (no answer included!)
+            var mercyPhrases = App.Mods?.GetPhrases("BubbleCountMercy") ?? new[] { "GOOD GIRLS PAY ATTENTION" };
 
-            var random = new Random();
-            var phrase = mercyPhrases[random.Next(mercyPhrases.Length)];
+            var phrase = mercyPhrases[Random.Shared.Next(mercyPhrases.Length)];
             
             // Show mercy lock card (no answer in phrase!)
             LockCardWindow.ShowOnAllMonitors(

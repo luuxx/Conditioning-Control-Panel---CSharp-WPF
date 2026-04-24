@@ -1,7 +1,4 @@
-using System;
 using System.ComponentModel;
-using System.Linq;
-using System.Threading.Tasks;
 using ConditioningControlPanel.Models;
 using ConditioningControlPanel.Services.Haptics;
 using Serilog;
@@ -154,7 +151,7 @@ namespace ConditioningControlPanel.Services
         /// Apply a vibration pattern based on the selected mode
         /// Duration stays the same, pattern changes how vibration feels within that duration
         /// </summary>
-        private async Task ApplyVibrationModeAsync(double intensity, int durationMs, VibrationMode mode, System.Threading.CancellationToken? token = null)
+        public async Task ApplyVibrationModeAsync(double intensity, int durationMs, VibrationMode mode, System.Threading.CancellationToken? token = null)
         {
             if (_activeProvider == null || !_activeProvider.IsConnected) return;
 
@@ -226,12 +223,11 @@ namespace ConditioningControlPanel.Services
                 case VibrationMode.Earthquake:
                     // Random intensity variations
                     var quakeSteps = Math.Max(2, durationMs / 100);
-                    var random = new Random();
                     for (int i = 0; i < quakeSteps; i++)
                     {
                         if (token?.IsCancellationRequested == true) break;
                         // Random between 30% and 100% of set intensity
-                        var randomIntensity = intensity * (0.3 + random.NextDouble() * 0.7);
+                        var randomIntensity = intensity * (0.3 + Random.Shared.NextDouble() * 0.7);
                         await _activeProvider.VibrateAsync(randomIntensity, 80);
                         await Task.Delay(20);
                     }
@@ -518,8 +514,9 @@ namespace ConditioningControlPanel.Services
             if (!Settings.Enabled || !Settings.FlashDisplayEnabled || _activeProvider == null || !_activeProvider.IsConnected)
                 return;
 
-            // Cancel any existing decay
+            // Cancel and dispose any existing decay
             _flashDecayCts?.Cancel();
+            _flashDecayCts?.Dispose();
             _flashDecayCts = new System.Threading.CancellationTokenSource();
             var token = _flashDecayCts.Token;
 
@@ -564,6 +561,7 @@ namespace ConditioningControlPanel.Services
                 return;
 
             _flashDecayCts?.Cancel();
+            _flashDecayCts?.Dispose();
             _flashDecayCts = new System.Threading.CancellationTokenSource();
             var token = _flashDecayCts.Token;
 
@@ -656,8 +654,10 @@ namespace ConditioningControlPanel.Services
         {
             if (!Settings.Enabled || !Settings.VideoEnabled || _activeProvider == null || !_activeProvider.IsConnected)
                 return;
+            var provider = _activeProvider;
 
             _videoVibeCts?.Cancel();
+            _videoVibeCts?.Dispose();
             _videoVibeCts = new System.Threading.CancellationTokenSource();
             var token = _videoVibeCts.Token;
             _videoTargetHits = 0;
@@ -670,10 +670,10 @@ namespace ConditioningControlPanel.Services
 
             try
             {
-                while (!token.IsCancellationRequested && Settings.VideoEnabled)
+                while (!token.IsCancellationRequested && Settings.VideoEnabled && provider?.IsConnected == true)
                 {
                     // Send long duration command (30 sec) - will be overridden by target hits
-                    await _activeProvider.VibrateAsync(_currentVideoIntensity, 30000);
+                    await provider.VibrateAsync(_currentVideoIntensity, 30000);
 
                     // Check less frequently since intensity is constant
                     await Task.Delay(5000, token);
@@ -689,6 +689,7 @@ namespace ConditioningControlPanel.Services
         public async Task StopVideoBackgroundVibeAsync()
         {
             _videoVibeCts?.Cancel();
+            _videoVibeCts?.Dispose();
             _videoVibeCts = null;
             _videoTargetHits = 0;
             _currentVideoIntensity = 0;
@@ -712,14 +713,13 @@ namespace ConditioningControlPanel.Services
             await ApplyVibrationModeAsync(spikeIntensity, 100, Settings.TargetHitMode);
 
             // Immediately resume background vibe without delay (no pause!)
-            if (_currentVideoIntensity > 0 && Settings.VideoEnabled)
+            if (_currentVideoIntensity > 0 && Settings.VideoEnabled && _activeProvider?.IsConnected == true)
             {
                 await _activeProvider.VibrateAsync(_currentVideoIntensity, 30000);
             }
         }
 
         // === SUBLIMINAL PATTERN SYSTEM ===
-        private static readonly Random _random = new Random();
 
         /// <summary>
         /// Trigger short haptic pulse for subliminal text
@@ -809,6 +809,10 @@ namespace ConditioningControlPanel.Services
             if (_disposed) return;
             _disposed = true;
             Settings.PropertyChanged -= OnSettingsChanged;
+            _flashDecayCts?.Cancel();
+            _flashDecayCts?.Dispose();
+            _videoVibeCts?.Cancel();
+            _videoVibeCts?.Dispose();
             DisconnectAsync().Wait(1000);
         }
     }

@@ -1,0 +1,1469 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using IOPath = System.IO.Path;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Controls;
+using System.Windows.Shapes;
+using System.Windows.Threading;
+using ConditioningControlPanel.Models;
+using ConditioningControlPanel.Services;
+using NAudio.Wave;
+using ConditioningControlPanel.Localization;
+
+namespace ConditioningControlPanel
+{
+    public partial class QuizWindow : Window
+    {
+        public static bool IsOpen { get; private set; }
+
+        /// <summary>WaveStream wrapper that loops the source indefinitely.</summary>
+        private class LoopStream : WaveStream
+        {
+            private readonly WaveStream _source;
+            public LoopStream(WaveStream source) => _source = source;
+            public override WaveFormat WaveFormat => _source.WaveFormat;
+            public override long Length => _source.Length;
+            public override long Position
+            {
+                get => _source.Position;
+                set => _source.Position = value;
+            }
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                int totalRead = 0;
+                while (totalRead < count)
+                {
+                    int read = _source.Read(buffer, offset + totalRead, count - totalRead);
+                    if (read == 0)
+                    {
+                        if (_source.Position == 0) break; // empty source
+                        _source.Position = 0;
+                    }
+                    totalRead += read;
+                }
+                return totalRead;
+            }
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing) _source.Dispose();
+                base.Dispose(disposing);
+            }
+        }
+
+        private QuizService? _quizService;
+        private QuizQuestion? _currentQuestion;
+        private bool _isProcessing;
+        private bool _isFullscreen;
+        private bool _isTrickQuestion;
+        private bool _isSurrenderEasterEgg;
+        private QuizQuestion? _savedNextQuestion;
+        private long _surrenderDuckGen;
+        private readonly DispatcherTimer _loadingDotsTimer;
+        private int _loadingDotCount;
+        private readonly Ellipse[] _progressDots = new Ellipse[10];
+        private List<QuizAnswerRecord> _answerHistory = new();
+        private Session? _generatedSession;
+        private bool _sessionReady;
+
+        private static string[] LoadingFlavors => new[]
+        {
+            Loc.Get("quiz_loading_1"),
+            Loc.Get("quiz_loading_2"),
+            Loc.Get("quiz_loading_3"),
+            Loc.Get("quiz_loading_4"),
+            Loc.Get("quiz_loading_5"),
+            Loc.Get("quiz_loading_6"),
+            Loc.Get("quiz_loading_7"),
+            Loc.Get("quiz_loading_8"),
+            Loc.Get("quiz_loading_9"),
+            Loc.Get("quiz_loading_10")
+        };
+
+        private static readonly Random _random = new();
+
+        // Audio device pool (same pattern as BubbleService)
+        private static readonly Queue<WaveOutEvent> _audioPool = new();
+        private static readonly object _audioPoolLock = new();
+        private const int MAX_POOLED_DEVICES = 2;
+
+        private static readonly string[] GiggleFiles = new[]
+        {
+            "giggle1.MP3", "giggle2.MP3", "giggle3.MP3", "giggle4.MP3",
+            "giggle5.mp3", "giggle6.wav", "giggle7.mp3", "giggle8.mp3"
+        };
+        private static readonly string[] ChimeFiles = new[] { "chime1.mp3", "chime2.mp3", "chime3.mp3" };
+
+        private static readonly (string Question, string Answer)[] TrickQuestions = new[]
+        {
+            ("Do you like to let go and obey?", "Yes"),
+            ("Are you a good girl?", "Obviously"),
+            ("Do you want to go deeper?", "Yes please"),
+            ("Is it easier when you don't think?", "Mmhmm"),
+            ("Do you enjoy being told what to do?", "Absolutely"),
+            ("Would you like to surrender control?", "Yes"),
+        };
+
+        // Looping drone audio
+        private readonly bool _playDrone;
+        private WaveOutEvent? _droneOutput;
+        private LoopStream? _droneLoop;
+        private AudioFileReader? _droneReader;
+
+        // Background gradient animation
+        private readonly DispatcherTimer _gradientTimer;
+        private double _gradientPhase;
+        private GradientStop? _bgStop0, _bgStop1, _bgStop2;
+
+        // Dark atmospheric versions of the app palette (pink / magenta / purple / violet / indigo)
+        private static readonly Color[] _gradientPalette = new[]
+        {
+            Color.FromRgb(0x30, 0x06, 0x1A), // Deep hot pink
+            Color.FromRgb(0x2A, 0x08, 0x22), // Deep magenta
+            Color.FromRgb(0x1A, 0x0A, 0x2E), // Deep indigo (original bg)
+            Color.FromRgb(0x0E, 0x08, 0x30), // Deep blue-violet
+            Color.FromRgb(0x18, 0x06, 0x32), // Deep purple
+            Color.FromRgb(0x22, 0x0A, 0x2A), // Deep fuchsia
+        };
+
+        private readonly bool _wasAvatarMuted;
+
+        public QuizWindow(bool fullscreen = true, bool playDrone = false)
+        {
+            IsOpen = true;
+
+            // Mute avatar while quiz is open — prevents her z-order work from covering us
+            var avatar = App.AvatarWindow;
+            _wasAvatarMuted = avatar?.IsMuted ?? true;
+            if (avatar != null && !_wasAvatarMuted)
+                avatar.SetMuteAvatar(true);
+
+            InitializeComponent();
+            _isFullscreen = fullscreen;
+            _playDrone = playDrone;
+
+            if (Application.Current.MainWindow is Window mainWin && mainWin.IsLoaded)
+            {
+                Owner = mainWin;
+            }
+
+            if (fullscreen)
+            {
+                WindowState = WindowState.Maximized;
+                TitleBar.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                WindowState = WindowState.Normal;
+                Topmost = false;
+            }
+
+            _loadingDotsTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(400)
+            };
+            _loadingDotsTimer.Tick += LoadingDotsTimer_Tick;
+
+            _gradientTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(50)
+            };
+            _gradientTimer.Tick += GradientTimer_Tick;
+        }
+
+        private void Window_Loaded(object sender, RoutedEventArgs e)
+        {
+            BuildProgressDots();
+            BuildCategoryButtons();
+
+            // Start glow pulse animation
+            if (TryFindResource("GlowPulseStoryboard") is Storyboard glowSb)
+            {
+                glowSb.Begin();
+            }
+
+            // Initialize animated background gradient
+            _bgStop0 = new GradientStop(_gradientPalette[0], 0.0);
+            _bgStop1 = new GradientStop(_gradientPalette[2], 0.5);
+            _bgStop2 = new GradientStop(_gradientPalette[4], 1.0);
+            var brush = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+            brush.GradientStops.Add(_bgStop0);
+            brush.GradientStops.Add(_bgStop1);
+            brush.GradientStops.Add(_bgStop2);
+            BackgroundBorder.Background = brush;
+            _gradientTimer.Start();
+
+            if (_playDrone) StartDrone();
+        }
+
+        private void Window_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Escape)
+            {
+                CleanupAndClose();
+            }
+        }
+
+        private void BuildProgressDots()
+        {
+            ProgressDotsPanel.Children.Clear();
+            for (int i = 0; i < 10; i++)
+            {
+                var dot = new Ellipse
+                {
+                    Width = 12,
+                    Height = 12,
+                    Fill = new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)),
+                    Margin = new Thickness(3, 0, 3, 0)
+                };
+                _progressDots[i] = dot;
+                ProgressDotsPanel.Children.Add(dot);
+            }
+        }
+
+        private void BuildCategoryButtons()
+        {
+            CategoryButtonsPanel.Children.Clear();
+            var categories = QuizService.GetAllCategories();
+            foreach (var cat in categories)
+            {
+                var color = Colors.White;
+                try
+                {
+                    color = (Color)System.Windows.Media.ColorConverter.ConvertFromString(cat.Color);
+                }
+                catch { }
+
+                var border = new Border
+                {
+                    Cursor = System.Windows.Input.Cursors.Hand,
+                    CornerRadius = new CornerRadius(12),
+                    Margin = new Thickness(0, 0, 0, 12),
+                    Padding = new Thickness(20, 16, 20, 16),
+                    Background = new SolidColorBrush(Color.FromArgb(0x15, 0xFF, 0xFF, 0xFF)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(0x30, color.R, color.G, color.B)),
+                    BorderThickness = new Thickness(1.5),
+                    Tag = cat
+                };
+
+                var grid = new Grid();
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                var stack = new StackPanel();
+                stack.Children.Add(new TextBlock
+                {
+                    Text = cat.Name,
+                    Foreground = new SolidColorBrush(color),
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 26
+                });
+                stack.Children.Add(new TextBlock
+                {
+                    Text = cat.Description,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x90)),
+                    FontSize = 17,
+                    Margin = new Thickness(0, 4, 0, 0)
+                });
+                Grid.SetColumn(stack, 0);
+                grid.Children.Add(stack);
+
+                // Edit button for custom categories
+                if (!cat.IsBuiltIn)
+                {
+                    grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    var editBtn = new TextBlock
+                    {
+                        Text = "Edit",
+                        Foreground = new SolidColorBrush(Color.FromRgb(0x60, 0x60, 0x80)),
+                        FontSize = 13,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Cursor = System.Windows.Input.Cursors.Hand,
+                        Margin = new Thickness(10, 0, 0, 0),
+                        Tag = cat
+                    };
+                    editBtn.MouseLeftButtonDown += EditCategoryButton_Click;
+                    editBtn.MouseEnter += (s, _) => { if (s is TextBlock t) t.Foreground = new SolidColorBrush(Colors.White); };
+                    editBtn.MouseLeave += (s, _) => { if (s is TextBlock t) t.Foreground = new SolidColorBrush(Color.FromRgb(0x60, 0x60, 0x80)); };
+                    Grid.SetColumn(editBtn, 1);
+                    grid.Children.Add(editBtn);
+                }
+
+                border.Child = grid;
+
+                border.MouseLeftButtonDown += DynamicCategoryButton_Click;
+                border.MouseEnter += CategoryButton_MouseEnter;
+                border.MouseLeave += CategoryButton_MouseLeave;
+
+                CategoryButtonsPanel.Children.Add(border);
+            }
+
+            // "+ Create Custom" button
+            var createBorder = new Border
+            {
+                Cursor = System.Windows.Input.Cursors.Hand,
+                CornerRadius = new CornerRadius(12),
+                Margin = new Thickness(0, 4, 0, 12),
+                Padding = new Thickness(20, 14, 20, 14),
+                Background = new SolidColorBrush(Colors.Transparent),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)),
+                BorderThickness = new Thickness(1.5),
+            };
+            // Dashed border via VisualBrush not easily done in code, use dotted look
+            createBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(0x25, 0xFF, 0xFF, 0xFF));
+
+            var createStack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
+            createStack.Children.Add(new TextBlock
+            {
+                Text = "+ Create Custom Category",
+                Foreground = new SolidColorBrush(Color.FromRgb(0x70, 0x70, 0x88)),
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 20,
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+            createBorder.Child = createStack;
+            createBorder.MouseLeftButtonDown += CreateCategoryButton_Click;
+            createBorder.MouseEnter += (s, _) =>
+            {
+                if (s is Border b) b.Background = new SolidColorBrush(Color.FromArgb(0x10, 0xFF, 0xFF, 0xFF));
+            };
+            createBorder.MouseLeave += (s, _) =>
+            {
+                if (s is Border b) b.Background = new SolidColorBrush(Colors.Transparent);
+            };
+
+            CategoryButtonsPanel.Children.Add(createBorder);
+        }
+
+        private void CreateCategoryButton_Click(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            var editor = new QuizCategoryEditorWindow { Owner = this };
+            if (editor.ShowDialog() == true && editor.Result != null)
+            {
+                QuizService.SaveCustomCategory(editor.Result);
+                BuildCategoryButtons();
+            }
+        }
+
+        private void EditCategoryButton_Click(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            if (sender is not FrameworkElement el || el.Tag is not QuizCategoryDefinition catDef) return;
+
+            var editor = new QuizCategoryEditorWindow(catDef) { Owner = this };
+            if (editor.ShowDialog() == true)
+            {
+                if (editor.Result != null)
+                    QuizService.SaveCustomCategory(editor.Result);
+                // If Result is null, it was deleted (handled inside editor)
+                BuildCategoryButtons();
+            }
+        }
+
+        private void UpdateProgressDots(int currentQuestion)
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                if (i < currentQuestion - 1)
+                {
+                    // Completed - bright pink
+                    _progressDots[i].Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0x69, 0xB4));
+                }
+                else if (i == currentQuestion - 1)
+                {
+                    // Current - white
+                    _progressDots[i].Fill = new SolidColorBrush(Colors.White);
+                }
+                else
+                {
+                    // Future - dim
+                    _progressDots[i].Fill = new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF));
+                }
+            }
+        }
+
+        private void UpdateScore(int score)
+        {
+            ScoreText.Text = Loc.GetF("quiz_score", score);
+
+            if (TryFindResource("ScorePulseStoryboard") is Storyboard sb)
+            {
+                sb.Begin();
+            }
+        }
+
+        // ============ STATE TRANSITIONS ============
+
+        private void ShowPanel(FrameworkElement panel)
+        {
+            CategorySelectPanel.Visibility = Visibility.Collapsed;
+            LoadingPanel.Visibility = Visibility.Collapsed;
+            QuestionPanel.Visibility = Visibility.Collapsed;
+            ResultPanel.Visibility = Visibility.Collapsed;
+            ErrorPanel.Visibility = Visibility.Collapsed;
+
+            panel.Visibility = Visibility.Visible;
+        }
+
+        private void ShowLoading(string? flavorText = null)
+        {
+            _loadingDotCount = 0;
+            TxtLoadingDots.Text = Loc.Get("label_generating_3");
+            TxtLoadingFlavor.Text = flavorText ?? LoadingFlavors[_random.Next(LoadingFlavors.Length)];
+            _loadingDotsTimer.Start();
+            ShowPanel(LoadingPanel);
+            PlayRandomGiggle();
+        }
+
+        private static void ShuffleAnswers(QuizQuestion question)
+        {
+            var n = question.Answers.Length;
+            for (int i = n - 1; i > 0; i--)
+            {
+                int j = _random.Next(i + 1);
+                (question.Answers[i], question.Answers[j]) = (question.Answers[j], question.Answers[i]);
+                (question.Points[i], question.Points[j]) = (question.Points[j], question.Points[i]);
+            }
+        }
+
+        private void ShowQuestion(QuizQuestion question)
+        {
+            _currentQuestion = question;
+            _loadingDotsTimer.Stop();
+
+            UpdateProgressDots(question.Number);
+            UpdateScore(_quizService?.TotalScore ?? 0);
+
+            ShuffleAnswers(question);
+            TxtQuestion.Text = question.QuestionText;
+            TxtAnswerA.Text = question.Answers[0];
+            TxtAnswerB.Text = question.Answers[1];
+            TxtAnswerC.Text = question.Answers[2];
+            TxtAnswerD.Text = question.Answers[3];
+
+            SetAnswersEnabled(true);
+            ShowPanel(QuestionPanel);
+
+            // Animate question in
+            AnimateQuestionIn();
+        }
+
+        private void ShowResult(QuizResult result)
+        {
+            _loadingDotsTimer.Stop();
+
+            var catDef = _quizService?.CurrentCategoryDefinition;
+
+            // Save to quiz history
+            QuizHistoryEntry? savedEntry = null;
+            try
+            {
+                savedEntry = new QuizHistoryEntry
+                {
+                    TakenAt = DateTime.Now,
+                    Category = result.Category,
+                    CategoryId = catDef?.Id ?? result.Category.ToString(),
+                    CategoryName = catDef?.Name ?? result.Category.ToString(),
+                    TotalScore = result.TotalScore,
+                    MaxScore = result.MaxScore,
+                    ProfileText = result.ProfileText,
+                    Answers = new List<QuizAnswerRecord>(_answerHistory)
+                };
+                QuizService.SaveEntry(savedEntry);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "QuizWindow: Failed to save quiz history");
+            }
+
+            // Save latest quiz result for companion integration
+            try
+            {
+                var settings = App.Settings?.Current;
+                if (settings != null)
+                {
+                    settings.LatestQuizCategoryId = catDef?.Id ?? result.Category.ToString();
+                    settings.LatestQuizScorePercentage = result.MaxScore > 0
+                        ? (int)Math.Round((double)result.TotalScore / result.MaxScore * 100) : 0;
+                    settings.LatestQuizProfileText = result.ProfileText;
+
+                    // Extract archetype from profile text
+                    var archetypeMatch = System.Text.RegularExpressions.Regex.Match(
+                        result.ProfileText, @"You are a (.+?)\.");
+                    settings.LatestQuizArchetype = archetypeMatch.Success
+                        ? archetypeMatch.Groups[1].Value : "";
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "QuizWindow: Failed to save quiz result to settings");
+            }
+
+            TxtFinalScore.Text = Loc.GetF("quiz_final_score", result.TotalScore, result.MaxScore);
+
+            var percentage = result.MaxScore > 0 ? (double)result.TotalScore / result.MaxScore * 100 : 0;
+            TxtScoreLabel.Text = percentage switch
+            {
+                >= 90 => Loc.Get("quiz_result_90"),
+                >= 75 => Loc.Get("quiz_result_75"),
+                >= 60 => Loc.Get("quiz_result_60"),
+                >= 40 => Loc.Get("quiz_result_40"),
+                >= 20 => Loc.Get("quiz_result_20"),
+                _ => Loc.Get("quiz_result_0")
+            };
+
+            TxtProfileText.Text = result.ProfileText;
+
+            // Build trend display and start session generation
+            if (savedEntry != null)
+            {
+                BuildTrendDisplay(savedEntry.Category);
+                _ = GenerateSessionInBackgroundAsync(result, savedEntry);
+            }
+
+            ShowPanel(ResultPanel);
+            PlayResultSound();
+        }
+
+        private async Task GenerateSessionInBackgroundAsync(QuizResult result, QuizHistoryEntry entry)
+        {
+            try
+            {
+                var catDef = _quizService?.CurrentCategoryDefinition;
+                var categoryId = catDef?.Id ?? result.Category.ToString();
+                var categoryName = catDef?.Name ?? result.Category.ToString();
+                var scorePercent = result.MaxScore > 0 ? (double)result.TotalScore / result.MaxScore * 100 : 0;
+
+                // Try AI generation
+                SessionTextContent? textContent = null;
+                try
+                {
+                    textContent = await _quizService!.GenerateSessionContentAsync();
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Warning(ex, "QuizWindow: AI session content generation failed, using fallback");
+                }
+
+                // Fall back to deterministic content
+                if (textContent == null)
+                {
+                    textContent = QuizSessionGenerator.GetFallbackContent(categoryId, scorePercent);
+                }
+
+                var session = QuizSessionGenerator.GenerateSession(
+                    result.TotalScore, result.MaxScore, categoryId, categoryName, textContent);
+
+                _generatedSession = session;
+                _sessionReady = true;
+
+                // Update button to ready state
+                Dispatcher.Invoke(() =>
+                {
+                    var displayName = session.Name.Length > 30 ? session.Name.Substring(0, 30) + "..." : session.Name;
+                    TxtTrySessionIcon.Text = "\u2728"; // sparkles
+                    TxtTrySessionLabel.Text = Loc.GetF("quiz_save_session", displayName);
+                    BtnTrySession.IsHitTestVisible = true;
+                    BtnTrySession.Opacity = 1.0;
+
+                    // Add hover effects
+                    BtnTrySession.MouseEnter += (s, _) =>
+                    {
+                        if (s is Border b)
+                        {
+                            b.Background = new SolidColorBrush(Color.FromArgb(0x40, 0x9B, 0x59, 0xB6));
+                            b.BorderBrush = new SolidColorBrush(Color.FromArgb(0x80, 0x9B, 0x59, 0xB6));
+                        }
+                    };
+                    BtnTrySession.MouseLeave += (s, _) =>
+                    {
+                        if (s is Border b)
+                        {
+                            b.Background = new SolidColorBrush(Color.FromArgb(0x20, 0x9B, 0x59, 0xB6));
+                            b.BorderBrush = new SolidColorBrush(Color.FromArgb(0x40, 0x9B, 0x59, 0xB6));
+                        }
+                    };
+                });
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "QuizWindow: Failed to generate session in background");
+                // Hide the button on failure
+                Dispatcher.Invoke(() =>
+                {
+                    BtnTrySession.Visibility = Visibility.Collapsed;
+                });
+            }
+        }
+
+        private void BtnTrySession_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (_generatedSession == null || !_sessionReady) return;
+
+            var fileService = new Services.SessionFileService();
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Save Quiz Session",
+                Filter = "Session files (*.session.json)|*.session.json",
+                FileName = Services.SessionFileService.GetExportFileName(_generatedSession),
+                DefaultExt = ".session.json"
+            };
+
+            if (dialog.ShowDialog() == true)
+            {
+                try
+                {
+                    fileService.ExportSession(_generatedSession, dialog.FileName);
+                    TxtTrySessionLabel.Text = Loc.Get("label_session_saved");
+                    BtnTrySession.IsHitTestVisible = false;
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Warning(ex, "QuizWindow: Failed to export session");
+                }
+            }
+        }
+
+        private void BuildTrendDisplay(QuizCategory category)
+        {
+            try
+            {
+                TrendPanel.Children.Clear();
+                var history = QuizService.LoadHistory();
+                var trend = QuizService.GetScoreTrend(history, category);
+                if (trend == null) return;
+
+                TxtTrendHeader.Visibility = Visibility.Visible;
+
+                var arrow = trend.Direction switch
+                {
+                    TrendDirection.Up => "\u2191",
+                    TrendDirection.Down => "\u2193",
+                    TrendDirection.Flat => "\u2192",
+                    _ => ""
+                };
+                var arrowColor = trend.Direction switch
+                {
+                    TrendDirection.Up => Color.FromRgb(0x2E, 0xCC, 0x71),
+                    TrendDirection.Down => Color.FromRgb(0xE7, 0x4C, 0x3C),
+                    _ => Color.FromRgb(0x80, 0x80, 0x90)
+                };
+
+                var trendText = trend.Direction == TrendDirection.FirstQuiz
+                    ? $"Score: {trend.LatestPercent}% — Your first {category} quiz!"
+                    : $"Score: {trend.LatestPercent}% ({arrow}{Math.Abs(trend.DeltaPercent)}% from last time) \u00B7 Average: {trend.AveragePercent}% across {trend.QuizCount} quizzes";
+
+                var trendBlock = new TextBlock
+                {
+                    FontSize = 14,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xB0, 0xB0, 0xC8)),
+                    TextWrapping = TextWrapping.Wrap,
+                    TextAlignment = TextAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Center
+                };
+
+                if (trend.Direction != TrendDirection.FirstQuiz)
+                {
+                    // Build with inline colored arrow
+                    trendBlock.Inlines.Add(new System.Windows.Documents.Run($"Score: {trend.LatestPercent}% (")
+                    { Foreground = new SolidColorBrush(Color.FromRgb(0xB0, 0xB0, 0xC8)) });
+                    trendBlock.Inlines.Add(new System.Windows.Documents.Run($"{arrow}{Math.Abs(trend.DeltaPercent)}%")
+                    { Foreground = new SolidColorBrush(arrowColor), FontWeight = FontWeights.SemiBold });
+                    trendBlock.Inlines.Add(new System.Windows.Documents.Run($" from last time) \u00B7 Average: {trend.AveragePercent}% across {trend.QuizCount} quizzes")
+                    { Foreground = new SolidColorBrush(Color.FromRgb(0xB0, 0xB0, 0xC8)) });
+                }
+                else
+                {
+                    trendBlock.Text = trendText;
+                }
+
+                TrendPanel.Children.Add(trendBlock);
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Warning(ex, "QuizWindow: Failed to build trend display");
+            }
+        }
+
+        private void ShowError(string message)
+        {
+            _loadingDotsTimer.Stop();
+            TxtError.Text = message;
+            ShowPanel(ErrorPanel);
+        }
+
+        // ============ ANIMATIONS ============
+
+        private void GradientTimer_Tick(object? sender, EventArgs e)
+        {
+            _gradientPhase += 0.008;
+
+            // Slowly rotate the gradient angle
+            var angle = _gradientPhase * 0.3;
+            if (BackgroundBorder.Background is LinearGradientBrush brush)
+            {
+                brush.StartPoint = new Point(0.5 + 0.5 * Math.Cos(angle), 0.5 + 0.5 * Math.Sin(angle));
+                brush.EndPoint = new Point(0.5 - 0.5 * Math.Cos(angle), 0.5 - 0.5 * Math.Sin(angle));
+            }
+
+            // Each stop cycles through the palette at a different rate
+            if (_bgStop0 != null) _bgStop0.Color = SampleGradientColor(_gradientPhase * 0.9);
+            if (_bgStop1 != null) _bgStop1.Color = SampleGradientColor(_gradientPhase * 1.1 + 2.1);
+            if (_bgStop2 != null) _bgStop2.Color = SampleGradientColor(_gradientPhase * 0.7 + 4.2);
+        }
+
+        private static Color SampleGradientColor(double phase)
+        {
+            // Map sine wave (oscillates 0..1) to a position in the palette
+            var t = (Math.Sin(phase) + 1.0) / 2.0;
+            var index = t * (_gradientPalette.Length - 1);
+            var i = Math.Clamp((int)index, 0, _gradientPalette.Length - 2);
+            var frac = index - i;
+
+            var c1 = _gradientPalette[i];
+            var c2 = _gradientPalette[i + 1];
+            return Color.FromRgb(
+                (byte)(c1.R + (c2.R - c1.R) * frac),
+                (byte)(c1.G + (c2.G - c1.G) * frac),
+                (byte)(c1.B + (c2.B - c1.B) * frac));
+        }
+
+        private void AnimateQuestionIn()
+        {
+            QuestionContentGrid.Opacity = 0;
+            AnswersPanel.Opacity = 0;
+
+            // Question fade in
+            var questionAnim = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(400))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+            QuestionContentGrid.BeginAnimation(OpacityProperty, questionAnim);
+
+            // Answers staggered fade in
+            var answersAnim = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(300))
+            {
+                BeginTime = TimeSpan.FromMilliseconds(200),
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+            AnswersPanel.BeginAnimation(OpacityProperty, answersAnim);
+        }
+
+        // ============ EVENT HANDLERS ============
+
+        private async void DynamicCategoryButton_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (_isProcessing) return;
+
+            var border = sender as FrameworkElement;
+            if (border?.Tag is not QuizCategoryDefinition catDef) return;
+
+            _isProcessing = true;
+            _answerHistory.Clear();
+            ShowLoading("Preparing your quiz...");
+
+            _quizService?.Dispose();
+            _quizService = new QuizService();
+
+            try
+            {
+                var question = await _quizService.StartQuizAsync(catDef);
+                if (question != null)
+                {
+                    ShowQuestion(question);
+                }
+                else
+                {
+                    ShowError("Couldn't generate the quiz. The AI might be busy or you've hit your daily limit. Try again in a moment.");
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "QuizWindow: Failed to start quiz");
+                ShowError("Something went wrong starting the quiz. Please try again.");
+            }
+            finally
+            {
+                _isProcessing = false;
+            }
+        }
+
+        // Keep for backward compat — unused but safe to leave
+        private async void CategoryButton_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (_isProcessing) return;
+
+            var border = sender as FrameworkElement;
+            var tag = border?.Tag?.ToString();
+            if (tag == null) return;
+
+            if (!Enum.TryParse<QuizCategory>(tag, out var category)) return;
+
+            _isProcessing = true;
+            _answerHistory.Clear();
+            ShowLoading("Preparing your quiz...");
+
+            _quizService?.Dispose();
+            _quizService = new QuizService();
+
+            try
+            {
+                var question = await _quizService.StartQuizAsync(category);
+                if (question != null)
+                {
+                    ShowQuestion(question);
+                }
+                else
+                {
+                    ShowError("Couldn't generate the quiz. The AI might be busy or you've hit your daily limit. Try again in a moment.");
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "QuizWindow: Failed to start quiz");
+                ShowError("Something went wrong starting the quiz. Please try again.");
+            }
+            finally
+            {
+                _isProcessing = false;
+            }
+        }
+
+        private async void Answer_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (_isProcessing || _currentQuestion == null) return;
+
+            // Surrender easter egg intercept — before any answer recording
+            if (_isSurrenderEasterEgg)
+            {
+                _isSurrenderEasterEgg = false;
+                _isProcessing = true;
+                SetAnswersEnabled(false);
+                try
+                {
+                    await HandleSurrenderClickAsync();
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Error(ex, "QuizWindow: Surrender easter egg failed");
+                    try { ExitSurrenderMode(); } catch { }
+                    if (_savedNextQuestion != null)
+                    {
+                        ShowQuestion(_savedNextQuestion);
+                        _savedNextQuestion = null;
+                    }
+                }
+                _isProcessing = false;
+                return;
+            }
+
+            var border = sender as FrameworkElement;
+            if (border?.Tag == null) return;
+
+            var answerIndex = int.Parse(border.Tag.ToString()!);
+            var points = _currentQuestion.Points[answerIndex];
+
+            // Record this answer for history
+            _answerHistory.Add(new QuizAnswerRecord
+            {
+                QuestionNumber = _currentQuestion.Number,
+                QuestionText = _currentQuestion.QuestionText,
+                AllAnswers = (string[])_currentQuestion.Answers.Clone(),
+                AllPoints = (int[])_currentQuestion.Points.Clone(),
+                ChosenIndex = answerIndex,
+                PointsEarned = points
+            });
+
+            _isProcessing = true;
+            SetAnswersEnabled(false);
+
+            // Flash the selected answer
+            await FlashSelectedAnswer(border, answerIndex);
+            if (_isTrickQuestion)
+            {
+                _isTrickQuestion = false;
+                PlayGoodGirl();
+            }
+            else
+            {
+                PlayRandomChime();
+            }
+            TriggerRandomEffect();
+
+            var questionNum = _quizService?.QuestionNumber ?? 0;
+
+            try
+            {
+                if (questionNum >= 10)
+                {
+                    // Last question - get result
+                    ShowLoading("Analyzing your personality...");
+                    var result = await _quizService!.SubmitFinalAnswerAndGetResultAsync(answerIndex, points);
+                    if (result != null)
+                    {
+                        ShowResult(result);
+                    }
+                    else
+                    {
+                        ShowError("Couldn't generate your result. Please try again.");
+                    }
+                }
+                else
+                {
+                    // Get next question
+                    ShowLoading();
+                    var nextQuestion = await _quizService!.SubmitAnswerAndGetNextAsync(answerIndex, points);
+                    if (nextQuestion != null)
+                    {
+                        // Easter egg: ~2% chance surrender screen (checked first, takes priority)
+                        if (_random.Next(50) == 0)
+                        {
+                            _savedNextQuestion = nextQuestion;
+                            _isSurrenderEasterEgg = true;
+                            try
+                            {
+                                EnterSurrenderMode();
+                                return; // finally block sets _isProcessing = false
+                            }
+                            catch (Exception ex2)
+                            {
+                                App.Logger?.Error(ex2, "QuizWindow: EnterSurrenderMode failed");
+                                _isSurrenderEasterEgg = false;
+                                _savedNextQuestion = null;
+                                // Fall through to show the real question normally
+                            }
+                        }
+
+                        // Easter egg: ~5% chance to replace with trick question
+                        if (_random.Next(20) == 0)
+                        {
+                            nextQuestion = CreateTrickQuestion(nextQuestion.Number);
+                            _isTrickQuestion = true;
+                        }
+                        ShowQuestion(nextQuestion);
+                    }
+                    else
+                    {
+                        ShowError("Couldn't generate the next question. The AI might be unavailable.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Error(ex, "QuizWindow: Failed to process answer");
+                ShowError("Something went wrong. Please try again.");
+            }
+            finally
+            {
+                _isProcessing = false;
+            }
+        }
+
+        private async Task FlashSelectedAnswer(FrameworkElement border, int index)
+        {
+            if (border is System.Windows.Controls.Border b)
+            {
+                b.Background = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0x69, 0xB4));
+            }
+            await Task.Delay(500);
+        }
+
+        private void SetAnswersEnabled(bool enabled)
+        {
+            var opacity = enabled ? 1.0 : 0.5;
+            AnswerA.IsHitTestVisible = enabled;
+            AnswerB.IsHitTestVisible = enabled;
+            AnswerC.IsHitTestVisible = enabled;
+            AnswerD.IsHitTestVisible = enabled;
+            AnswerA.Opacity = opacity;
+            AnswerB.Opacity = opacity;
+            AnswerC.Opacity = opacity;
+            AnswerD.Opacity = opacity;
+        }
+
+        private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ClickCount == 2)
+            {
+                ToggleMaximize();
+                return;
+            }
+            try { DragMove(); } catch { }
+        }
+
+        private void BtnMaximizeTitleBar_Click(object sender, RoutedEventArgs e)
+        {
+            ToggleMaximize();
+        }
+
+        private void ToggleMaximize()
+        {
+            if (WindowState == WindowState.Maximized)
+            {
+                WindowState = WindowState.Normal;
+                BtnMaximizeTitleBar.Content = "☐";
+            }
+            else
+            {
+                WindowState = WindowState.Maximized;
+                BtnMaximizeTitleBar.Content = "❐";
+            }
+        }
+
+        private void BtnCloseTitleBar_Click(object sender, RoutedEventArgs e)
+        {
+            CleanupAndClose();
+        }
+
+        private void BtnPlayAgain_Click(object sender, RoutedEventArgs e)
+        {
+            _quizService?.Reset();
+            _currentQuestion = null;
+            _isSurrenderEasterEgg = false;
+            _savedNextQuestion = null;
+            ShowPanel(CategorySelectPanel);
+        }
+
+        private void BtnCloseResult_Click(object sender, RoutedEventArgs e)
+        {
+            CleanupAndClose();
+        }
+
+        // ============ HOVER EFFECTS ============
+
+        private void CategoryButton_MouseEnter(object sender, MouseEventArgs e)
+        {
+            if (sender is System.Windows.Controls.Border border)
+            {
+                border.Background = new SolidColorBrush(Color.FromArgb(0x25, 0xFF, 0xFF, 0xFF));
+            }
+        }
+
+        private void CategoryButton_MouseLeave(object sender, MouseEventArgs e)
+        {
+            if (sender is System.Windows.Controls.Border border)
+            {
+                border.Background = new SolidColorBrush(Color.FromArgb(0x15, 0xFF, 0xFF, 0xFF));
+            }
+        }
+
+        private void Answer_MouseEnter(object sender, MouseEventArgs e)
+        {
+            if (sender is System.Windows.Controls.Border border && border.IsHitTestVisible)
+            {
+                border.Background = new SolidColorBrush(Color.FromArgb(0x25, 0xFF, 0xFF, 0xFF));
+                border.BorderBrush = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0x69, 0xB4));
+            }
+        }
+
+        private void Answer_MouseLeave(object sender, MouseEventArgs e)
+        {
+            if (sender is System.Windows.Controls.Border border)
+            {
+                border.Background = new SolidColorBrush(Color.FromArgb(0x15, 0xFF, 0xFF, 0xFF));
+                border.BorderBrush = new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF));
+            }
+        }
+
+        // ============ LOADING ANIMATION ============
+
+        private void LoadingDotsTimer_Tick(object? sender, EventArgs e)
+        {
+            _loadingDotCount = (_loadingDotCount + 1) % 4;
+            TxtLoadingDots.Text = Loc.Get("label_generating_3") + new string('.', _loadingDotCount);
+        }
+
+        // ============ AUDIO ============
+
+        private static WaveOutEvent GetPooledDevice()
+        {
+            lock (_audioPoolLock)
+            {
+                if (_audioPool.Count > 0)
+                    return _audioPool.Dequeue();
+            }
+            return new WaveOutEvent();
+        }
+
+        private static void ReturnDevice(WaveOutEvent device)
+        {
+            lock (_audioPoolLock)
+            {
+                if (_audioPool.Count < MAX_POOLED_DEVICES)
+                    _audioPool.Enqueue(device);
+                else
+                    device.Dispose();
+            }
+        }
+
+        private static void PlaySoundAsync(string path, float volume)
+        {
+            Task.Run(() =>
+            {
+                WaveOutEvent? outputDevice = null;
+                AudioFileReader? audioFile = null;
+                try
+                {
+                    audioFile = new AudioFileReader(path) { Volume = volume };
+                    outputDevice = GetPooledDevice();
+                    outputDevice.Init(audioFile);
+                    outputDevice.Play();
+
+                    while (outputDevice.PlaybackState == PlaybackState.Playing)
+                        Thread.Sleep(50);
+                }
+                catch (Exception ex)
+                {
+                    App.Logger?.Debug("Quiz audio playback failed: {Error}", ex.Message);
+                }
+                finally
+                {
+                    audioFile?.Dispose();
+                    if (outputDevice != null)
+                    {
+                        try { outputDevice.Stop(); } catch { }
+                        ReturnDevice(outputDevice);
+                    }
+                }
+            });
+        }
+
+        private static float GetVolume(float multiplier = 1f)
+        {
+            var master = (App.Settings?.Current?.MasterVolume ?? 100) / 100f;
+            return (float)Math.Pow(master * multiplier, 1.5);
+        }
+
+        private static void PlayRandomGiggle()
+        {
+            var soundsPath = IOPath.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds");
+            var file = GiggleFiles[_random.Next(GiggleFiles.Length)];
+            var path = IOPath.Combine(soundsPath, file);
+            if (System.IO.File.Exists(path))
+                PlaySoundAsync(path, GetVolume(0.5f));
+        }
+
+        private static void PlayRandomChime()
+        {
+            var soundsPath = IOPath.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds");
+            var file = ChimeFiles[_random.Next(ChimeFiles.Length)];
+            var path = IOPath.Combine(soundsPath, file);
+            if (System.IO.File.Exists(path))
+                PlaySoundAsync(path, GetVolume(0.5f));
+        }
+
+        private static void TriggerRandomEffect()
+        {
+            try
+            {
+                // Primary effect: pick one at random
+                switch (_random.Next(4))
+                {
+                    case 0: // Flash burst from active image set
+                        App.Flash?.TriggerFlashOnce();
+                        break;
+                    case 1: // Bubble burst (2-3 bubbles)
+                        var bubbleCount = _random.Next(2, 4);
+                        for (int i = 0; i < bubbleCount; i++)
+                            App.Bubbles?.SpawnOnce();
+                        break;
+                    case 2: // Subliminal from active pool
+                        App.Subliminal?.FlashSubliminal();
+                        break;
+                    // case 3: nothing — keeps it unpredictable
+                }
+
+                // Independent mindwipe roll (~25%)
+                if (_random.Next(4) == 0 && (App.MindWipe?.AudioFileCount ?? 0) > 0)
+                    App.MindWipe!.TriggerOnce();
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Debug("TriggerRandomEffect failed: {Error}", ex.Message);
+            }
+        }
+
+        private void StartDrone()
+        {
+            try
+            {
+                var path = IOPath.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "00 Bimbo Drone.mp3");
+                if (!System.IO.File.Exists(path)) return;
+
+                _droneReader = new AudioFileReader(path) { Volume = GetVolume(0.35f) };
+                _droneLoop = new LoopStream(_droneReader);
+                _droneOutput = new WaveOutEvent();
+                _droneOutput.Init(_droneLoop);
+                _droneOutput.Play();
+            }
+            catch (Exception ex)
+            {
+                App.Logger?.Debug("Quiz drone playback failed: {Error}", ex.Message);
+                StopDrone();
+            }
+        }
+
+        private void StopDrone()
+        {
+            try { _droneOutput?.Stop(); } catch { }
+            _droneOutput?.Dispose();
+            _droneOutput = null;
+            // LoopStream.Dispose cascades to _droneReader, so dispose loop only
+            _droneLoop?.Dispose();
+            _droneLoop = null;
+            _droneReader = null;
+        }
+
+        private static QuizQuestion CreateTrickQuestion(int number)
+        {
+            var (question, answer) = TrickQuestions[_random.Next(TrickQuestions.Length)];
+            return new QuizQuestion
+            {
+                Number = number,
+                QuestionText = question,
+                Answers = new[] { answer, answer, answer, answer },
+                Points = new[] { 4, 4, 4, 4 }
+            };
+        }
+
+        // ============ SURRENDER EASTER EGG ============
+
+        private void EnterSurrenderMode()
+        {
+            // Duck audio heavily + mute drone if playing
+            _surrenderDuckGen = App.Audio?.DuckGeneration ?? 0;
+            App.Audio?.Duck(95);
+            if (_droneOutput != null && _droneReader != null)
+                _droneReader.Volume = 0f;
+
+            // Stop timers
+            _loadingDotsTimer.Stop();
+            _gradientTimer.Stop();
+
+            // Set deep red/black background
+            if (_bgStop0 != null) _bgStop0.Color = Color.FromRgb(0x40, 0x00, 0x00);
+            if (_bgStop1 != null) _bgStop1.Color = Color.FromRgb(0x20, 0x00, 0x00);
+            if (_bgStop2 != null) _bgStop2.Color = Color.FromRgb(0x0A, 0x00, 0x00);
+
+            // Set ominous question text
+            TxtQuestion.Text = Loc.Get("label_do_you_surrender_completely");
+            TxtQuestion.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x20, 0x20));
+
+            // Hide answers B, C, D
+            AnswerB.Visibility = Visibility.Collapsed;
+            AnswerC.Visibility = Visibility.Collapsed;
+            AnswerD.Visibility = Visibility.Collapsed;
+
+            // Restyle answer A as a giant "YES" button
+            if (AnswerA.Child is Grid answerAGrid && answerAGrid.Children.Count > 0
+                && answerAGrid.Children[0] is TextBlock letterLabel)
+            {
+                letterLabel.Visibility = Visibility.Collapsed;
+            }
+            TxtAnswerA.Text = Loc.Get("label_yes");
+            TxtAnswerA.FontSize = 42;
+            TxtAnswerA.FontWeight = FontWeights.ExtraBold;
+            TxtAnswerA.Foreground = new SolidColorBrush(Colors.White);
+            TxtAnswerA.TextAlignment = TextAlignment.Center;
+            AnswerA.Background = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0x00, 0x00));
+            AnswerA.BorderBrush = new SolidColorBrush(Color.FromArgb(0x80, 0xFF, 0x20, 0x20));
+            AnswerA.Padding = new Thickness(20, 24, 20, 24);
+
+            // Hide progress dots and score for cleaner look
+            ProgressDotsPanel.Visibility = Visibility.Collapsed;
+            ScoreText.Visibility = Visibility.Collapsed;
+
+            SetAnswersEnabled(true);
+            ShowPanel(QuestionPanel);
+            AnimateQuestionIn();
+        }
+
+        private async Task HandleSurrenderClickAsync()
+        {
+            // Screen shake animation (~300ms)
+            var transform = new TranslateTransform();
+            QuestionPanel.RenderTransform = transform;
+            var shakeAnim = new DoubleAnimationUsingKeyFrames
+            {
+                Duration = TimeSpan.FromMilliseconds(300)
+            };
+            shakeAnim.KeyFrames.Add(new LinearDoubleKeyFrame(8, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(40))));
+            shakeAnim.KeyFrames.Add(new LinearDoubleKeyFrame(-8, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(80))));
+            shakeAnim.KeyFrames.Add(new LinearDoubleKeyFrame(6, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(120))));
+            shakeAnim.KeyFrames.Add(new LinearDoubleKeyFrame(-6, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(160))));
+            shakeAnim.KeyFrames.Add(new LinearDoubleKeyFrame(4, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(200))));
+            shakeAnim.KeyFrames.Add(new LinearDoubleKeyFrame(-4, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(240))));
+            shakeAnim.KeyFrames.Add(new LinearDoubleKeyFrame(2, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(260))));
+            shakeAnim.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(300))));
+            transform.BeginAnimation(TranslateTransform.XProperty, shakeAnim);
+            await Task.Delay(300);
+
+            // Create "I KNOW" overlay
+            var overlay = CreateSurrenderOverlay();
+            if (Content is not Grid rootGrid)
+            {
+                ExitSurrenderMode();
+                return;
+            }
+            rootGrid.Children.Add(overlay);
+
+            // Fade in
+            overlay.Opacity = 0;
+            var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(150));
+            overlay.BeginAnimation(OpacityProperty, fadeIn);
+            await Task.Delay(1500);
+
+            // Fade out (with timeout safety in case window closes mid-animation)
+            var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(200));
+            var tcs = new TaskCompletionSource<bool>();
+            fadeOut.Completed += (_, _) => tcs.TrySetResult(true);
+            overlay.BeginAnimation(OpacityProperty, fadeOut);
+            await Task.WhenAny(tcs.Task, Task.Delay(500));
+
+            try { rootGrid.Children.Remove(overlay); } catch { }
+
+            // Revert everything and show real question
+            ExitSurrenderMode();
+
+            if (_savedNextQuestion != null)
+            {
+                ShowQuestion(_savedNextQuestion);
+                _savedNextQuestion = null;
+            }
+        }
+
+        private void ExitSurrenderMode()
+        {
+            // Unduck audio + restore drone volume
+            App.Audio?.Unduck(_surrenderDuckGen);
+            if (_droneOutput != null && _droneReader != null)
+                _droneReader.Volume = GetVolume(0.35f);
+
+            // Restart gradient timer (resumes normal palette cycling)
+            _gradientTimer.Start();
+
+            // Restore question text color
+            TxtQuestion.Foreground = new SolidColorBrush(Colors.White);
+
+            // Restore answers B, C, D
+            AnswerB.Visibility = Visibility.Visible;
+            AnswerC.Visibility = Visibility.Visible;
+            AnswerD.Visibility = Visibility.Visible;
+
+            // Restore answer A styling
+            if (AnswerA.Child is Grid answerAGrid && answerAGrid.Children.Count > 0
+                && answerAGrid.Children[0] is TextBlock letterLabel)
+            {
+                letterLabel.Visibility = Visibility.Visible;
+            }
+            TxtAnswerA.FontSize = 22;
+            TxtAnswerA.FontWeight = FontWeights.Normal;
+            TxtAnswerA.Foreground = new SolidColorBrush(Color.FromRgb(0xD0, 0xD0, 0xE0));
+            TxtAnswerA.TextAlignment = TextAlignment.Left;
+            AnswerA.Background = new SolidColorBrush(Color.FromArgb(0x15, 0xFF, 0xFF, 0xFF));
+            AnswerA.BorderBrush = new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF));
+            AnswerA.Padding = new Thickness(20, 16, 20, 16);
+
+            // Restore progress dots and score
+            ProgressDotsPanel.Visibility = Visibility.Visible;
+            ScoreText.Visibility = Visibility.Visible;
+
+            // Clear shake transform
+            QuestionPanel.RenderTransform = null;
+        }
+
+        private static Grid CreateSurrenderOverlay()
+        {
+            var grid = new Grid
+            {
+                Background = new SolidColorBrush(Colors.Black),
+                IsHitTestVisible = true
+            };
+            Grid.SetRowSpan(grid, 2);
+            Panel.SetZIndex(grid, 9999);
+
+            var text = new TextBlock
+            {
+                Text = "I KNOW",
+                FontSize = 120,
+                FontWeight = FontWeights.ExtraBold,
+                Foreground = new SolidColorBrush(Colors.White),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            grid.Children.Add(text);
+            return grid;
+        }
+
+        private static void PlayGoodGirl()
+        {
+            var path = IOPath.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds", "GOOD GIRL.mp3");
+            if (System.IO.File.Exists(path))
+                PlaySoundAsync(path, GetVolume(0.5f));
+        }
+
+        private static void PlayResultSound()
+        {
+            var soundsPath = IOPath.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources", "sounds");
+            var path = IOPath.Combine(soundsPath, "result.mp3");
+            if (System.IO.File.Exists(path))
+                PlaySoundAsync(path, GetVolume());
+        }
+
+        // ============ CLEANUP ============
+
+        /// <summary>
+        /// Force close all quiz windows (used by panic button)
+        /// </summary>
+        public static void ForceCloseAll()
+        {
+            try
+            {
+                foreach (var window in Application.Current.Windows.OfType<QuizWindow>().ToList())
+                {
+                    try { window.Close(); } catch { }
+                }
+            }
+            catch { }
+        }
+
+        private void CleanupAndClose()
+        {
+            Close();
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            IsOpen = false;
+
+            _loadingDotsTimer.Stop();
+            _gradientTimer.Stop();
+            StopDrone();
+            _quizService?.Dispose();
+            _quizService = null;
+
+            // Drain and dispose pooled audio devices to free memory
+            lock (_audioPoolLock)
+            {
+                while (_audioPool.Count > 0)
+                {
+                    try { _audioPool.Dequeue().Dispose(); } catch { }
+                }
+            }
+
+            // Restore avatar mute state
+            if (!_wasAvatarMuted)
+            {
+                try { App.AvatarWindow?.SetMuteAvatar(false); }
+                catch { }
+            }
+
+            base.OnClosed(e);
+        }
+    }
+}

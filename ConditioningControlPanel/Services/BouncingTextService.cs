@@ -1,8 +1,4 @@
-using System;
-using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -39,38 +35,34 @@ public class BouncingTextService : IDisposable
 
     // Anti-exploit: XP rate limiting for bounces
     private DateTime _lastBounceXpTime = DateTime.MinValue;
-    private static readonly TimeSpan BounceXpCooldown = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan BounceXpCooldown = TimeSpan.FromSeconds(2); // Short cooldown to prevent double-count on corner hits
     private int _bounceXpThisMinute;
     private DateTime _bounceXpMinuteStart = DateTime.MinValue;
     private const int MaxBounceXpPerMinute = 150;
     
+    // Z-order re-assertion counter (every ~30 ticks = ~500ms at 60 FPS)
+    private int _topmostTickCount;
+
     public bool IsRunning => _isRunning;
-    
+
     public event EventHandler? OnBounce;
 
-    public void Start(bool bypassLevelCheck = false)
+    public void Start(bool bypassLevelCheck = false, List<string>? pool = null)
     {
         if (_isRunning) return;
 
         var settings = App.Settings.Current;
 
-        // Check level requirement (Level 60) unless bypassed (e.g., during sessions)
-        if (!bypassLevelCheck && !settings.IsLevelUnlocked(60))
-        {
-            App.Logger?.Information("BouncingTextService: Level {Level} is below 60, not available", settings.PlayerLevel);
-            return;
-        }
-        
         // Note: We don't check BouncingTextEnabled here because Start() is called
         // explicitly when we want to start (either by toggle or by session)
-        
+
         _isRunning = true;
         
         // Calculate font size based on settings (50-300% of base)
         _currentFontSize = (int)(BASE_FONT_SIZE * settings.BouncingTextSize / 100.0);
         
         // Get random text from pool
-        SelectRandomText();
+        SelectRandomText(pool);
         
         // Measure actual text size
         MeasureTextSize();
@@ -123,13 +115,15 @@ public class BouncingTextService : IDisposable
         App.Logger?.Information("BouncingTextService stopped");
     }
 
-    private void SelectRandomText()
+    private void SelectRandomText(List<string>? pool = null)
     {
         var settings = App.Settings.Current;
         var enabledTexts = settings.BouncingTextPool
             .Where(kv => kv.Value)
             .Select(kv => kv.Key)
             .ToList();
+        
+        enabledTexts = pool != null ? pool.ToList() : enabledTexts;
         
         if (enabledTexts.Count == 0)
         {
@@ -212,7 +206,18 @@ public class BouncingTextService : IDisposable
     private void Animate(object? sender, EventArgs e)
     {
         if (!_isRunning) return;
-        
+
+        // Hide bouncing text while a mandatory video is playing
+        if (App.Video?.IsPlaying == true)
+        {
+            foreach (var w in _windows) w.Hide();
+            return;
+        }
+        else
+        {
+            foreach (var w in _windows) { if (!w.IsVisible) w.Show(); }
+        }
+
         // Move
         _posX += _velX;
         _posY += _velY;
@@ -288,9 +293,9 @@ public class BouncingTextService : IDisposable
 
             if (now - _lastBounceXpTime >= BounceXpCooldown && _bounceXpThisMinute < MaxBounceXpPerMinute)
             {
-                App.Progression?.AddXP(25, XPSource.BouncingText);
+                App.Progression?.AddXP(15, XPSource.BouncingText);
                 _lastBounceXpTime = now;
-                _bounceXpThisMinute += 25;
+                _bounceXpThisMinute += 15;
             }
             OnBounce?.Invoke(this, EventArgs.Empty);
 
@@ -307,6 +312,16 @@ public class BouncingTextService : IDisposable
             UpdateWindowsText();
         }
         
+        // Re-assert z-order every ~500ms — bouncing text is long-lived and will
+        // lose topmost when competing with flash/video/overlay windows
+        _topmostTickCount++;
+        if (_topmostTickCount >= 30)
+        {
+            _topmostTickCount = 0;
+            foreach (var window in _windows)
+                window.ReassertTopmost();
+        }
+
         // Update position in all windows
         UpdateWindowsPosition();
     }
@@ -422,6 +437,7 @@ internal class BouncingTextWindow : Window
     private readonly TextBlock _textBlock;
     private readonly System.Windows.Forms.Screen _screen;
     private readonly double _dpiScale;
+    private IntPtr _hwnd;
 
     public BouncingTextWindow(System.Windows.Forms.Screen screen, int fontSize = 48, int opacity = 100)
     {
@@ -463,8 +479,12 @@ internal class BouncingTextWindow : Window
         canvas.Children.Add(_textBlock);
         Content = canvas;
         
-        // Make click-through
-        SourceInitialized += (s, e) => MakeClickThrough();
+        // Make click-through and force Win32 TOPMOST (more reliable than WPF Topmost property)
+        SourceInitialized += (s, e) =>
+        {
+            MakeClickThrough();
+            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        };
     }
 
     public void UpdateText(string text, Color color)
@@ -506,12 +526,18 @@ internal class BouncingTextWindow : Window
 
     private void MakeClickThrough()
     {
-        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-        var extendedStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+        _hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        var extendedStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
         // WS_EX_TRANSPARENT: clicks pass through
         // WS_EX_TOOLWINDOW: not shown in alt-tab
         // WS_EX_NOACTIVATE: never steals keyboard/mouse focus
-        SetWindowLong(hwnd, GWL_EXSTYLE, extendedStyle | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+        SetWindowLong(_hwnd, GWL_EXSTYLE, extendedStyle | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+    }
+
+    public void ReassertTopmost()
+    {
+        if (_hwnd != IntPtr.Zero)
+            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
     private double GetDpiScale()
@@ -534,6 +560,14 @@ internal class BouncingTextWindow : Window
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOACTIVATE = 0x0010;
 
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TRANSPARENT = 0x00000020;
